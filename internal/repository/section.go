@@ -41,19 +41,19 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector
 	sql := `
 		WITH semantic AS (
 			SELECT s.id, s.document_id, s.heading, s.content,
-				   1 - (s.embedding <=> $1::vector) AS score
+				   1 - (s.embedding <=> ?::vector) AS score
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
-			WHERE ($2::text IS NULL OR d.category = $2)
-			  AND ($3::text IS NULL OR d.subcategory = $3)
+			WHERE (?::text IS NULL OR d.category = ?)
+			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND s.embedding IS NOT NULL
-			ORDER BY s.embedding <=> $1::vector
+			ORDER BY s.embedding <=> ?::vector
 			LIMIT 20
 		),
 		keyword AS (
-			SELECT s.id, ts_rank(s.tsv, plainto_tsquery('english', $4)) AS score
+			SELECT s.id, ts_rank(s.tsv, plainto_tsquery('english', ?)) AS score
 			FROM sections s
-			WHERE s.tsv @@ plainto_tsquery('english', $4)
+			WHERE s.tsv @@ plainto_tsquery('english', ?)
 		)
 		SELECT sem.id AS section_id, sem.document_id, sem.heading, sem.content,
 			   (0.7 * sem.score + 0.3 * COALESCE(kw.score, 0)) AS score,
@@ -62,11 +62,12 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector
 		LEFT JOIN keyword kw ON kw.id = sem.id
 		JOIN documents d ON d.id = sem.document_id
 		ORDER BY score DESC
-		LIMIT $5
+		LIMIT ?
 	`
 
+	vec := embedding.String()
 	var results []SearchResult
-	if err := r.db.WithContext(ctx).Raw(sql, embedding.String(), category, subcategory, query, limit).Scan(&results).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(sql, vec, category, category, subcategory, subcategory, vec, query, query, limit).Scan(&results).Error; err != nil {
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
 	return results, nil
