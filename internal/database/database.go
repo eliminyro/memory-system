@@ -39,7 +39,8 @@ func Migrate(db *gorm.DB) error {
 		EXCEPTION WHEN duplicate_column THEN NULL;
 		END $$`,
 		`CREATE INDEX IF NOT EXISTS idx_sections_tsv ON sections USING gin(tsv)`,
-		`CREATE INDEX IF NOT EXISTS idx_sections_embedding ON sections USING ivfflat (embedding vector_cosine_ops) WITH (lists = 10)`,
+		`CREATE INDEX IF NOT EXISTS idx_sections_embedding ON sections USING hnsw (embedding vector_cosine_ops)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_path_with_null ON documents (category, COALESCE(subcategory, ''), slug)`,
 	}
 
 	for _, m := range migrations {

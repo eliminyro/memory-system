@@ -26,6 +26,7 @@ services:
       test: ["CMD", "pg_isready", "-U", "memory"]
       interval: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   ollama:

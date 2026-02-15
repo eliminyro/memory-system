@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -56,7 +57,8 @@ func (e *Embedder) Embed(ctx context.Context, text string) (pgvector.Vector, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return pgvector.Vector{}, fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return pgvector.Vector{}, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result embedResponse
@@ -71,15 +73,3 @@ func (e *Embedder) Embed(ctx context.Context, text string) (pgvector.Vector, err
 	return pgvector.NewVector(result.Embeddings[0]), nil
 }
 
-// EmbedBatch generates embeddings for multiple texts.
-func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([]pgvector.Vector, error) {
-	vectors := make([]pgvector.Vector, len(texts))
-	for i, text := range texts {
-		v, err := e.Embed(ctx, text)
-		if err != nil {
-			return nil, fmt.Errorf("embed text %d: %w", i, err)
-		}
-		vectors[i] = v
-	}
-	return vectors, nil
-}

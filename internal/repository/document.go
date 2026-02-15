@@ -65,14 +65,8 @@ func (r *DocumentRepository) List(ctx context.Context, category *string, subcate
 	return docs, nil
 }
 
-func (r *DocumentRepository) Upsert(ctx context.Context, doc *models.Document) error {
-	existing, err := r.GetByPath(ctx, doc.Category, doc.Subcategory, doc.Slug)
-	if err == nil {
-		doc.ID = existing.ID
-		doc.CreatedAt = existing.CreatedAt
-		return r.db.WithContext(ctx).Save(doc).Error
-	}
-	return r.db.WithContext(ctx).Create(doc).Error
+func (r *DocumentRepository) Save(ctx context.Context, doc *models.Document) error {
+	return r.db.WithContext(ctx).Save(doc).Error
 }
 
 func (r *DocumentRepository) Delete(ctx context.Context, id uuid.UUID) error {

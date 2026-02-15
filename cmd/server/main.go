@@ -23,6 +23,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wire log level
+	var level slog.Level
+	level.UnmarshalText([]byte(cfg.LogLevel))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
@@ -40,14 +45,16 @@ func main() {
 
 	// Services
 	embedder := service.NewEmbedder(cfg.OllamaURL, cfg.OllamaModel)
-	memorySvc := service.NewMemoryService(docRepo, sectionRepo, embedder)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder)
 
 	// MCP server
 	mcpServer := mcp.NewServer(memorySvc)
 
 	// HTTP server
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpServer.HTTPHandler())
+	handler := mcpServer.HTTPHandler()
+	mux.Handle("/mcp", handler)
+	mux.Handle("/mcp/", handler)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))

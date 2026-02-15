@@ -43,7 +43,7 @@ func main() {
 	docRepo := repository.NewDocumentRepository(db)
 	sectionRepo := repository.NewSectionRepository(db)
 	embedder := service.NewEmbedder(cfg.OllamaURL, cfg.OllamaModel)
-	memorySvc := service.NewMemoryService(docRepo, sectionRepo, embedder)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder)
 
 	ctx := context.Background()
 	var imported, failed int
