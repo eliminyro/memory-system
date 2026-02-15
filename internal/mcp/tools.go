@@ -47,39 +47,39 @@ func (s *Server) registerTools() {
 // --- Input types ---
 
 type SearchMemoryInput struct {
-	Query       string  `json:"query" jsonschema:"description=Search query"`
-	Category    *string `json:"category,omitempty" jsonschema:"description=Filter by category: learnings, preferences, projects"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"description=Filter by subcategory: go, infrastructure, hilo, etc."`
-	Limit       int     `json:"limit,omitempty" jsonschema:"description=Max results (default 10)"`
+	Query       string  `json:"query" jsonschema:"Search query"`
+	Category    *string `json:"category,omitempty" jsonschema:"Filter by category: learnings, preferences, projects"`
+	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory: go, infrastructure, hilo, etc."`
+	Limit       int     `json:"limit,omitempty" jsonschema:"Max results (default 10)"`
 }
 
 type GetDocumentInput struct {
-	Category    string  `json:"category" jsonschema:"description=Document category"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"description=Document subcategory"`
-	Slug        string  `json:"slug" jsonschema:"description=Document slug"`
+	Category    string  `json:"category" jsonschema:"Document category"`
+	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory"`
+	Slug        string  `json:"slug" jsonschema:"Document slug"`
 }
 
 type StoreMemoryInput struct {
-	Category    string  `json:"category" jsonschema:"description=Document category: learnings, preferences, projects"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"description=Document subcategory: go, infrastructure, hilo, etc."`
-	Slug        string  `json:"slug" jsonschema:"description=Document slug/filename without extension"`
-	Content     string  `json:"content" jsonschema:"description=Markdown content. Split into sections by ## headings."`
+	Category    string  `json:"category" jsonschema:"Document category: learnings, preferences, projects"`
+	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory: go, infrastructure, hilo, etc."`
+	Slug        string  `json:"slug" jsonschema:"Document slug/filename without extension"`
+	Content     string  `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
 }
 
 type UpdateSectionInput struct {
-	SectionID string `json:"section_id" jsonschema:"description=Section UUID"`
-	Content   string `json:"content" jsonschema:"description=New section content"`
+	SectionID string `json:"section_id" jsonschema:"Section UUID"`
+	Content   string `json:"content" jsonschema:"New section content"`
 }
 
 type DeleteDocumentInput struct {
-	Category    string  `json:"category" jsonschema:"description=Document category"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"description=Document subcategory"`
-	Slug        string  `json:"slug" jsonschema:"description=Document slug"`
+	Category    string  `json:"category" jsonschema:"Document category"`
+	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory"`
+	Slug        string  `json:"slug" jsonschema:"Document slug"`
 }
 
 type ListDocumentsInput struct {
-	Category    *string `json:"category,omitempty" jsonschema:"description=Filter by category"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"description=Filter by subcategory"`
+	Category    *string `json:"category,omitempty" jsonschema:"Filter by category"`
+	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory"`
 }
 
 // --- Handlers ---
