@@ -2,12 +2,14 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 
+	apperr "github.com/eliminyro/memory-mcp/internal/errors"
 	"github.com/eliminyro/memory-mcp/internal/models"
 )
 
@@ -88,6 +90,9 @@ func (r *SectionRepository) Update(ctx context.Context, section *models.Section)
 func (r *SectionRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Section, error) {
 	var section models.Section
 	if err := r.db.WithContext(ctx).Preload("Document").First(&section, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: section %s", apperr.ErrNotFound, id)
+		}
 		return nil, err
 	}
 	return &section, nil

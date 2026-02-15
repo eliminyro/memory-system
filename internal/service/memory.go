@@ -51,13 +51,13 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 	}
 
 	// Phase 1: Generate all embeddings BEFORE touching the database
-	embeddings := make([]models.Section, len(sections))
+	sectionModels := make([]models.Section, len(sections))
 	for i, sec := range sections {
 		embedding, err := s.embedder.Embed(ctx, sec.content)
 		if err != nil {
 			return nil, fmt.Errorf("embed section %d: %w", i, err)
 		}
-		embeddings[i] = models.Section{
+		sectionModels[i] = models.Section{
 			Ordinal:   i,
 			Heading:   sec.heading,
 			Content:   sec.content,
@@ -80,7 +80,7 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 		// Check for existing document
 		existing, err := txDocs.GetByPath(ctx, category, subcategory, slug)
 		if err == nil {
-			// Update existing
+			// Update existing: delete sections first, then update document
 			doc.ID = existing.ID
 			doc.CreatedAt = existing.CreatedAt
 			if err := txSections.DeleteByDocumentID(ctx, existing.ID); err != nil {
@@ -97,10 +97,10 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 		}
 
 		// Set document ID on all sections and batch insert
-		for i := range embeddings {
-			embeddings[i].DocumentID = doc.ID
+		for i := range sectionModels {
+			sectionModels[i].DocumentID = doc.ID
 		}
-		if err := txSections.CreateBatch(ctx, embeddings); err != nil {
+		if err := txSections.CreateBatch(ctx, sectionModels); err != nil {
 			return fmt.Errorf("create sections: %w", err)
 		}
 
@@ -110,7 +110,7 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 		return nil, err
 	}
 
-	doc.Sections = embeddings
+	doc.Sections = sectionModels
 	return doc, nil
 }
 
@@ -136,9 +136,31 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 	return section, nil
 }
 
-// DeleteDocument removes a document and all its sections.
+// DeleteDocument removes a document and all its sections in a transaction.
+// Explicitly deletes sections first (FK-safe order), does not rely on CASCADE.
 func (s *MemoryService) DeleteDocument(ctx context.Context, category string, subcategory *string, slug string) error {
-	return s.docs.DeleteByPath(ctx, category, subcategory, slug)
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txDocs := repository.NewDocumentRepository(tx)
+		txSections := repository.NewSectionRepository(tx)
+
+		// Look up the document to get its ID
+		doc, err := txDocs.GetByPath(ctx, category, subcategory, slug)
+		if err != nil {
+			return err
+		}
+
+		// Delete sections first (FK-safe order)
+		if err := txSections.DeleteByDocumentID(ctx, doc.ID); err != nil {
+			return fmt.Errorf("delete sections: %w", err)
+		}
+
+		// Then delete the document
+		if err := txDocs.Delete(ctx, doc.ID); err != nil {
+			return fmt.Errorf("delete document: %w", err)
+		}
+
+		return nil
+	})
 }
 
 // ListDocuments lists documents, optionally filtered.

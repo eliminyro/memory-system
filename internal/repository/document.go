@@ -2,11 +2,13 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	apperr "github.com/eliminyro/memory-mcp/internal/errors"
 	"github.com/eliminyro/memory-mcp/internal/models"
 )
 
@@ -33,6 +35,9 @@ func (r *DocumentRepository) GetByPath(ctx context.Context, category string, sub
 	if err := q.Preload("Sections", func(db *gorm.DB) *gorm.DB {
 		return db.Order("ordinal ASC")
 	}).First(&doc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: document %s/%s", apperr.ErrNotFound, category, slug)
+		}
 		return nil, err
 	}
 	return &doc, nil
@@ -45,6 +50,9 @@ func (r *DocumentRepository) GetByID(ctx context.Context, id uuid.UUID) (*models
 			return db.Order("ordinal ASC")
 		}).
 		First(&doc, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: document %s", apperr.ErrNotFound, id)
+		}
 		return nil, err
 	}
 	return &doc, nil
@@ -75,7 +83,7 @@ func (r *DocumentRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("document not found")
+		return fmt.Errorf("%w: document %s", apperr.ErrNotFound, id)
 	}
 	return nil
 }
@@ -92,7 +100,7 @@ func (r *DocumentRepository) DeleteByPath(ctx context.Context, category string, 
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("document not found")
+		return fmt.Errorf("%w: document %s/%s", apperr.ErrNotFound, category, slug)
 	}
 	return nil
 }

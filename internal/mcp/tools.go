@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	apperr "github.com/eliminyro/memory-mcp/internal/errors"
 )
 
 func (s *Server) registerTools() {
@@ -98,7 +101,10 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	}
 	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug)
 	if err != nil {
-		return errorResult("document not found: " + err.Error()), nil, nil
+		if errors.Is(err, apperr.ErrNotFound) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("get document: %w", err)
 	}
 	return jsonResult(doc), nil, nil
 }
@@ -128,6 +134,9 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	section, err := s.memory.UpdateSection(ctx, id, input.Content)
 	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) {
+			return errorResult(err.Error()), nil, nil
+		}
 		return nil, nil, fmt.Errorf("update section: %w", err)
 	}
 	return jsonResult(section), nil, nil
@@ -138,7 +147,10 @@ func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 		return errorResult("category and slug are required"), nil, nil
 	}
 	if err := s.memory.DeleteDocument(ctx, input.Category, input.Subcategory, input.Slug); err != nil {
-		return errorResult("delete failed: " + err.Error()), nil, nil
+		if errors.Is(err, apperr.ErrNotFound) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("delete: %w", err)
 	}
 	return jsonResult(map[string]string{"status": "deleted"}), nil, nil
 }
