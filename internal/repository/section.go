@@ -66,7 +66,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector
 	`
 
 	var results []SearchResult
-	if err := r.db.WithContext(ctx).Raw(sql, embedding, category, subcategory, query, limit).Scan(&results).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(sql, embedding.String(), category, subcategory, query, limit).Scan(&results).Error; err != nil {
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
 	return results, nil
