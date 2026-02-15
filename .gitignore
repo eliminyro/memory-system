@@ -1,4 +1,5 @@
 /memory-mcp
+/server
 /import
 *.exe
 .env
