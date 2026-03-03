@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/eliminyro/memory-mcp/internal/auth"
+	apperr "github.com/eliminyro/memory-mcp/internal/errors"
 	"github.com/eliminyro/memory-mcp/internal/models"
 	"github.com/eliminyro/memory-mcp/internal/repository"
 )
@@ -16,10 +18,10 @@ type MemoryService struct {
 	db       *gorm.DB
 	docs     *repository.DocumentRepository
 	sections *repository.SectionRepository
-	embedder *Embedder
+	embedder EmbeddingProvider
 }
 
-func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder *Embedder) *MemoryService {
+func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider) *MemoryService {
 	return &MemoryService{
 		db:       db,
 		docs:     docs,
@@ -28,29 +30,58 @@ func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections
 	}
 }
 
+// tenantFromCtx extracts the tenant ID from context, returning ErrInvalidInput if missing.
+func tenantFromCtx(ctx context.Context) (uuid.UUID, error) {
+	tid := auth.TenantIDFromContext(ctx)
+	if tid == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
+	}
+	return tid, nil
+}
+
 // Search performs hybrid semantic + keyword search.
 func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int) ([]repository.SearchResult, error) {
+	tid, err := tenantFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
 	embedding, err := s.embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	return s.sections.HybridSearch(ctx, embedding, query, category, subcategory, limit)
+	return s.sections.HybridSearch(ctx, repository.SearchParams{
+		TenantID:    tid,
+		Embedding:   embedding,
+		Query:       query,
+		Category:    category,
+		Subcategory: subcategory,
+		Limit:       limit,
+	})
 }
 
 // GetDocument fetches a document with all sections by path.
 func (s *MemoryService) GetDocument(ctx context.Context, category string, subcategory *string, slug string) (*models.Document, error) {
-	return s.docs.GetByPath(ctx, category, subcategory, slug)
+	tid, err := tenantFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.docs.GetByPath(ctx, tid, category, subcategory, slug)
 }
 
 // StoreDocument parses markdown content into sections, embeds them, and stores.
 // Embeddings are generated before any DB mutations to avoid partial state on failure.
 func (s *MemoryService) StoreDocument(ctx context.Context, category string, subcategory *string, slug, content string) (*models.Document, error) {
+	tid, err := tenantFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	title, sections := parseMarkdown(content)
 	if title == "" {
 		title = slug
 	}
 
-	// Phase 1: Generate all embeddings BEFORE touching the database
+	// Generate all embeddings BEFORE touching the database
 	sectionModels := make([]models.Section, len(sections))
 	for i, sec := range sections {
 		embedding, err := s.embedder.Embed(ctx, sec.content)
@@ -65,28 +96,29 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 		}
 	}
 
-	// Phase 2: All DB mutations in a single transaction
+	// All DB mutations in a single transaction
 	doc := &models.Document{
+		TenantID:    tid,
 		Category:    category,
 		Subcategory: subcategory,
 		Slug:        slug,
 		Title:       title,
 	}
 
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txDocs := repository.NewDocumentRepository(tx)
 		txSections := repository.NewSectionRepository(tx)
 
-		// Check for existing document
-		existing, err := txDocs.GetByPath(ctx, category, subcategory, slug)
-		if err == nil {
+		// Check for existing document (only in this tenant, not common pool)
+		existing, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
+		if err == nil && existing.TenantID == tid {
 			// Update existing: delete sections first, then update document
 			doc.ID = existing.ID
 			doc.CreatedAt = existing.CreatedAt
 			if err := txSections.DeleteByDocumentID(ctx, existing.ID); err != nil {
 				return fmt.Errorf("delete old sections: %w", err)
 			}
-			if err := txDocs.Save(ctx, doc); err != nil {
+			if err := txDocs.Save(ctx, tid, doc); err != nil {
 				return fmt.Errorf("save document: %w", err)
 			}
 		} else {
@@ -116,9 +148,19 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 
 // UpdateSection updates a single section and re-embeds.
 func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content string) (*models.Section, error) {
-	section, err := s.sections.GetByID(ctx, sectionID)
+	tid, err := tenantFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	section, err := s.sections.GetByID(ctx, tid, sectionID)
 	if err != nil {
 		return nil, fmt.Errorf("get section: %w", err)
+	}
+
+	// Prevent mutating common pool sections via regular MCP
+	if section.Document != nil && section.Document.TenantID != tid {
+		return nil, fmt.Errorf("%w: cannot update common pool section", apperr.ErrInvalidInput)
 	}
 
 	embedding, err := s.embedder.Embed(ctx, content)
@@ -139,14 +181,23 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 // DeleteDocument removes a document and all its sections in a transaction.
 // Explicitly deletes sections first (FK-safe order), does not rely on CASCADE.
 func (s *MemoryService) DeleteDocument(ctx context.Context, category string, subcategory *string, slug string) error {
+	tid, err := tenantFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txDocs := repository.NewDocumentRepository(tx)
 		txSections := repository.NewSectionRepository(tx)
 
-		// Look up the document to get its ID
-		doc, err := txDocs.GetByPath(ctx, category, subcategory, slug)
+		// Look up the document (scoped to this tenant only for deletes)
+		doc, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
 		if err != nil {
 			return err
+		}
+		// Prevent deleting common pool docs via regular MCP
+		if doc.TenantID != tid {
+			return fmt.Errorf("%w: cannot delete common pool document", apperr.ErrInvalidInput)
 		}
 
 		// Delete sections first (FK-safe order)
@@ -155,7 +206,7 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 		}
 
 		// Then delete the document
-		if err := txDocs.Delete(ctx, doc.ID); err != nil {
+		if err := txDocs.Delete(ctx, tid, doc.ID); err != nil {
 			return fmt.Errorf("delete document: %w", err)
 		}
 
@@ -165,7 +216,11 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 
 // ListDocuments lists documents, optionally filtered.
 func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string) ([]models.Document, error) {
-	return s.docs.List(ctx, category, subcategory)
+	tid, err := tenantFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.docs.List(ctx, tid, category, subcategory)
 }
 
 // parsedSection holds a parsed markdown section.

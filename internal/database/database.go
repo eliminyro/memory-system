@@ -36,12 +36,40 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 	return db, nil
 }
 
-func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&models.Document{}, &models.Section{}); err != nil {
+func Migrate(db *gorm.DB, dimensions int) error {
+	// Check existing vector dimensions BEFORE AutoMigrate (which may reset atttypmod).
+	// If sections table exists with data, verify dimensions match.
+	var existingDim int
+	dimErr := db.Raw(`
+		SELECT vector_dims(embedding) FROM sections WHERE embedding IS NOT NULL LIMIT 1
+	`).Scan(&existingDim).Error
+	if dimErr == nil && existingDim > 0 && existingDim != dimensions {
+		return fmt.Errorf("embedding dimension mismatch: existing vectors are %d-dim, config wants %d — re-embed all data to fix", existingDim, dimensions)
+	}
+
+	// Migrate all models — Tenant first (referenced by Document and APIKey)
+	if err := db.AutoMigrate(&models.Tenant{}, &models.APIKey{}, &models.Document{}, &models.Section{}); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
 
-	// Create tsvector generated column and GIN index (AutoMigrate can't do these)
+	// Bootstrap tenant: insert default tenant for existing data
+	if err := db.Exec(`
+		INSERT INTO tenants (id, name, created_at, updated_at)
+		VALUES ('00000000-0000-0000-0000-000000000001', 'default', NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`).Error; err != nil {
+		return fmt.Errorf("bootstrap tenant: %w", err)
+	}
+
+	// Ensure embedding column has the correct dimension
+	alterSQL := fmt.Sprintf(
+		`ALTER TABLE sections ALTER COLUMN embedding TYPE vector(%d)`, dimensions,
+	)
+	if err := db.Exec(alterSQL).Error; err != nil {
+		return fmt.Errorf("set embedding dimension: %w", err)
+	}
+
+	// Create tsvector generated column, indexes, and constraints
 	migrations := []string{
 		`DO $$ BEGIN
 			ALTER TABLE sections ADD COLUMN IF NOT EXISTS tsv tsvector
@@ -49,8 +77,11 @@ func Migrate(db *gorm.DB) error {
 		EXCEPTION WHEN duplicate_column THEN NULL;
 		END $$`,
 		`CREATE INDEX IF NOT EXISTS idx_sections_tsv ON sections USING gin(tsv)`,
-		`CREATE INDEX IF NOT EXISTS idx_sections_embedding ON sections USING hnsw (embedding vector_cosine_ops)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_path_with_null ON documents (category, COALESCE(subcategory, ''), slug)`,
+		`CREATE INDEX IF NOT EXISTS idx_sections_embedding ON sections USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)`,
+		// Drop old path index (not tenant-scoped) and create tenant-scoped one
+		`DROP INDEX IF EXISTS idx_doc_path_with_null`,
+		`DROP INDEX IF EXISTS idx_doc_path`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_tenant_path ON documents (tenant_id, category, COALESCE(subcategory, ''), slug)`,
 	}
 
 	for _, m := range migrations {

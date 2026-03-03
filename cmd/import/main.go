@@ -2,26 +2,37 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/eliminyro/memory-mcp/internal/auth"
 	"github.com/eliminyro/memory-mcp/internal/config"
 	"github.com/eliminyro/memory-mcp/internal/database"
+	"github.com/eliminyro/memory-mcp/internal/models"
 	"github.com/eliminyro/memory-mcp/internal/repository"
 	"github.com/eliminyro/memory-mcp/internal/service"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: import <memory-directory>\n")
-		fmt.Fprintf(os.Stderr, "Example: import ~/.claude/context/memory\n")
+	tenantFlag := flag.String("tenant", "", "Tenant UUID or name (default: bootstrap tenant)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: import [flags] <memory-directory>\n")
+		fmt.Fprintf(os.Stderr, "Example: import --tenant default ~/.claude/context/memory\n\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(1)
 	}
-
-	memoryDir := os.Args[1]
+	memoryDir := flag.Arg(0)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -35,17 +46,54 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := database.Migrate(db); err != nil {
+	if err := database.Migrate(db, cfg.EmbeddingDimensions); err != nil {
 		slog.Error("failed to run migrations", "error", err)
 		os.Exit(1)
 	}
 
+	// Resolve tenant ID
+	tenantID := models.BootstrapTenantID
+	if *tenantFlag != "" {
+		// Try parsing as UUID first
+		if parsed, err := uuid.Parse(*tenantFlag); err == nil {
+			tenantID = parsed
+		} else {
+			// Look up by name
+			tenantRepo := repository.NewTenantRepository(db)
+			tenants, err := tenantRepo.List(context.Background())
+			if err != nil {
+				slog.Error("failed to list tenants", "error", err)
+				os.Exit(1)
+			}
+			found := false
+			for _, t := range tenants {
+				if t.Name == *tenantFlag {
+					tenantID = t.ID
+					found = true
+					break
+				}
+			}
+			if !found {
+				slog.Error("tenant not found", "name", *tenantFlag)
+				os.Exit(1)
+			}
+		}
+	}
+	slog.Info("importing for tenant", "tenant_id", tenantID)
+
 	docRepo := repository.NewDocumentRepository(db)
 	sectionRepo := repository.NewSectionRepository(db)
-	embedder := service.NewEmbedder(cfg.OllamaURL, cfg.OllamaModel)
+
+	embedder, err := service.NewEmbeddingProvider(cfg.EmbeddingProvider, cfg.EmbeddingCfg())
+	if err != nil {
+		slog.Error("failed to create embedding provider", "error", err)
+		os.Exit(1)
+	}
+
 	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder)
 
-	ctx := context.Background()
+	// Inject tenant ID into context
+	ctx := auth.WithTenantID(context.Background(), tenantID)
 	var imported, failed int
 
 	err = filepath.Walk(memoryDir, func(path string, info os.FileInfo, err error) error {

@@ -12,20 +12,26 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-type Embedder struct {
-	url    string
-	model  string
-	client *http.Client
+type OllamaEmbedder struct {
+	url        string
+	model      string
+	dimensions int
+	client     *http.Client
 }
 
-func NewEmbedder(ollamaURL, model string) *Embedder {
-	return &Embedder{
-		url:   ollamaURL,
-		model: model,
+func NewOllamaEmbedder(ollamaURL, model string, dimensions int) *OllamaEmbedder {
+	return &OllamaEmbedder{
+		url:        ollamaURL,
+		model:      model,
+		dimensions: dimensions,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+func (e *OllamaEmbedder) Dimensions() int {
+	return e.dimensions
 }
 
 type embedRequest struct {
@@ -38,7 +44,7 @@ type embedResponse struct {
 }
 
 // Embed generates an embedding vector for the given text.
-func (e *Embedder) Embed(ctx context.Context, text string) (pgvector.Vector, error) {
+func (e *OllamaEmbedder) Embed(ctx context.Context, text string) (pgvector.Vector, error) {
 	body, err := json.Marshal(embedRequest{Model: e.model, Input: text})
 	if err != nil {
 		return pgvector.Vector{}, fmt.Errorf("marshal request: %w", err)

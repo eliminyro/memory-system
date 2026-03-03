@@ -5,12 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apperr "github.com/eliminyro/memory-mcp/internal/errors"
 )
+
+const (
+	maxContentSize = 10 << 20 // 10 MB
+	maxQueryLen    = 10_000
+	maxSearchLimit = 100
+	maxFieldLen    = 100
+)
+
+var validSlug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 func (s *Server) registerTools() {
 	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
@@ -85,8 +95,11 @@ type ListDocumentsInput struct {
 // --- Handlers ---
 
 func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, input SearchMemoryInput) (*mcpsdk.CallToolResult, any, error) {
-	if input.Query == "" {
-		return errorResult("query is required"), nil, nil
+	if input.Query == "" || len(input.Query) > maxQueryLen {
+		return errorResult("query is required and must be <= 10000 characters"), nil, nil
+	}
+	if input.Limit > maxSearchLimit {
+		input.Limit = maxSearchLimit
 	}
 	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit)
 	if err != nil {
@@ -98,6 +111,9 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetDocumentInput) (*mcpsdk.CallToolResult, any, error) {
 	if input.Category == "" || input.Slug == "" {
 		return errorResult("category and slug are required"), nil, nil
+	}
+	if err := validatePath(input.Category, input.Slug); err != nil {
+		return errorResult(err.Error()), nil, nil
 	}
 	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug)
 	if err != nil {
@@ -113,6 +129,12 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if input.Category == "" || input.Slug == "" || input.Content == "" {
 		return errorResult("category, slug, and content are required"), nil, nil
 	}
+	if len(input.Content) > maxContentSize {
+		return errorResult("content exceeds 10MB limit"), nil, nil
+	}
+	if err := validatePath(input.Category, input.Slug); err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
 	doc, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: %w", err)
@@ -127,6 +149,9 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, input UpdateSectionInput) (*mcpsdk.CallToolResult, any, error) {
 	if input.SectionID == "" || input.Content == "" {
 		return errorResult("section_id and content are required"), nil, nil
+	}
+	if len(input.Content) > maxContentSize {
+		return errorResult("content exceeds 10MB limit"), nil, nil
 	}
 	id, err := uuid.Parse(input.SectionID)
 	if err != nil {
@@ -145,6 +170,9 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, input DeleteDocumentInput) (*mcpsdk.CallToolResult, any, error) {
 	if input.Category == "" || input.Slug == "" {
 		return errorResult("category and slug are required"), nil, nil
+	}
+	if err := validatePath(input.Category, input.Slug); err != nil {
+		return errorResult(err.Error()), nil, nil
 	}
 	if err := s.memory.DeleteDocument(ctx, input.Category, input.Subcategory, input.Slug); err != nil {
 		if errors.Is(err, apperr.ErrNotFound) {
@@ -174,6 +202,19 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 
 // --- Helpers ---
 
+func validatePath(category, slug string) error {
+	if len(category) > maxFieldLen || len(slug) > maxFieldLen {
+		return fmt.Errorf("category and slug must be <= %d characters", maxFieldLen)
+	}
+	if !validSlug.MatchString(category) {
+		return fmt.Errorf("invalid category format: must be alphanumeric with .-_")
+	}
+	if !validSlug.MatchString(slug) {
+		return fmt.Errorf("invalid slug format: must be alphanumeric with .-_")
+	}
+	return nil
+}
+
 func errorResult(msg string) *mcpsdk.CallToolResult {
 	return &mcpsdk.CallToolResult{
 		IsError: true,
@@ -184,7 +225,7 @@ func errorResult(msg string) *mcpsdk.CallToolResult {
 }
 
 func jsonResult(v any) *mcpsdk.CallToolResult {
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := json.Marshal(v)
 	if err != nil {
 		return errorResult("marshal error: " + err.Error())
 	}
