@@ -33,10 +33,23 @@ type SearchResult struct {
 	DocTitle    string    `json:"doc_title"`
 }
 
-func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector.Vector, query string, category *string, subcategory *string, limit int) ([]SearchResult, error) {
-	if limit <= 0 {
-		limit = 10
+// SearchParams groups the inputs for hybrid search.
+type SearchParams struct {
+	TenantID    uuid.UUID
+	Embedding   pgvector.Vector
+	Query       string
+	Category    *string
+	Subcategory *string
+	Limit       int
+}
+
+func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([]SearchResult, error) {
+	if p.Limit <= 0 {
+		p.Limit = 10
 	}
+
+	tenants := readTenants(p.TenantID)
+	vec := p.Embedding.String()
 
 	sql := `
 		WITH semantic AS (
@@ -44,7 +57,8 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector
 				   1 - (s.embedding <=> ?::vector) AS score
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
-			WHERE (?::text IS NULL OR d.category = ?)
+			WHERE d.tenant_id IN ?
+			  AND (?::text IS NULL OR d.category = ?)
 			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND s.embedding IS NOT NULL
 			ORDER BY s.embedding <=> ?::vector
@@ -53,7 +67,9 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector
 		keyword AS (
 			SELECT s.id, ts_rank(s.tsv, plainto_tsquery('english', ?)) AS score
 			FROM sections s
-			WHERE s.tsv @@ plainto_tsquery('english', ?)
+			JOIN documents d ON d.id = s.document_id
+			WHERE d.tenant_id IN ?
+			  AND s.tsv @@ plainto_tsquery('english', ?)
 		)
 		SELECT sem.id AS section_id, sem.document_id, sem.heading, sem.content,
 			   (0.7 * sem.score + 0.3 * COALESCE(kw.score, 0)) AS score,
@@ -65,9 +81,14 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, embedding pgvector
 		LIMIT ?
 	`
 
-	vec := embedding.String()
+	args := []any{
+		vec, tenants, p.Category, p.Category, p.Subcategory, p.Subcategory, vec,
+		p.Query, tenants, p.Query,
+		p.Limit,
+	}
+
 	var results []SearchResult
-	if err := r.db.WithContext(ctx).Raw(sql, vec, category, category, subcategory, subcategory, vec, query, query, limit).Scan(&results).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
 	return results, nil
@@ -88,9 +109,13 @@ func (r *SectionRepository) Update(ctx context.Context, section *models.Section)
 	return r.db.WithContext(ctx).Save(section).Error
 }
 
-func (r *SectionRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Section, error) {
+func (r *SectionRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*models.Section, error) {
 	var section models.Section
-	if err := r.db.WithContext(ctx).Preload("Document").First(&section, id).Error; err != nil {
+	if err := r.db.WithContext(ctx).
+		Joins("JOIN documents d ON d.id = sections.document_id").
+		Where("d.tenant_id IN ?", readTenants(tenantID)).
+		Preload("Document").
+		First(&section, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("%w: section %s", apperr.ErrNotFound, id)
 		}

@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/eliminyro/memory-mcp/internal/admin"
+	"github.com/eliminyro/memory-mcp/internal/auth"
 	"github.com/eliminyro/memory-mcp/internal/config"
 	"github.com/eliminyro/memory-mcp/internal/database"
 	"github.com/eliminyro/memory-mcp/internal/mcp"
@@ -34,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := database.Migrate(db); err != nil {
+	if err := database.Migrate(db, cfg.EmbeddingDimensions); err != nil {
 		slog.Error("failed to run migrations", "error", err)
 		os.Exit(1)
 	}
@@ -42,19 +45,46 @@ func main() {
 	// Repositories
 	docRepo := repository.NewDocumentRepository(db)
 	sectionRepo := repository.NewSectionRepository(db)
+	tenantRepo := repository.NewTenantRepository(db)
+	keyRepo := repository.NewAPIKeyRepository(db)
+
+	// Embedding provider
+	embedder, err := service.NewEmbeddingProvider(cfg.EmbeddingProvider, cfg.EmbeddingCfg())
+	if err != nil {
+		slog.Error("failed to create embedding provider", "error", err)
+		os.Exit(1)
+	}
 
 	// Services
-	embedder := service.NewEmbedder(cfg.OllamaURL, cfg.OllamaModel)
 	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder)
 
 	// MCP server
 	mcpServer := mcp.NewServer(memorySvc)
 
+	// Auth
+	keyValidator := auth.NewAPIKeyValidator(db)
+	apiKeyMW := auth.APIKeyMiddleware(keyValidator)
+
+	// Admin
+	var allowedEmails []string
+	if cfg.AdminAllowedEmails != "" {
+		allowedEmails = strings.Split(cfg.AdminAllowedEmails, ",")
+	}
+	oidcMW := auth.OIDCMiddleware(cfg.AdminAudience, allowedEmails)
+	adminHandler := admin.NewHandler(tenantRepo, keyRepo)
+
 	// HTTP server
 	mux := http.NewServeMux()
-	handler := mcpServer.HTTPHandler()
-	mux.Handle("/mcp", handler)
-	mux.Handle("/mcp/", handler)
+
+	// MCP endpoints (API key auth)
+	mcpHTTP := mcpServer.HTTPHandler()
+	mux.Handle("/mcp", apiKeyMW(mcpHTTP))
+	mux.Handle("/mcp/", apiKeyMW(mcpHTTP))
+
+	// Admin endpoints (OIDC auth)
+	adminHandler.Register(mux, oidcMW)
+
+	// Health
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))

@@ -20,21 +20,34 @@ func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
 }
 
+// readTenants returns the list of tenant IDs to include in read queries:
+// the requesting tenant plus the common (bootstrap) tenant.
+func readTenants(tenantID uuid.UUID) []uuid.UUID {
+	if tenantID == models.BootstrapTenantID {
+		return []uuid.UUID{tenantID}
+	}
+	return []uuid.UUID{tenantID, models.BootstrapTenantID}
+}
+
 func (r *DocumentRepository) Create(ctx context.Context, doc *models.Document) error {
 	return r.db.WithContext(ctx).Create(doc).Error
 }
 
-func (r *DocumentRepository) GetByPath(ctx context.Context, category string, subcategory *string, slug string) (*models.Document, error) {
+func (r *DocumentRepository) GetByPath(ctx context.Context, tenantID uuid.UUID, category string, subcategory *string, slug string) (*models.Document, error) {
 	var doc models.Document
-	q := r.db.WithContext(ctx).Where("category = ? AND slug = ?", category, slug)
+	q := r.db.WithContext(ctx).
+		Where("tenant_id IN ?", readTenants(tenantID)).
+		Where("category = ? AND slug = ?", category, slug)
 	if subcategory != nil {
 		q = q.Where("subcategory = ?", *subcategory)
 	} else {
 		q = q.Where("subcategory IS NULL")
 	}
-	if err := q.Preload("Sections", func(db *gorm.DB) *gorm.DB {
-		return db.Order("ordinal ASC")
-	}).First(&doc).Error; err != nil {
+	// Prefer the requesting tenant's doc over the common pool
+	if err := q.Order(gorm.Expr("CASE WHEN tenant_id = ? THEN 0 ELSE 1 END", tenantID)).
+		Preload("Sections", func(db *gorm.DB) *gorm.DB {
+			return db.Order("ordinal ASC")
+		}).First(&doc).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("%w: document %s/%s", apperr.ErrNotFound, category, slug)
 		}
@@ -43,9 +56,10 @@ func (r *DocumentRepository) GetByPath(ctx context.Context, category string, sub
 	return &doc, nil
 }
 
-func (r *DocumentRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Document, error) {
+func (r *DocumentRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*models.Document, error) {
 	var doc models.Document
 	if err := r.db.WithContext(ctx).
+		Where("tenant_id IN ?", readTenants(tenantID)).
 		Preload("Sections", func(db *gorm.DB) *gorm.DB {
 			return db.Order("ordinal ASC")
 		}).
@@ -58,9 +72,9 @@ func (r *DocumentRepository) GetByID(ctx context.Context, id uuid.UUID) (*models
 	return &doc, nil
 }
 
-func (r *DocumentRepository) List(ctx context.Context, category *string, subcategory *string) ([]models.Document, error) {
+func (r *DocumentRepository) List(ctx context.Context, tenantID uuid.UUID, category *string, subcategory *string) ([]models.Document, error) {
 	var docs []models.Document
-	q := r.db.WithContext(ctx)
+	q := r.db.WithContext(ctx).Where("tenant_id IN ?", readTenants(tenantID))
 	if category != nil {
 		q = q.Where("category = ?", *category)
 	}
@@ -73,12 +87,15 @@ func (r *DocumentRepository) List(ctx context.Context, category *string, subcate
 	return docs, nil
 }
 
-func (r *DocumentRepository) Save(ctx context.Context, doc *models.Document) error {
+func (r *DocumentRepository) Save(ctx context.Context, tenantID uuid.UUID, doc *models.Document) error {
+	if doc.TenantID != tenantID {
+		return fmt.Errorf("%w: document tenant mismatch", apperr.ErrInvalidInput)
+	}
 	return r.db.WithContext(ctx).Save(doc).Error
 }
 
-func (r *DocumentRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).Delete(&models.Document{}, id)
+func (r *DocumentRepository) Delete(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).Where("tenant_id = ?", tenantID).Delete(&models.Document{}, id)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -88,8 +105,8 @@ func (r *DocumentRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (r *DocumentRepository) DeleteByPath(ctx context.Context, category string, subcategory *string, slug string) error {
-	q := r.db.WithContext(ctx).Where("category = ? AND slug = ?", category, slug)
+func (r *DocumentRepository) DeleteByPath(ctx context.Context, tenantID uuid.UUID, category string, subcategory *string, slug string) error {
+	q := r.db.WithContext(ctx).Where("tenant_id = ? AND category = ? AND slug = ?", tenantID, category, slug)
 	if subcategory != nil {
 		q = q.Where("subcategory = ?", *subcategory)
 	} else {
