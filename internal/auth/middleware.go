@@ -15,13 +15,14 @@ func APIKeyMiddleware(validator *APIKeyValidator) func(http.Handler) http.Handle
 				return
 			}
 
-			tenantID, err := validator.ValidateKey(r.Context(), key)
+			info, err := validator.ValidateKey(r.Context(), key)
 			if err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 
-			ctx := WithTenantID(r.Context(), tenantID)
+			ctx := WithTenantID(r.Context(), info.TenantID)
+			ctx = WithEmail(ctx, info.Email)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

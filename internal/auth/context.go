@@ -23,6 +23,19 @@ func TenantIDFromContext(ctx context.Context) uuid.UUID {
 	return id
 }
 
+type emailContextKey struct{}
+
+// WithEmail returns a new context with the caller's email.
+func WithEmail(ctx context.Context, email string) context.Context {
+	return context.WithValue(ctx, emailContextKey{}, email)
+}
+
+// EmailFromContext extracts the caller's email from the context.
+func EmailFromContext(ctx context.Context) string {
+	email, _ := ctx.Value(emailContextKey{}).(string)
+	return email
+}
+
 // BearerToken extracts the Bearer token from an Authorization header.
 // Returns an error if the header is missing or malformed.
 func BearerToken(r *http.Request) (string, error) {
