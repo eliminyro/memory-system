@@ -37,7 +37,8 @@ func (h *Handler) Register(mux *http.ServeMux, mw func(http.Handler) http.Handle
 }
 
 type createTenantRequest struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 func (h *Handler) CreateTenant(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +52,7 @@ func (h *Handler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant := &models.Tenant{Name: req.Name}
+	tenant := &models.Tenant{Name: req.Name, Email: req.Email}
 	if err := h.tenants.Create(r.Context(), tenant); err != nil {
 		slog.Error("create tenant failed", "error", err)
 		writeError(w, "failed to create tenant", http.StatusInternalServerError)
