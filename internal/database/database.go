@@ -54,8 +54,8 @@ func Migrate(db *gorm.DB, dimensions int) error {
 
 	// Bootstrap tenant: insert default tenant for existing data
 	if err := db.Exec(`
-		INSERT INTO tenants (id, name, created_at, updated_at)
-		VALUES ('00000000-0000-0000-0000-000000000001', 'default', NOW(), NOW())
+		INSERT INTO tenants (id, name, email, created_at, updated_at)
+		VALUES ('00000000-0000-0000-0000-000000000001', 'default', '', NOW(), NOW())
 		ON CONFLICT (id) DO NOTHING
 	`).Error; err != nil {
 		return fmt.Errorf("bootstrap tenant: %w", err)
