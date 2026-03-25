@@ -46,5 +46,5 @@ Subcategories vary: learnings has go, infrastructure, cicd, etc.`,
 func (s *Server) HTTPHandler() http.Handler {
 	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server {
 		return s.mcp
-	}, nil)
+	}, &mcpsdk.StreamableHTTPOptions{Stateless: true})
 }
