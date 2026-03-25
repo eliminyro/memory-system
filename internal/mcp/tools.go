@@ -22,33 +22,33 @@ const (
 
 var validSlug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
-func (s *Server) registerTools() {
-	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+func (s *Server) registerTools(srv *mcpsdk.Server) {
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "search_memory",
 		Description: "Search memories using semantic similarity and keyword matching. Returns the most relevant sections across all documents.",
 	}, s.SearchMemory)
 
-	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "get_document",
 		Description: "Get a specific document and all its sections by hierarchical path (category/subcategory/slug).",
 	}, s.GetDocument)
 
-	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "store_memory",
 		Description: "Store or update a memory document. Accepts markdown content, splits into sections by ## headings, and generates embeddings for semantic search.",
 	}, s.StoreMemory)
 
-	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_section",
 		Description: "Update a single section's content. Re-generates its embedding automatically.",
 	}, s.UpdateSection)
 
-	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "delete_document",
 		Description: "Delete a document and all its sections by path.",
 	}, s.DeleteDocument)
 
-	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "list_documents",
 		Description: "List documents in the memory hierarchy. Filter by category and/or subcategory.",
 	}, s.ListDocuments)

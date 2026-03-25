@@ -26,8 +26,7 @@ type Config struct {
 	GCPLocation string `env:"GCP_LOCATION" envDefault:"us-central1"`
 	GCPModel    string `env:"GCP_EMBEDDING_MODEL" envDefault:"text-embedding-005"`
 
-	// Admin OIDC
-	AdminAudience      string `env:"ADMIN_OIDC_AUDIENCE"`
+	// Admin
 	AdminAllowedEmails string `env:"ADMIN_ALLOWED_EMAILS"`
 }
 

@@ -20,10 +20,11 @@ type MemoryService struct {
 	sections    *repository.SectionRepository
 	embedder    EmbeddingProvider
 	tenants     *repository.TenantRepository
+	keys        *repository.APIKeyRepository
 	adminEmails map[string]struct{}
 }
 
-func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider, tenants *repository.TenantRepository, adminEmails []string) *MemoryService {
+func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider, tenants *repository.TenantRepository, keys *repository.APIKeyRepository, adminEmails []string) *MemoryService {
 	ae := make(map[string]struct{}, len(adminEmails))
 	for _, e := range adminEmails {
 		ae[strings.TrimSpace(e)] = struct{}{}
@@ -34,6 +35,7 @@ func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections
 		sections:    sections,
 		embedder:    embedder,
 		tenants:     tenants,
+		keys:        keys,
 		adminEmails: ae,
 	}
 }
@@ -239,6 +241,100 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 		return nil, err
 	}
 	return s.docs.List(ctx, tid, category, subcategory)
+}
+
+// --- Admin operations ---
+
+func (s *MemoryService) requireAdmin(ctx context.Context) error {
+	if !s.isAdmin(ctx) {
+		return fmt.Errorf("%w: admin privileges required", apperr.ErrInvalidInput)
+	}
+	return nil
+}
+
+func (s *MemoryService) ListTenants(ctx context.Context) ([]models.Tenant, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	return s.tenants.List(ctx)
+}
+
+func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*models.Tenant, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	tenant := &models.Tenant{Name: name, Email: email}
+	if err := s.tenants.Create(ctx, tenant); err != nil {
+		return nil, fmt.Errorf("create tenant: %w", err)
+	}
+	return tenant, nil
+}
+
+func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, name, email *string) (*models.Tenant, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	tenant, err := s.tenants.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if name != nil {
+		tenant.Name = *name
+	}
+	if email != nil {
+		tenant.Email = *email
+	}
+	if err := s.tenants.Update(ctx, tenant); err != nil {
+		return nil, fmt.Errorf("update tenant: %w", err)
+	}
+	return tenant, nil
+}
+
+func (s *MemoryService) DeleteTenant(ctx context.Context, id uuid.UUID) error {
+	if err := s.requireAdmin(ctx); err != nil {
+		return err
+	}
+	if id == models.BootstrapTenantID {
+		return fmt.Errorf("%w: cannot delete the bootstrap tenant", apperr.ErrInvalidInput)
+	}
+	return s.tenants.Delete(ctx, id)
+}
+
+func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string) (string, *models.APIKey, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return "", nil, err
+	}
+	if _, err := s.tenants.GetByID(ctx, tenantID); err != nil {
+		return "", nil, err
+	}
+	plaintext, hash, err := auth.GenerateAPIKey()
+	if err != nil {
+		return "", nil, fmt.Errorf("generate key: %w", err)
+	}
+	key := &models.APIKey{
+		TenantID: tenantID,
+		KeyHash:  hash,
+		Label:    label,
+		Prefix:   auth.KeyPrefix(plaintext),
+	}
+	if err := s.keys.Create(ctx, key); err != nil {
+		return "", nil, fmt.Errorf("create key: %w", err)
+	}
+	return plaintext, key, nil
+}
+
+func (s *MemoryService) ListAPIKeys(ctx context.Context, tenantID uuid.UUID) ([]models.APIKey, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	return s.keys.ListByTenant(ctx, tenantID)
+}
+
+func (s *MemoryService) RevokeAPIKey(ctx context.Context, id uuid.UUID) error {
+	if err := s.requireAdmin(ctx); err != nil {
+		return err
+	}
+	return s.keys.Revoke(ctx, id)
 }
 
 // parsedSection holds a parsed markdown section.

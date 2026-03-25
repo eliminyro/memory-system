@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/eliminyro/memory-mcp/internal/admin"
 	"github.com/eliminyro/memory-mcp/internal/auth"
 	"github.com/eliminyro/memory-mcp/internal/config"
 	"github.com/eliminyro/memory-mcp/internal/database"
@@ -62,16 +61,14 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, allowedEmails)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, allowedEmails)
 
 	// MCP server
-	mcpServer := mcp.NewServer(memorySvc)
+	mcpServer := mcp.NewServer(memorySvc, allowedEmails)
 
 	// Auth
 	keyValidator := auth.NewAPIKeyValidator(db)
 	apiKeyMW := auth.APIKeyMiddleware(keyValidator)
-	oidcMW := auth.OIDCMiddleware(cfg.AdminAudience, allowedEmails)
-	adminHandler := admin.NewHandler(tenantRepo, keyRepo)
 
 	// HTTP server
 	mux := http.NewServeMux()
@@ -80,9 +77,6 @@ func main() {
 	mcpHTTP := mcpServer.HTTPHandler()
 	mux.Handle("/mcp", apiKeyMW(mcpHTTP))
 	mux.Handle("/mcp/", apiKeyMW(mcpHTTP))
-
-	// Admin endpoints (OIDC auth)
-	adminHandler.Register(mux, oidcMW)
 
 	// Health
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
