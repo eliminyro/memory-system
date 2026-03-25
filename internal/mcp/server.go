@@ -34,7 +34,9 @@ Use update_section to modify a single section without rewriting the whole docume
 Use delete_document to remove a memory.
 
 Categories: learnings, preferences, projects
-Subcategories vary: learnings has go, infrastructure, cicd, etc.`,
+Subcategories vary: learnings has go, infrastructure, cicd, etc.
+
+Admin users can pass tenant_id to any tool to target a specific tenant (including the common pool 00000000-0000-0000-0000-000000000001). Non-admin users cannot use this parameter.`,
 	}
 
 	s.mcp = mcpsdk.NewServer(impl, opts)
