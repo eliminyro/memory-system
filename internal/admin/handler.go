@@ -30,6 +30,7 @@ func (h *Handler) Register(mux *http.ServeMux, mw func(http.Handler) http.Handle
 	mux.Handle("POST /admin/tenants", mw(http.HandlerFunc(h.CreateTenant)))
 	mux.Handle("GET /admin/tenants", mw(http.HandlerFunc(h.ListTenants)))
 	mux.Handle("GET /admin/tenants/{id}", mw(http.HandlerFunc(h.GetTenant)))
+	mux.Handle("PATCH /admin/tenants/{id}", mw(http.HandlerFunc(h.UpdateTenant)))
 	mux.Handle("DELETE /admin/tenants/{id}", mw(http.HandlerFunc(h.DeleteTenant)))
 	mux.Handle("POST /admin/tenants/{id}/keys", mw(http.HandlerFunc(h.CreateKey)))
 	mux.Handle("GET /admin/tenants/{id}/keys", mw(http.HandlerFunc(h.ListKeys)))
@@ -83,6 +84,54 @@ func (h *Handler) GetTenant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, "failed to get tenant", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, tenant, http.StatusOK)
+}
+
+type updateTenantRequest struct {
+	Name  *string `json:"name,omitempty"`
+	Email *string `json:"email,omitempty"`
+}
+
+func (h *Handler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, "invalid tenant id", http.StatusBadRequest)
+		return
+	}
+
+	var req updateTenantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name != nil && (len(*req.Name) == 0 || len(*req.Name) > maxNameLen) {
+		writeError(w, "name must be 1-200 characters", http.StatusBadRequest)
+		return
+	}
+
+	tenant, err := h.tenants.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) {
+			writeError(w, "tenant not found", http.StatusNotFound)
+			return
+		}
+		writeError(w, "failed to get tenant", http.StatusInternalServerError)
+		return
+	}
+
+	if req.Name != nil {
+		tenant.Name = *req.Name
+	}
+	if req.Email != nil {
+		tenant.Email = *req.Email
+	}
+
+	if err := h.tenants.Update(r.Context(), tenant); err != nil {
+		slog.Error("update tenant failed", "tenant_id", id, "error", err)
+		writeError(w, "failed to update tenant", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, tenant, http.StatusOK)

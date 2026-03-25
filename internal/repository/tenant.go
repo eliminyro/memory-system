@@ -43,6 +43,10 @@ func (r *TenantRepository) List(ctx context.Context) ([]models.Tenant, error) {
 	return tenants, nil
 }
 
+func (r *TenantRepository) Update(ctx context.Context, tenant *models.Tenant) error {
+	return r.db.WithContext(ctx).Save(tenant).Error
+}
+
 // Delete removes a tenant and cascades to API keys and documents (with their sections).
 func (r *TenantRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
