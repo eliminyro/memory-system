@@ -90,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil)
 
 	// Inject tenant ID into context
 	ctx := auth.WithTenantID(context.Background(), tenantID)
@@ -124,7 +124,7 @@ func main() {
 
 		slog.Info("importing", "path", rel, "category", category, "subcategory", subcategory, "slug", slug)
 
-		_, err = memorySvc.StoreDocument(ctx, category, subcategory, slug, string(content))
+		_, err = memorySvc.StoreDocument(ctx, category, subcategory, slug, string(content), nil)
 		if err != nil {
 			slog.Error("failed to import", "path", rel, "error", err)
 			failed++

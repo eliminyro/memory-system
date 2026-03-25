@@ -15,33 +15,57 @@ import (
 )
 
 type MemoryService struct {
-	db       *gorm.DB
-	docs     *repository.DocumentRepository
-	sections *repository.SectionRepository
-	embedder EmbeddingProvider
+	db          *gorm.DB
+	docs        *repository.DocumentRepository
+	sections    *repository.SectionRepository
+	embedder    EmbeddingProvider
+	tenants     *repository.TenantRepository
+	adminEmails map[string]struct{}
 }
 
-func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider) *MemoryService {
+func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider, tenants *repository.TenantRepository, adminEmails []string) *MemoryService {
+	ae := make(map[string]struct{}, len(adminEmails))
+	for _, e := range adminEmails {
+		ae[strings.TrimSpace(e)] = struct{}{}
+	}
 	return &MemoryService{
-		db:       db,
-		docs:     docs,
-		sections: sections,
-		embedder: embedder,
+		db:          db,
+		docs:        docs,
+		sections:    sections,
+		embedder:    embedder,
+		tenants:     tenants,
+		adminEmails: ae,
 	}
 }
 
-// tenantFromCtx extracts the tenant ID from context, returning ErrInvalidInput if missing.
-func tenantFromCtx(ctx context.Context) (uuid.UUID, error) {
+// resolveTenant resolves the effective tenant ID.
+func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID) (uuid.UUID, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
 	}
-	return tid, nil
+	if overrideID == nil {
+		return tid, nil
+	}
+	email := auth.EmailFromContext(ctx)
+	if _, ok := s.adminEmails[email]; !ok {
+		return uuid.Nil, fmt.Errorf("%w: tenant_id override requires admin privileges", apperr.ErrInvalidInput)
+	}
+	if _, err := s.tenants.GetByID(ctx, *overrideID); err != nil {
+		return uuid.Nil, fmt.Errorf("%w: target tenant %s not found", apperr.ErrInvalidInput, overrideID)
+	}
+	return *overrideID, nil
+}
+
+func (s *MemoryService) isAdmin(ctx context.Context) bool {
+	email := auth.EmailFromContext(ctx)
+	_, ok := s.adminEmails[email]
+	return ok
 }
 
 // Search performs hybrid semantic + keyword search.
-func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int) ([]repository.SearchResult, error) {
-	tid, err := tenantFromCtx(ctx)
+func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, overrideID *uuid.UUID) ([]repository.SearchResult, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +84,8 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 }
 
 // GetDocument fetches a document with all sections by path.
-func (s *MemoryService) GetDocument(ctx context.Context, category string, subcategory *string, slug string) (*models.Document, error) {
-	tid, err := tenantFromCtx(ctx)
+func (s *MemoryService) GetDocument(ctx context.Context, category string, subcategory *string, slug string, overrideID *uuid.UUID) (*models.Document, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +94,8 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 
 // StoreDocument parses markdown content into sections, embeds them, and stores.
 // Embeddings are generated before any DB mutations to avoid partial state on failure.
-func (s *MemoryService) StoreDocument(ctx context.Context, category string, subcategory *string, slug, content string) (*models.Document, error) {
-	tid, err := tenantFromCtx(ctx)
+func (s *MemoryService) StoreDocument(ctx context.Context, category string, subcategory *string, slug, content string, overrideID *uuid.UUID) (*models.Document, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +171,8 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 }
 
 // UpdateSection updates a single section and re-embeds.
-func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content string) (*models.Section, error) {
-	tid, err := tenantFromCtx(ctx)
+func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content string, overrideID *uuid.UUID) (*models.Section, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +182,7 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 		return nil, fmt.Errorf("get section: %w", err)
 	}
 
-	// Prevent mutating common pool sections via regular MCP
-	if section.Document != nil && section.Document.TenantID != tid {
+	if section.Document != nil && section.Document.TenantID != tid && !s.isAdmin(ctx) {
 		return nil, fmt.Errorf("%w: cannot update common pool section", apperr.ErrInvalidInput)
 	}
 
@@ -180,8 +203,8 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 
 // DeleteDocument removes a document and all its sections in a transaction.
 // Explicitly deletes sections first (FK-safe order), does not rely on CASCADE.
-func (s *MemoryService) DeleteDocument(ctx context.Context, category string, subcategory *string, slug string) error {
-	tid, err := tenantFromCtx(ctx)
+func (s *MemoryService) DeleteDocument(ctx context.Context, category string, subcategory *string, slug string, overrideID *uuid.UUID) error {
+	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return err
 	}
@@ -190,23 +213,18 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 		txDocs := repository.NewDocumentRepository(tx)
 		txSections := repository.NewSectionRepository(tx)
 
-		// Look up the document (scoped to this tenant only for deletes)
 		doc, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
 		if err != nil {
 			return err
 		}
-		// Prevent deleting common pool docs via regular MCP
-		if doc.TenantID != tid {
+		if doc.TenantID != tid && !s.isAdmin(ctx) {
 			return fmt.Errorf("%w: cannot delete common pool document", apperr.ErrInvalidInput)
 		}
 
-		// Delete sections first (FK-safe order)
 		if err := txSections.DeleteByDocumentID(ctx, doc.ID); err != nil {
 			return fmt.Errorf("delete sections: %w", err)
 		}
-
-		// Then delete the document
-		if err := txDocs.Delete(ctx, tid, doc.ID); err != nil {
+		if err := txDocs.Delete(ctx, doc.TenantID, doc.ID); err != nil {
 			return fmt.Errorf("delete document: %w", err)
 		}
 
@@ -215,8 +233,8 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 }
 
 // ListDocuments lists documents, optionally filtered.
-func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string) ([]models.Document, error) {
-	tid, err := tenantFromCtx(ctx)
+func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string, overrideID *uuid.UUID) ([]models.Document, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
