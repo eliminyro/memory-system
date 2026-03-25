@@ -55,8 +55,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Admin email allowlist (shared between OIDC middleware and memory service)
+	var allowedEmails []string
+	if cfg.AdminAllowedEmails != "" {
+		allowedEmails = strings.Split(cfg.AdminAllowedEmails, ",")
+	}
+
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, allowedEmails)
 
 	// MCP server
 	mcpServer := mcp.NewServer(memorySvc)
@@ -64,12 +70,6 @@ func main() {
 	// Auth
 	keyValidator := auth.NewAPIKeyValidator(db)
 	apiKeyMW := auth.APIKeyMiddleware(keyValidator)
-
-	// Admin
-	var allowedEmails []string
-	if cfg.AdminAllowedEmails != "" {
-		allowedEmails = strings.Split(cfg.AdminAllowedEmails, ",")
-	}
 	oidcMW := auth.OIDCMiddleware(cfg.AdminAudience, allowedEmails)
 	adminHandler := admin.NewHandler(tenantRepo, keyRepo)
 

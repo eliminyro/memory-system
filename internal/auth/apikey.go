@@ -42,6 +42,12 @@ func KeyPrefix(plaintext string) string {
 	return withoutPrefix
 }
 
+// KeyInfo holds the resolved identity from an API key lookup.
+type KeyInfo struct {
+	TenantID uuid.UUID
+	Email    string
+}
+
 // APIKeyValidator looks up API keys and resolves them to tenant IDs.
 type APIKeyValidator struct {
 	db *gorm.DB
@@ -52,14 +58,19 @@ func NewAPIKeyValidator(db *gorm.DB) *APIKeyValidator {
 }
 
 // ValidateKey checks the key hash against the database.
-// Returns the tenant ID if valid, or an error if not found / revoked.
-func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (uuid.UUID, error) {
+// Returns the tenant info if valid, or an error if not found / revoked.
+func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (KeyInfo, error) {
 	hash := HashAPIKey(key)
 	var ak models.APIKey
 	if err := v.db.WithContext(ctx).
+		Preload("Tenant").
 		Where("key_hash = ? AND revoked_at IS NULL", hash).
 		First(&ak).Error; err != nil {
-		return uuid.Nil, fmt.Errorf("invalid or revoked API key")
+		return KeyInfo{}, fmt.Errorf("invalid or revoked API key")
 	}
-	return ak.TenantID, nil
+	var email string
+	if ak.Tenant != nil {
+		email = ak.Tenant.Email
+	}
+	return KeyInfo{TenantID: ak.TenantID, Email: email}, nil
 }

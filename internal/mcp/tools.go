@@ -61,12 +61,14 @@ type SearchMemoryInput struct {
 	Category    *string `json:"category,omitempty" jsonschema:"Filter by category: learnings, preferences, projects"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory: go, infrastructure, hilo, etc."`
 	Limit       int     `json:"limit,omitempty" jsonschema:"Max results (default 10)"`
+	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type GetDocumentInput struct {
 	Category    string  `json:"category" jsonschema:"Document category"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory"`
 	Slug        string  `json:"slug" jsonschema:"Document slug"`
+	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type StoreMemoryInput struct {
@@ -74,22 +76,39 @@ type StoreMemoryInput struct {
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory: go, infrastructure, hilo, etc."`
 	Slug        string  `json:"slug" jsonschema:"Document slug/filename without extension"`
 	Content     string  `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
+	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type UpdateSectionInput struct {
-	SectionID string `json:"section_id" jsonschema:"Section UUID"`
-	Content   string `json:"content" jsonschema:"New section content"`
+	SectionID string  `json:"section_id" jsonschema:"Section UUID"`
+	Content   string  `json:"content" jsonschema:"New section content"`
+	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type DeleteDocumentInput struct {
 	Category    string  `json:"category" jsonschema:"Document category"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory"`
 	Slug        string  `json:"slug" jsonschema:"Document slug"`
+	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type ListDocumentsInput struct {
 	Category    *string `json:"category,omitempty" jsonschema:"Filter by category"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory"`
+	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+// --- Helpers ---
+
+func parseTenantOverride(raw *string) (*uuid.UUID, error) {
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(*raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid tenant_id: %w", err)
+	}
+	return &id, nil
 }
 
 // --- Handlers ---
@@ -101,7 +120,11 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if input.Limit > maxSearchLimit {
 		input.Limit = maxSearchLimit
 	}
-	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit)
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, tenantOverride)
 	if err != nil {
 		return nil, nil, fmt.Errorf("search: %w", err)
 	}
@@ -115,7 +138,11 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if err := validatePath(input.Category, input.Slug); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug)
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug, tenantOverride)
 	if err != nil {
 		if errors.Is(err, apperr.ErrNotFound) {
 			return errorResult(err.Error()), nil, nil
@@ -135,7 +162,11 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if err := validatePath(input.Category, input.Slug); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	doc, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content)
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	doc, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content, tenantOverride)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: %w", err)
 	}
@@ -157,7 +188,11 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return errorResult("invalid section_id: " + err.Error()), nil, nil
 	}
-	section, err := s.memory.UpdateSection(ctx, id, input.Content)
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	section, err := s.memory.UpdateSection(ctx, id, input.Content, tenantOverride)
 	if err != nil {
 		if errors.Is(err, apperr.ErrNotFound) {
 			return errorResult(err.Error()), nil, nil
@@ -174,7 +209,11 @@ func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if err := validatePath(input.Category, input.Slug); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	if err := s.memory.DeleteDocument(ctx, input.Category, input.Subcategory, input.Slug); err != nil {
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	if err := s.memory.DeleteDocument(ctx, input.Category, input.Subcategory, input.Slug, tenantOverride); err != nil {
 		if errors.Is(err, apperr.ErrNotFound) {
 			return errorResult(err.Error()), nil, nil
 		}
@@ -184,7 +223,11 @@ func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 }
 
 func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, input ListDocumentsInput) (*mcpsdk.CallToolResult, any, error) {
-	docs, err := s.memory.ListDocuments(ctx, input.Category, input.Subcategory)
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	docs, err := s.memory.ListDocuments(ctx, input.Category, input.Subcategory, tenantOverride)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list: %w", err)
 	}
