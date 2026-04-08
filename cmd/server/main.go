@@ -46,6 +46,7 @@ func main() {
 	sectionRepo := repository.NewSectionRepository(db)
 	tenantRepo := repository.NewTenantRepository(db)
 	keyRepo := repository.NewAPIKeyRepository(db)
+	lintRepo := repository.NewLintRepository(db)
 
 	// Embedding provider
 	embedder, err := service.NewEmbeddingProvider(cfg.EmbeddingProvider, cfg.EmbeddingCfg())
@@ -61,7 +62,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, allowedEmails)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, allowedEmails)
 
 	// MCP server
 	mcpServer := mcp.NewServer(memorySvc, allowedEmails)

@@ -90,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil)
 
 	// Inject tenant ID into context
 	ctx := auth.WithTenantID(context.Background(), tenantID)

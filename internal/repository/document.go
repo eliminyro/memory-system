@@ -121,3 +121,82 @@ func (r *DocumentRepository) DeleteByPath(ctx context.Context, tenantID uuid.UUI
 	}
 	return nil
 }
+
+// IndexDepth controls the aggregation level of GenerateIndex output.
+type IndexDepth string
+
+const (
+	IndexDepthSummary  IndexDepth = "summary"
+	IndexDepthCategory IndexDepth = "category"
+	IndexDepthFull     IndexDepth = "full"
+)
+
+// IndexEntry is one row in the catalog produced by GenerateIndex.
+type IndexEntry struct {
+	Category    string  `json:"category"`
+	Subcategory *string `json:"subcategory,omitempty"`
+	DocCount    int     `json:"doc_count"`
+	Topics      string  `json:"topics"`
+}
+
+// GenerateIndex produces a tiered catalog of documents for a tenant.
+//
+//   - summary:  one row per (category, subcategory) with COUNT and aggregated titles
+//   - category: one row per document (DocCount=1, Topics=title), filtered by category
+//   - full:     one row per document (DocCount=1, Topics=title), all categories
+func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UUID, depth IndexDepth, category *string) ([]IndexEntry, error) {
+	tenants := readTenants(tenantID)
+
+	var sql string
+	var args []any
+
+	switch depth {
+	case IndexDepthSummary:
+		sql = `
+			SELECT category,
+			       subcategory,
+			       COUNT(*)                          AS doc_count,
+			       string_agg(title, ', ' ORDER BY title) AS topics
+			FROM documents
+			WHERE tenant_id IN ?
+			  AND (?::text IS NULL OR category = ?)
+			GROUP BY category, subcategory
+			ORDER BY category, subcategory
+		`
+		args = []any{tenants, category, category}
+
+	case IndexDepthCategory:
+		sql = `
+			SELECT category,
+			       subcategory,
+			       1          AS doc_count,
+			       title      AS topics
+			FROM documents
+			WHERE tenant_id IN ?
+			  AND (?::text IS NULL OR category = ?)
+			ORDER BY category, subcategory, title
+		`
+		args = []any{tenants, category, category}
+
+	case IndexDepthFull:
+		sql = `
+			SELECT category,
+			       subcategory,
+			       1          AS doc_count,
+			       title      AS topics
+			FROM documents
+			WHERE tenant_id IN ?
+			ORDER BY category, subcategory, title
+		`
+		args = []any{tenants}
+
+	default:
+		return nil, fmt.Errorf("%w: unknown index depth %q", apperr.ErrInvalidInput, depth)
+	}
+
+	var results []IndexEntry
+	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {
+		return nil, fmt.Errorf("generate index: %w", err)
+	}
+	return results, nil
+}
