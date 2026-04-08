@@ -169,7 +169,7 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if input.Category == "" || input.Slug == "" {
 		return errorResult("category and slug are required"), nil, nil
 	}
-	if err := validatePath(input.Category, input.Slug); err != nil {
+	if err := validatePath(input.Category, input.Slug, input.Subcategory); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
@@ -193,7 +193,7 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if len(input.Content) > maxContentSize {
 		return errorResult("content exceeds 10MB limit"), nil, nil
 	}
-	if err := validatePath(input.Category, input.Slug); err != nil {
+	if err := validatePath(input.Category, input.Slug, input.Subcategory); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
@@ -240,7 +240,7 @@ func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if input.Category == "" || input.Slug == "" {
 		return errorResult("category and slug are required"), nil, nil
 	}
-	if err := validatePath(input.Category, input.Slug); err != nil {
+	if err := validatePath(input.Category, input.Slug, input.Subcategory); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
@@ -281,6 +281,12 @@ func (s *Server) GenerateIndex(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if input.Depth == "" {
 		input.Depth = "summary"
 	}
+	switch input.Depth {
+	case "summary", "category", "full":
+		// valid
+	default:
+		return errorResult(fmt.Sprintf("invalid depth %q: must be summary, category, or full", input.Depth)), nil, nil
+	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
@@ -300,6 +306,9 @@ func (s *Server) GetRelated(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 	if err != nil {
 		return errorResult("invalid document_id: " + err.Error()), nil, nil
 	}
+	if input.Limit > maxSearchLimit {
+		input.Limit = maxSearchLimit
+	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
@@ -312,6 +321,12 @@ func (s *Server) GetRelated(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 }
 
 func (s *Server) LintMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, input LintMemoryInput) (*mcpsdk.CallToolResult, any, error) {
+	validChecks := map[string]bool{"stale": true, "sparse": true, "near_duplicate": true, "empty_category": true}
+	for _, c := range input.Checks {
+		if !validChecks[c] {
+			return errorResult(fmt.Sprintf("invalid check %q: must be one of stale, sparse, near_duplicate, empty_category", c)), nil, nil
+		}
+	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
@@ -325,7 +340,7 @@ func (s *Server) LintMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 
 // --- Helpers ---
 
-func validatePath(category, slug string) error {
+func validatePath(category, slug string, subcategory *string) error {
 	if len(category) > maxFieldLen || len(slug) > maxFieldLen {
 		return fmt.Errorf("category and slug must be <= %d characters", maxFieldLen)
 	}
@@ -334,6 +349,14 @@ func validatePath(category, slug string) error {
 	}
 	if !validSlug.MatchString(slug) {
 		return fmt.Errorf("invalid slug format: must be alphanumeric with .-_")
+	}
+	if subcategory != nil {
+		if len(*subcategory) > maxFieldLen {
+			return fmt.Errorf("subcategory must be <= %d characters", maxFieldLen)
+		}
+		if !validSlug.MatchString(*subcategory) {
+			return fmt.Errorf("invalid subcategory format: must be alphanumeric with .-_")
+		}
 	}
 	return nil
 }

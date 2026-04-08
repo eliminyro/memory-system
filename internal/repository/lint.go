@@ -3,10 +3,11 @@ package repository
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/eliminyro/memory-mcp/internal/models"
 )
 
 type LintRepository struct {
@@ -49,24 +50,16 @@ func DefaultLintThresholds() LintThresholds {
 	}
 }
 
-func buildPath(category string, subcategory *string, slug string) string {
-	if subcategory != nil {
-		return category + "/" + *subcategory + "/" + slug
-	}
-	return category + "/" + slug
-}
-
 // CheckStale finds documents that have not been updated within the stale_days threshold.
 func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thresholds LintThresholds) ([]LintFinding, error) {
 	tenants := readTenants(tenantID)
-	cutoff := time.Now().AddDate(0, 0, -thresholds.StaleDays)
 
 	sql := `
-		SELECT category, subcategory, slug,
+		SELECT category, subcategory, slug, title, updated_at,
 		       EXTRACT(DAY FROM NOW() - updated_at)::int AS days_since_update
 		FROM documents
 		WHERE tenant_id IN ?
-		  AND updated_at < ?
+		  AND updated_at < NOW() - make_interval(days => ?)
 		ORDER BY updated_at ASC
 	`
 
@@ -78,7 +71,7 @@ func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thr
 	}
 
 	var rows []row
-	if err := r.db.WithContext(ctx).Raw(sql, tenants, cutoff).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(sql, tenants, thresholds.StaleDays).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("check stale: %w", err)
 	}
 
@@ -87,7 +80,7 @@ func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thr
 		findings = append(findings, LintFinding{
 			Check:        "stale",
 			Severity:     LintSeverityInfo,
-			DocumentPath: buildPath(r.Category, r.Subcategory, r.Slug),
+			DocumentPath: models.BuildPath(r.Category, r.Subcategory, r.Slug),
 			Message:      fmt.Sprintf("document has not been updated in %d days (threshold: %d)", r.DaysSinceUpdate, thresholds.StaleDays),
 		})
 	}
@@ -128,7 +121,7 @@ func (r *LintRepository) CheckSparse(ctx context.Context, tenantID uuid.UUID, th
 		findings = append(findings, LintFinding{
 			Check:        "sparse",
 			Severity:     LintSeverityInfo,
-			DocumentPath: buildPath(r.Category, r.Subcategory, r.Slug),
+			DocumentPath: models.BuildPath(r.Category, r.Subcategory, r.Slug),
 			Message:      fmt.Sprintf("document has %d sections and max content length %d (thresholds: min_sections=%d, min_content_len=%d)", r.SectionCount, r.MaxContentLen, thresholds.SparseMinSections, thresholds.SparseMinContentLen),
 		})
 	}
@@ -175,8 +168,8 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 
 	findings := make([]LintFinding, 0, len(rows))
 	for _, r := range rows {
-		path1 := buildPath(r.Cat1, r.Sub1, r.Slug1)
-		path2 := buildPath(r.Cat2, r.Sub2, r.Slug2)
+		path1 := models.BuildPath(r.Cat1, r.Sub1, r.Slug1)
+		path2 := models.BuildPath(r.Cat2, r.Sub2, r.Slug2)
 		findings = append(findings, LintFinding{
 			Check:        "near_duplicate",
 			Severity:     LintSeverityWarning,

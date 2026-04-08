@@ -24,10 +24,15 @@ func (Document) TableName() string {
 	return "documents"
 }
 
+// BuildPath constructs a hierarchical path from category/subcategory/slug.
+func BuildPath(category string, subcategory *string, slug string) string {
+	if subcategory != nil {
+		return category + "/" + *subcategory + "/" + slug
+	}
+	return category + "/" + slug
+}
+
 // Path returns the hierarchical path like "learnings/go/gorm"
 func (d Document) Path() string {
-	if d.Subcategory != nil {
-		return d.Category + "/" + *d.Subcategory + "/" + d.Slug
-	}
-	return d.Category + "/" + d.Slug
+	return BuildPath(d.Category, d.Subcategory, d.Slug)
 }

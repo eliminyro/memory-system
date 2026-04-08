@@ -78,4 +78,3 @@ func (e *OllamaEmbedder) Embed(ctx context.Context, text string) (pgvector.Vecto
 
 	return pgvector.NewVector(result.Embeddings[0]), nil
 }
-
