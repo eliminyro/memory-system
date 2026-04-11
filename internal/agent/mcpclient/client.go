@@ -101,6 +101,7 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.http.Do(req)
@@ -118,6 +119,9 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 		return "", fmt.Errorf("MCP error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
+	// MCP StreamableHTTPHandler returns SSE: "event: message\ndata: {...}\n\n"
+	jsonData := extractSSEData(respBody)
+
 	var rpcResp struct {
 		Result *struct {
 			Content []struct {
@@ -130,7 +134,7 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+	if err := json.Unmarshal(jsonData, &rpcResp); err != nil {
 		return "", fmt.Errorf("parse MCP response: %w", err)
 	}
 	if rpcResp.Error != nil {
@@ -144,4 +148,19 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 	}
 
 	return rpcResp.Result.Content[0].Text, nil
+}
+
+// extractSSEData extracts the JSON payload from an SSE response.
+// MCP StreamableHTTPHandler returns "event: message\ndata: {...}\n\n".
+func extractSSEData(body []byte) []byte {
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("data: ")) {
+			return line[6:]
+		}
+	}
+	// Fallback: plain JSON (not SSE)
+	if len(body) > 0 && body[0] == '{' {
+		return body
+	}
+	return body
 }
