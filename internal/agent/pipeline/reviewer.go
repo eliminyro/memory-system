@@ -12,7 +12,7 @@ import (
 
 const reviewerSystemPrompt = `You are a knowledge review agent. Your job is to challenge candidate learnings extracted from a Claude Code session.
 
-For each candidate, you are given:
+For each candidate (numbered starting at 0), you are given:
 - The candidate itself (path, heading, content, type)
 - Search results from the existing knowledge base (if any)
 
@@ -29,7 +29,9 @@ Criteria:
 
 For "merge" verdicts, include the section_id of the target section in "merge_target".
 
-Respond with ONLY a JSON array of reviewed candidates. Each object has the original fields plus "verdict", "reason", and optionally "merge_target".`
+Respond with ONLY a JSON array of verdict objects, one per candidate IN THE SAME ORDER as the input.
+Each object has ONLY these fields: "verdict", "reason", and optionally "merge_target".
+Do NOT include the original candidate fields (path, heading, content, type) — they are tracked separately.`
 
 func Review(ctx context.Context, client *claude.Client, model string, mcp *mcpclient.Client, candidates []Candidate) ([]ReviewedCandidate, error) {
 	if len(candidates) == 0 {
@@ -64,15 +66,41 @@ func Review(ctx context.Context, client *claude.Client, model string, mcp *mcpcl
 		return nil, fmt.Errorf("reviewer: %w", err)
 	}
 
-	return ParseReviewerResponse(response)
-}
+	verdicts, err := ParseReviewerResponse(response)
+	if err != nil {
+		return nil, err
+	}
 
-func ParseReviewerResponse(raw string) ([]ReviewedCandidate, error) {
-	raw = stripCodeFence(raw)
-
+	// Zip verdicts back onto original candidates so path/heading/content
+	// are guaranteed correct (not dependent on LLM echoing them back).
+	if len(verdicts) != len(candidates) {
+		return nil, fmt.Errorf("reviewer returned %d verdicts for %d candidates", len(verdicts), len(candidates))
+	}
 	var reviewed []ReviewedCandidate
-	if err := json.Unmarshal([]byte(raw), &reviewed); err != nil {
-		return nil, fmt.Errorf("parse reviewer response: %w (raw: %.200s)", err, raw)
+	for i, v := range verdicts {
+		reviewed = append(reviewed, ReviewedCandidate{
+			Candidate:   candidates[i],
+			Verdict:     v.Verdict,
+			Reason:      v.Reason,
+			MergeTarget: v.MergeTarget,
+		})
 	}
 	return reviewed, nil
+}
+
+// reviewVerdict holds only the reviewer's decision, not the original candidate fields.
+type reviewVerdict struct {
+	Verdict     Verdict `json:"verdict"`
+	Reason      string  `json:"reason"`
+	MergeTarget string  `json:"merge_target,omitempty"`
+}
+
+func ParseReviewerResponse(raw string) ([]reviewVerdict, error) {
+	raw = stripCodeFence(raw)
+
+	var verdicts []reviewVerdict
+	if err := json.Unmarshal([]byte(raw), &verdicts); err != nil {
+		return nil, fmt.Errorf("parse reviewer response: %w (raw: %.200s)", err, raw)
+	}
+	return verdicts, nil
 }

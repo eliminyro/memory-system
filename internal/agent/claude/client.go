@@ -1,43 +1,54 @@
 package claude
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
+// Client wraps Claude API access. Supports two auth modes:
+//   - "api": direct Anthropic API via anthropic-sdk-go (requires API key)
+//   - "sdk": Claude Code CLI subprocess (uses subscription auth)
 type Client struct {
-	inner anthropic.Client
+	mode  string
+	inner *anthropic.Client // non-nil for "api" mode
 }
 
 func NewClient(auth, apiKey string) (*Client, error) {
-	var opts []option.RequestOption
-
 	switch auth {
 	case "api":
+		var opts []option.RequestOption
 		if apiKey != "" {
 			opts = append(opts, option.WithAPIKey(apiKey))
 		}
+		c := anthropic.NewClient(opts...)
+		return &Client{mode: "api", inner: &c}, nil
+
 	case "sdk":
-		token, err := readSubscriptionToken()
-		if err != nil {
-			return nil, fmt.Errorf("read subscription token: %w", err)
-		}
-		opts = append(opts, option.WithAuthToken(token))
+		return &Client{mode: "sdk"}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported auth mode: %q (use \"api\" or \"sdk\")", auth)
 	}
-
-	return &Client{inner: anthropic.NewClient(opts...)}, nil
 }
 
 func (c *Client) Complete(ctx context.Context, model, systemPrompt, userMessage string) (string, error) {
+	switch c.mode {
+	case "api":
+		return c.completeAPI(ctx, model, systemPrompt, userMessage)
+	case "sdk":
+		return c.completeSDK(ctx, model, systemPrompt, userMessage)
+	default:
+		return "", fmt.Errorf("unknown mode: %q", c.mode)
+	}
+}
+
+func (c *Client) completeAPI(ctx context.Context, model, systemPrompt, userMessage string) (string, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(model),
 		MaxTokens: 8192,
@@ -55,40 +66,38 @@ func (c *Client) Complete(ctx context.Context, model, systemPrompt, userMessage 
 	if err != nil {
 		return "", fmt.Errorf("claude API call: %w", err)
 	}
-
 	if len(msg.Content) == 0 {
 		return "", fmt.Errorf("empty response from Claude")
 	}
-
 	return msg.Content[0].Text, nil
 }
 
-type credentialsFile struct {
-	ClaudeAIOAuth *struct {
-		AccessToken string `json:"accessToken"`
-		ExpiresAt   int64  `json:"expiresAt"`
-	} `json:"claudeAiOauth"`
-}
-
-func readSubscriptionToken() (string, error) {
-	out, err := exec.Command("security", "find-generic-password",
-		"-s", "Claude Code-credentials", "-w").Output()
-	if err != nil {
-		return "", fmt.Errorf("read keychain (Claude Code-credentials): %w", err)
+func (c *Client) completeSDK(ctx context.Context, model, systemPrompt, userMessage string) (string, error) {
+	args := []string{
+		"-p",
+		"--model", model,
+		"--output-format", "text",
+		"--max-turns", "1",
+	}
+	if systemPrompt != "" {
+		args = append(args, "--system-prompt", systemPrompt)
 	}
 
-	var creds credentialsFile
-	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &creds); err != nil {
-		return "", fmt.Errorf("parse keychain credentials: %w", err)
-	}
-	if creds.ClaudeAIOAuth == nil || creds.ClaudeAIOAuth.AccessToken == "" {
-		return "", fmt.Errorf("no OAuth token found in keychain")
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Stdin = strings.NewReader(userMessage)
+	cmd.Env = append(cmd.Environ(), "MEMORY_AGENT_INVOKED=1")
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("claude CLI: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
 	}
 
-	if creds.ClaudeAIOAuth.ExpiresAt > 0 && time.Now().UnixMilli() > creds.ClaudeAIOAuth.ExpiresAt {
-		return "", fmt.Errorf("subscription token expired at %s — re-authenticate with Claude Code",
-			time.UnixMilli(creds.ClaudeAIOAuth.ExpiresAt).Format(time.RFC3339))
+	result := strings.TrimSpace(stdout.String())
+	if result == "" {
+		return "", fmt.Errorf("empty response from claude CLI")
 	}
-
-	return creds.ClaudeAIOAuth.AccessToken, nil
+	return result, nil
 }

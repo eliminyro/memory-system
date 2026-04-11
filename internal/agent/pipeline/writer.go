@@ -13,6 +13,16 @@ import (
 func Write(ctx context.Context, mcp *mcpclient.Client, reviewed []ReviewedCandidate) (accepted, merged, rejected int, err error) {
 	var errs []error
 	for _, rc := range reviewed {
+		// Guard: reject candidates with malformed paths (must be 3-part: category/subcategory/slug)
+		if rc.Verdict == VerdictAccept || (rc.Verdict == VerdictMerge && rc.MergeTarget == "") {
+			parts := strings.Split(strings.Trim(rc.Path, "/"), "/")
+			if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+				slog.Warn("skipping candidate with invalid path (expected category/subcategory/slug)", "path", rc.Path)
+				rejected++
+				continue
+			}
+		}
+
 		switch rc.Verdict {
 		case VerdictAccept:
 			category, subcategory, slug := models.ParsePath(rc.Path)

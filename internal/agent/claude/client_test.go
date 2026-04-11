@@ -14,6 +14,12 @@ func TestNewClient_APIKey(t *testing.T) {
 	assert.NotNil(t, c)
 }
 
+func TestNewClient_SDK(t *testing.T) {
+	c, err := claude.NewClient("sdk", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, c)
+}
+
 func TestNewClient_InvalidAuth(t *testing.T) {
 	_, err := claude.NewClient("invalid", "")
 	assert.Error(t, err)

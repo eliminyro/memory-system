@@ -13,9 +13,12 @@ import (
 const extractorSystemPrompt = `You are a knowledge extraction agent. Your job is to identify durable, reusable learnings from a Claude Code session transcript.
 
 For each learning, output a JSON object with:
-- "path": where it belongs in the knowledge hierarchy (category/subcategory/slug format)
+- "path": where it belongs in the knowledge hierarchy. MUST be exactly 3 parts: category/subcategory/slug
   Categories: learnings, preferences, projects
-  Subcategories for learnings: go, infrastructure, cicd, observability, tools, homelab
+  Subcategories for learnings: go, infrastructure, cicd, observability, tools, homelab, security
+  Subcategories for projects: hilo, a1, memory-mcp, claude-hook-engine, homelab, secretctl, ansible, karaoke
+  The slug should be a short kebab-case identifier for this specific knowledge (e.g. "learnings/go/gorm-soft-deletes", "projects/hilo/auth-migration")
+  NEVER use a 2-part path like "learnings/go" — that would overwrite an entire subcategory
 - "heading": a descriptive heading for the knowledge
 - "content": the actual knowledge, written as a durable fact (NOT "we discussed X" but "X works by doing Y")
 - "type": "new" (create new doc) or "update" (merge into existing doc)
