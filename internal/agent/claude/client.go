@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -71,22 +71,18 @@ type credentialsFile struct {
 }
 
 func readSubscriptionToken() (string, error) {
-	home, err := os.UserHomeDir()
+	out, err := exec.Command("security", "find-generic-password",
+		"-s", "Claude Code-credentials", "-w").Output()
 	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(home, ".claude", ".credentials.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", path, err)
+		return "", fmt.Errorf("read keychain (Claude Code-credentials): %w", err)
 	}
 
 	var creds credentialsFile
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return "", fmt.Errorf("parse credentials: %w", err)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &creds); err != nil {
+		return "", fmt.Errorf("parse keychain credentials: %w", err)
 	}
 	if creds.ClaudeAIOAuth == nil || creds.ClaudeAIOAuth.AccessToken == "" {
-		return "", fmt.Errorf("no OAuth token found in credentials")
+		return "", fmt.Errorf("no OAuth token found in keychain")
 	}
 
 	if creds.ClaudeAIOAuth.ExpiresAt > 0 && time.Now().UnixMilli() > creds.ClaudeAIOAuth.ExpiresAt {
