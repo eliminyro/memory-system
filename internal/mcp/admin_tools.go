@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	apperr "github.com/eliminyro/memory-mcp/internal/errors"
+	apperr "github.com/eliminyro/memory-system/internal/errors"
 )
 
 const maxAdminFieldLen = 200
