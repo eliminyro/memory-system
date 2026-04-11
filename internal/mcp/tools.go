@@ -11,6 +11,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apperr "github.com/eliminyro/memory-mcp/internal/errors"
+	"github.com/eliminyro/memory-mcp/internal/repository"
 )
 
 const (
@@ -52,6 +53,21 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 		Name:        "list_documents",
 		Description: "List documents in the memory hierarchy. Filter by category and/or subcategory.",
 	}, s.ListDocuments)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "generate_index",
+		Description: "Generate a tiered catalog of the knowledge base. Use depth='summary' for a compact overview (one line per subcategory), 'category' for doc-level detail, or 'full' for everything.",
+	}, s.GenerateIndex)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "get_related",
+		Description: "Find documents semantically related to a given document. Uses cosine similarity between section embeddings.",
+	}, s.GetRelated)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "lint_memory",
+		Description: "Run health checks on the knowledge base. Detects stale docs, sparse content, near-duplicates, and empty categories. All checks are SQL-based, no LLM calls.",
+	}, s.LintMemory)
 }
 
 // --- Input types ---
@@ -98,6 +114,24 @@ type ListDocumentsInput struct {
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
+type GenerateIndexInput struct {
+	Depth    string  `json:"depth,omitempty" jsonschema:"Index depth: summary (default), category, or full"`
+	Category *string `json:"category,omitempty" jsonschema:"Filter to specific category"`
+	TenantID *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type GetRelatedInput struct {
+	DocumentID string  `json:"document_id" jsonschema:"UUID of the target document"`
+	Limit      int     `json:"limit,omitempty" jsonschema:"Max results (default 5)"`
+	TenantID   *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type LintMemoryInput struct {
+	Checks     []string                   `json:"checks,omitempty" jsonschema:"Filter to specific checks: stale, sparse, near_duplicate, empty_category"`
+	Thresholds *repository.LintThresholds `json:"thresholds,omitempty" jsonschema:"Override default thresholds"`
+	TenantID   *string                    `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
 // --- Helpers ---
 
 func parseTenantOverride(raw *string) (*uuid.UUID, error) {
@@ -135,7 +169,7 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if input.Category == "" || input.Slug == "" {
 		return errorResult("category and slug are required"), nil, nil
 	}
-	if err := validatePath(input.Category, input.Slug); err != nil {
+	if err := validatePath(input.Category, input.Slug, input.Subcategory); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
@@ -159,7 +193,7 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if len(input.Content) > maxContentSize {
 		return errorResult("content exceeds 10MB limit"), nil, nil
 	}
-	if err := validatePath(input.Category, input.Slug); err != nil {
+	if err := validatePath(input.Category, input.Slug, input.Subcategory); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
@@ -206,7 +240,7 @@ func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if input.Category == "" || input.Slug == "" {
 		return errorResult("category and slug are required"), nil, nil
 	}
-	if err := validatePath(input.Category, input.Slug); err != nil {
+	if err := validatePath(input.Category, input.Slug, input.Subcategory); err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
@@ -243,9 +277,70 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	return jsonResult(entries), nil, nil
 }
 
+func (s *Server) GenerateIndex(ctx context.Context, _ *mcpsdk.CallToolRequest, input GenerateIndexInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.Depth == "" {
+		input.Depth = "summary"
+	}
+	switch input.Depth {
+	case "summary", "category", "full":
+		// valid
+	default:
+		return errorResult(fmt.Sprintf("invalid depth %q: must be summary, category, or full", input.Depth)), nil, nil
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	entries, err := s.memory.GenerateIndex(ctx, input.Depth, input.Category, tenantOverride)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate index: %w", err)
+	}
+	return jsonResult(entries), nil, nil
+}
+
+func (s *Server) GetRelated(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetRelatedInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.DocumentID == "" {
+		return errorResult("document_id is required"), nil, nil
+	}
+	docID, err := uuid.Parse(input.DocumentID)
+	if err != nil {
+		return errorResult("invalid document_id: " + err.Error()), nil, nil
+	}
+	if input.Limit > maxSearchLimit {
+		input.Limit = maxSearchLimit
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	results, err := s.memory.GetRelated(ctx, docID, input.Limit, tenantOverride)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get related: %w", err)
+	}
+	return jsonResult(results), nil, nil
+}
+
+func (s *Server) LintMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, input LintMemoryInput) (*mcpsdk.CallToolResult, any, error) {
+	validChecks := map[string]bool{"stale": true, "sparse": true, "near_duplicate": true, "empty_category": true}
+	for _, c := range input.Checks {
+		if !validChecks[c] {
+			return errorResult(fmt.Sprintf("invalid check %q: must be one of stale, sparse, near_duplicate, empty_category", c)), nil, nil
+		}
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	findings, err := s.memory.LintMemory(ctx, input.Checks, input.Thresholds, tenantOverride)
+	if err != nil {
+		return nil, nil, fmt.Errorf("lint memory: %w", err)
+	}
+	return jsonResult(findings), nil, nil
+}
+
 // --- Helpers ---
 
-func validatePath(category, slug string) error {
+func validatePath(category, slug string, subcategory *string) error {
 	if len(category) > maxFieldLen || len(slug) > maxFieldLen {
 		return fmt.Errorf("category and slug must be <= %d characters", maxFieldLen)
 	}
@@ -254,6 +349,14 @@ func validatePath(category, slug string) error {
 	}
 	if !validSlug.MatchString(slug) {
 		return fmt.Errorf("invalid slug format: must be alphanumeric with .-_")
+	}
+	if subcategory != nil {
+		if len(*subcategory) > maxFieldLen {
+			return fmt.Errorf("subcategory must be <= %d characters", maxFieldLen)
+		}
+		if !validSlug.MatchString(*subcategory) {
+			return fmt.Errorf("invalid subcategory format: must be alphanumeric with .-_")
+		}
 	}
 	return nil
 }

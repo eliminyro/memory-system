@@ -94,6 +94,56 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 	return results, nil
 }
 
+type RelatedResult struct {
+	DocumentID  uuid.UUID `json:"document_id"`
+	Category    string    `json:"category"`
+	Subcategory *string   `json:"subcategory,omitempty"`
+	Slug        string    `json:"slug"`
+	DocTitle    string    `json:"doc_title"`
+	Similarity  float64   `json:"similarity"`
+}
+
+func (r *SectionRepository) GetRelated(ctx context.Context, tenantID uuid.UUID, documentID uuid.UUID, limit int) ([]RelatedResult, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	tenants := readTenants(tenantID)
+
+	sql := `
+		WITH target_avg AS (
+			SELECT AVG(embedding) AS avg_embedding
+			FROM sections
+			WHERE document_id = ?
+			  AND embedding IS NOT NULL
+		),
+		candidates AS (
+			SELECT s.document_id,
+				   1 - (s.embedding <=> (SELECT avg_embedding FROM target_avg)) AS similarity
+			FROM sections s
+			JOIN documents d ON d.id = s.document_id
+			WHERE s.document_id != ?
+			  AND d.tenant_id IN ?
+			  AND s.embedding IS NOT NULL
+		)
+		SELECT c.document_id, d.category, d.subcategory, d.slug, d.title AS doc_title,
+			   AVG(c.similarity) AS similarity
+		FROM candidates c
+		JOIN documents d ON d.id = c.document_id
+		GROUP BY c.document_id, d.category, d.subcategory, d.slug, d.title
+		ORDER BY similarity DESC
+		LIMIT ?
+	`
+
+	args := []any{documentID, documentID, tenants, limit}
+
+	var results []RelatedResult
+	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {
+		return nil, fmt.Errorf("get related: %w", err)
+	}
+	return results, nil
+}
+
 func (r *SectionRepository) DeleteByDocumentID(ctx context.Context, docID uuid.UUID) error {
 	return r.db.WithContext(ctx).Where("document_id = ?", docID).Delete(&models.Section{}).Error
 }

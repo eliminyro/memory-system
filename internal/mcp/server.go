@@ -41,6 +41,9 @@ Use get_document to read a specific memory by its hierarchical path.
 Use list_documents to browse the memory hierarchy.
 Use update_section to modify a single section without rewriting the whole document.
 Use delete_document to remove a memory.
+Use generate_index to get a compact overview of the knowledge base (summary depth recommended for session start).
+Use get_related to find documents semantically similar to a specific document.
+Use lint_memory to check knowledge base health — stale docs, sparse content, near-duplicates.
 
 Categories: learnings, preferences, projects
 Subcategories vary: learnings has go, infrastructure, cicd, etc.`

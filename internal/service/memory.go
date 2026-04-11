@@ -21,10 +21,11 @@ type MemoryService struct {
 	embedder    EmbeddingProvider
 	tenants     *repository.TenantRepository
 	keys        *repository.APIKeyRepository
+	lint        *repository.LintRepository
 	adminEmails map[string]struct{}
 }
 
-func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider, tenants *repository.TenantRepository, keys *repository.APIKeyRepository, adminEmails []string) *MemoryService {
+func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider, tenants *repository.TenantRepository, keys *repository.APIKeyRepository, lint *repository.LintRepository, adminEmails []string) *MemoryService {
 	ae := make(map[string]struct{}, len(adminEmails))
 	for _, e := range adminEmails {
 		ae[strings.TrimSpace(e)] = struct{}{}
@@ -36,6 +37,7 @@ func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections
 		embedder:    embedder,
 		tenants:     tenants,
 		keys:        keys,
+		lint:        lint,
 		adminEmails: ae,
 	}
 }
@@ -335,6 +337,66 @@ func (s *MemoryService) RevokeAPIKey(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	return s.keys.Revoke(ctx, id)
+}
+
+func (s *MemoryService) GenerateIndex(ctx context.Context, depth string, category *string, overrideID *uuid.UUID) ([]repository.IndexEntry, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return nil, err
+	}
+	return s.docs.GenerateIndex(ctx, tid, repository.IndexDepth(depth), category)
+}
+
+func (s *MemoryService) GetRelated(ctx context.Context, documentID uuid.UUID, limit int, overrideID *uuid.UUID) ([]repository.RelatedResult, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return nil, err
+	}
+	return s.sections.GetRelated(ctx, tid, documentID, limit)
+}
+
+func (s *MemoryService) LintMemory(ctx context.Context, checks []string, thresholds *repository.LintThresholds, overrideID *uuid.UUID) ([]repository.LintFinding, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return nil, err
+	}
+
+	t := repository.DefaultLintThresholds()
+	if thresholds != nil {
+		t = *thresholds
+	}
+
+	type lintCheck struct {
+		name string
+		fn   func(context.Context, uuid.UUID, repository.LintThresholds) ([]repository.LintFinding, error)
+	}
+	allChecks := []lintCheck{
+		{"stale", s.lint.CheckStale},
+		{"sparse", s.lint.CheckSparse},
+		{"near_duplicate", s.lint.CheckNearDuplicates},
+		{"empty_category", s.lint.CheckEmptyCategories},
+	}
+
+	// Filter to requested checks if specified
+	requested := make(map[string]struct{}, len(checks))
+	for _, c := range checks {
+		requested[c] = struct{}{}
+	}
+
+	var findings []repository.LintFinding
+	for _, check := range allChecks {
+		if len(checks) > 0 {
+			if _, ok := requested[check.name]; !ok {
+				continue
+			}
+		}
+		results, err := check.fn(ctx, tid, t)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, results...)
+	}
+	return findings, nil
 }
 
 // parsedSection holds a parsed markdown section.
