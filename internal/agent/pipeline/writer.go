@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/eliminyro/memory-system/internal/agent/mcpclient"
+	"github.com/eliminyro/memory-system/internal/models"
 )
 
 func Write(ctx context.Context, mcp *mcpclient.Client, reviewed []ReviewedCandidate) (accepted, merged, rejected int, err error) {
@@ -14,7 +15,7 @@ func Write(ctx context.Context, mcp *mcpclient.Client, reviewed []ReviewedCandid
 	for _, rc := range reviewed {
 		switch rc.Verdict {
 		case VerdictAccept:
-			category, subcategory, slug := ParsePath(rc.Path)
+			category, subcategory, slug := models.ParsePath(rc.Path)
 			content := formatContent(rc.Heading, rc.Content)
 			if storeErr := mcp.StoreMemory(ctx, category, subcategory, slug, content); storeErr != nil {
 				slog.Error("failed to store candidate", "path", rc.Path, "error", storeErr)
@@ -27,7 +28,7 @@ func Write(ctx context.Context, mcp *mcpclient.Client, reviewed []ReviewedCandid
 		case VerdictMerge:
 			if rc.MergeTarget == "" {
 				slog.Warn("merge verdict without target, storing as new", "path", rc.Path)
-				category, subcategory, slug := ParsePath(rc.Path)
+				category, subcategory, slug := models.ParsePath(rc.Path)
 				content := formatContent(rc.Heading, rc.Content)
 				if storeErr := mcp.StoreMemory(ctx, category, subcategory, slug, content); storeErr != nil {
 					slog.Error("failed to store merged candidate", "path", rc.Path, "error", storeErr)

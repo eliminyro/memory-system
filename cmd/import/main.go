@@ -144,24 +144,8 @@ func main() {
 }
 
 // parsePath converts "learnings/go/gorm.md" -> ("learnings", "go", "gorm")
-// and "preferences/workflow.md" -> ("preferences", nil, "workflow")
-// and "work-status.md" -> ("misc", nil, "work-status")
 func parsePath(rel string) (category string, subcategory *string, slug string) {
 	rel = strings.TrimSuffix(rel, ".md")
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-
-	switch len(parts) {
-	case 3:
-		// learnings/go/gorm
-		sub := parts[1]
-		return parts[0], &sub, parts[2]
-	case 2:
-		// preferences/workflow
-		return parts[0], nil, parts[1]
-	case 1:
-		// work-status (top-level)
-		return "misc", nil, parts[0]
-	default:
-		return "", nil, ""
-	}
+	rel = filepath.ToSlash(rel)
+	return models.ParsePath(rel)
 }

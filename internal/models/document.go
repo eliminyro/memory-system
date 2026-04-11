@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,25 @@ func BuildPath(category string, subcategory *string, slug string) string {
 		return category + "/" + *subcategory + "/" + slug
 	}
 	return category + "/" + slug
+}
+
+// ParsePath splits a hierarchical path into category, subcategory, and slug.
+// Handles 3-part ("learnings/go/gorm"), 2-part ("preferences/style"),
+// and 1-part ("slug") paths. Single-part paths default to category "misc".
+func ParsePath(path string) (category string, subcategory *string, slug string) {
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return "misc", nil, path
+	}
+	parts := strings.Split(path, "/")
+	switch len(parts) {
+	case 3:
+		return parts[0], &parts[1], parts[2]
+	case 2:
+		return parts[0], nil, parts[1]
+	default:
+		return "misc", nil, path
+	}
 }
 
 // Path returns the hierarchical path like "learnings/go/gorm"

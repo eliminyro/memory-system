@@ -1,7 +1,6 @@
 package pipeline
 
-import "strings"
-
+// Candidate represents a knowledge item extracted from a session.
 type Candidate struct {
 	Path    string `json:"path"`
 	Heading string `json:"heading"`
@@ -9,6 +8,7 @@ type Candidate struct {
 	Type    string `json:"type"`
 }
 
+// Verdict is the reviewer's decision on a candidate.
 type Verdict string
 
 const (
@@ -17,29 +17,10 @@ const (
 	VerdictReject Verdict = "reject"
 )
 
+// ReviewedCandidate is a candidate with its review verdict.
 type ReviewedCandidate struct {
 	Candidate
 	Verdict     Verdict `json:"verdict"`
 	Reason      string  `json:"reason"`
 	MergeTarget string  `json:"merge_target,omitempty"`
-}
-
-func ParsePath(path string) (category string, subcategory *string, slug string) {
-	parts := splitPath(path)
-	switch len(parts) {
-	case 3:
-		return parts[0], &parts[1], parts[2]
-	case 2:
-		return parts[0], nil, parts[1]
-	default:
-		return "misc", nil, path
-	}
-}
-
-func splitPath(path string) []string {
-	path = strings.Trim(path, "/")
-	if path == "" {
-		return nil
-	}
-	return strings.Split(path, "/")
 }
