@@ -8,10 +8,10 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/eliminyro/memory-mcp/internal/auth"
-	apperr "github.com/eliminyro/memory-mcp/internal/errors"
-	"github.com/eliminyro/memory-mcp/internal/models"
-	"github.com/eliminyro/memory-mcp/internal/repository"
+	"github.com/eliminyro/memory-system/internal/auth"
+	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
+	"github.com/eliminyro/memory-system/internal/repository"
 )
 
 type MemoryService struct {

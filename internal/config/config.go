@@ -5,7 +5,7 @@ import (
 
 	"github.com/caarlos0/env/v10"
 
-	"github.com/eliminyro/memory-mcp/internal/service"
+	"github.com/eliminyro/memory-system/internal/service"
 )
 
 type Config struct {

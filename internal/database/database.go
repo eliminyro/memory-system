@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/eliminyro/memory-mcp/internal/models"
+	"github.com/eliminyro/memory-system/internal/models"
 )
 
 func Connect(databaseURL string) (*gorm.DB, error) {

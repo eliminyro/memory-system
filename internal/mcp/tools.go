@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	apperr "github.com/eliminyro/memory-mcp/internal/errors"
-	"github.com/eliminyro/memory-mcp/internal/repository"
+	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/repository"
 )
 
 const (

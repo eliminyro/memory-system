@@ -6,8 +6,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/eliminyro/memory-mcp/internal/auth"
-	"github.com/eliminyro/memory-mcp/internal/service"
+	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/service"
 )
 
 type Server struct {

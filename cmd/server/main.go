@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/eliminyro/memory-mcp/internal/auth"
-	"github.com/eliminyro/memory-mcp/internal/config"
-	"github.com/eliminyro/memory-mcp/internal/database"
-	"github.com/eliminyro/memory-mcp/internal/mcp"
-	"github.com/eliminyro/memory-mcp/internal/repository"
-	"github.com/eliminyro/memory-mcp/internal/service"
+	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/config"
+	"github.com/eliminyro/memory-system/internal/database"
+	"github.com/eliminyro/memory-system/internal/mcp"
+	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/service"
 )
 
 func main() {

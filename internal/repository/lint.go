@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/eliminyro/memory-mcp/internal/models"
+	"github.com/eliminyro/memory-system/internal/models"
 )
 
 type LintRepository struct {

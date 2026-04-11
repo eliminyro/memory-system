@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	apperr "github.com/eliminyro/memory-mcp/internal/errors"
-	"github.com/eliminyro/memory-mcp/internal/models"
+	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
 )
 
 type TenantRepository struct {
