@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,7 +20,11 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// Log to both stderr and a persistent log file
+	logFile := setupLogFile()
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: memory-agent <command> [args]\n")
@@ -158,4 +163,27 @@ func stateFilePath() (string, error) {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
 	return filepath.Join(dir, "last-capture.json"), nil
+}
+
+func setupLogFile() *os.File {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		return nil
+	}
+
+	logDir := filepath.Join(home, ".claude", "logs")
+	os.MkdirAll(logDir, 0700)
+	logPath := filepath.Join(logDir, "memory-capture.log")
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		return nil
+	}
+
+	// Write to both stderr and the log file
+	w := io.MultiWriter(os.Stderr, f)
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return f
 }
