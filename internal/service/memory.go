@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 
 	"github.com/eliminyro/memory-system/internal/auth"
@@ -170,9 +171,36 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	return s.sections.MarkVerified(ctx, tid, sectionID)
 }
 
-// StoreDocument parses markdown content into sections, embeds them, and stores.
-// Embeddings are generated before any DB mutations to avoid partial state on failure.
-func (s *MemoryService) StoreDocument(ctx context.Context, category string, subcategory *string, slug, content string, overrideID *uuid.UUID) (*models.Document, error) {
+// DuplicateThreshold is the minimum cosine similarity (0..1) at which a new
+// document is considered a near-duplicate of an existing one and the store is
+// refused unless force=true.
+const DuplicateThreshold = 0.70
+
+// StoreResult is the outcome of StoreDocument. When Status is "similar_exists"
+// the candidates list describes existing docs that collided; Document is nil
+// and the save did not happen. On success Status is "ok".
+type StoreResult struct {
+	Status     string                           `json:"status"`
+	Document   *models.Document                 `json:"document,omitempty"`
+	Path       string                           `json:"path,omitempty"`
+	Sections   int                              `json:"sections,omitempty"`
+	Candidates []repository.SimilarityCandidate `json:"candidates,omitempty"`
+}
+
+// StoreDocument parses markdown content into sections, embeds them, runs a
+// duplicate-guard check against existing docs in the same tenant, and stores.
+// Embeddings are generated before any DB mutations to avoid partial state on
+// failure. When the guard trips and force is false, no write happens and the
+// result carries candidates instead.
+func (s *MemoryService) StoreDocument(
+	ctx context.Context,
+	category string, subcategory *string, slug, content string,
+	force bool, reason string,
+	overrideID *uuid.UUID,
+) (*StoreResult, error) {
+	if force && strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("%w: reason is required when force=true", apperr.ErrInvalidInput)
+	}
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
@@ -185,16 +213,36 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 
 	// Generate all embeddings BEFORE touching the database
 	sectionModels := make([]models.Section, len(sections))
+	embeddings := make([]pgvector.Vector, len(sections))
 	for i, sec := range sections {
 		embedding, err := s.embedder.Embed(ctx, sec.content)
 		if err != nil {
 			return nil, fmt.Errorf("embed section %d: %w", i, err)
 		}
+		embeddings[i] = embedding
 		sectionModels[i] = models.Section{
 			Ordinal:   i,
 			Heading:   sec.heading,
 			Content:   sec.content,
 			Embedding: embedding,
+		}
+	}
+
+	// Duplicate-guard: compare new section embeddings against existing docs
+	// in the same tenant (excluding the target path so re-saves of the same
+	// doc never trip the guard). Only runs when not forcing.
+	if !force && len(embeddings) > 0 {
+		candidates, err := s.sections.FindSimilarDocuments(
+			ctx, tid, embeddings, DuplicateThreshold, 5, category, subcategory, slug,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("similarity check: %w", err)
+		}
+		if len(candidates) > 0 {
+			return &StoreResult{
+				Status:     "similar_exists",
+				Candidates: candidates,
+			}, nil
 		}
 	}
 
@@ -245,7 +293,24 @@ func (s *MemoryService) StoreDocument(ctx context.Context, category string, subc
 	}
 
 	doc.Sections = sectionModels
-	return doc, nil
+
+	if force && s.overrides != nil {
+		docID := doc.ID
+		_ = s.overrides.Log(ctx, repository.OverrideEvent{
+			TenantID:     tid,
+			Tool:         models.OverrideToolStoreMemory,
+			TargetID:     &docID,
+			OverrideType: models.OverrideTypeForceCreate,
+			Reason:       reason,
+		})
+	}
+
+	return &StoreResult{
+		Status:   "ok",
+		Document: doc,
+		Path:     doc.Path(),
+		Sections: len(doc.Sections),
+	}, nil
 }
 
 // UpdateSection updates a single section and re-embeds.

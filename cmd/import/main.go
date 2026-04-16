@@ -124,7 +124,9 @@ func main() {
 
 		slog.Info("importing", "path", rel, "category", category, "subcategory", subcategory, "slug", slug)
 
-		_, err = memorySvc.StoreDocument(ctx, category, subcategory, slug, string(content), nil)
+		// Bulk import bypasses the duplicate guard — operator's intent is to
+		// ingest files as-authored, not to prompt on every near-duplicate.
+		_, err = memorySvc.StoreDocument(ctx, category, subcategory, slug, string(content), true, "bulk import", nil)
 		if err != nil {
 			slog.Error("failed to import", "path", rel, "error", err)
 			failed++
