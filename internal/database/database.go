@@ -48,7 +48,14 @@ func Migrate(db *gorm.DB, dimensions int) error {
 	}
 
 	// Migrate all models — Tenant first (referenced by Document and APIKey)
-	if err := db.AutoMigrate(&models.Tenant{}, &models.APIKey{}, &models.Document{}, &models.Section{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.Tenant{},
+		&models.APIKey{},
+		&models.Document{},
+		&models.Section{},
+		&models.StalenessThreshold{},
+		&models.OverrideLog{},
+	); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
 
@@ -82,11 +89,33 @@ func Migrate(db *gorm.DB, dimensions int) error {
 		`DROP INDEX IF EXISTS idx_doc_path_with_null`,
 		`DROP INDEX IF EXISTS idx_doc_path`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_tenant_path ON documents (tenant_id, category, COALESCE(subcategory, ''), slug)`,
+		// Backfill verified_at for existing sections — treat first-time as verified at creation.
+		// Only sets NULL values, so re-runs are no-ops.
+		`UPDATE sections SET verified_at = created_at WHERE verified_at IS NULL`,
+		// Backfill doc_type based on category/subcategory patterns for legacy docs.
+		// Order matters: most specific first. Uses WHERE doc_type = 'reference' so re-runs
+		// preserve any explicit classifications set after migration.
+		`UPDATE documents SET doc_type = 'project_state' WHERE doc_type = 'reference' AND category = 'projects' AND slug = 'state'`,
+		`UPDATE documents SET doc_type = 'audit' WHERE doc_type = 'reference' AND category = 'projects' AND (slug LIKE '%audit%' OR slug LIKE '%plan%' OR slug LIKE '%design%' OR slug LIKE '%backlog%')`,
+		`UPDATE documents SET doc_type = 'learning' WHERE doc_type = 'reference' AND category = 'learnings'`,
+		`UPDATE documents SET doc_type = 'preference' WHERE doc_type = 'reference' AND category = 'preferences'`,
+		`UPDATE documents SET doc_type = 'tool' WHERE doc_type = 'reference' AND category = 'tools'`,
 	}
 
 	for _, m := range migrations {
 		if err := db.Exec(m).Error; err != nil {
 			return fmt.Errorf("migration: %w", err)
+		}
+	}
+
+	// Seed staleness_thresholds — idempotent via ON CONFLICT DO NOTHING so operator
+	// can tweak rows afterwards without the seed overwriting them.
+	for _, t := range models.DefaultStalenessThresholds {
+		if err := db.Exec(
+			`INSERT INTO staleness_thresholds (doc_type, days) VALUES (?, ?) ON CONFLICT (doc_type) DO NOTHING`,
+			t.DocType, t.Days,
+		).Error; err != nil {
+			return fmt.Errorf("seed staleness threshold %s: %w", t.DocType, err)
 		}
 	}
 

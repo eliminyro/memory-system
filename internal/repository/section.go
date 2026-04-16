@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -22,15 +23,25 @@ func NewSectionRepository(db *gorm.DB) *SectionRepository {
 }
 
 type SearchResult struct {
-	SectionID   uuid.UUID `json:"section_id"`
-	DocumentID  uuid.UUID `json:"document_id"`
-	Heading     *string   `json:"heading,omitempty"`
-	Content     string    `json:"content"`
-	Score       float64   `json:"score"`
-	Category    string    `json:"category"`
-	Subcategory *string   `json:"subcategory,omitempty"`
-	Slug        string    `json:"slug"`
-	DocTitle    string    `json:"doc_title"`
+	SectionID      uuid.UUID  `json:"section_id"`
+	DocumentID     uuid.UUID  `json:"document_id"`
+	Heading        *string    `json:"heading,omitempty"`
+	Content        string     `json:"content,omitempty"`
+	Score          float64    `json:"score"`
+	Category       string     `json:"category"`
+	Subcategory    *string    `json:"subcategory,omitempty"`
+	Slug           string     `json:"slug"`
+	DocTitle       string     `json:"doc_title"`
+	DocType        string     `json:"doc_type,omitempty"`
+	VerifiedAt     *time.Time `json:"verified_at,omitempty"`
+	SectionCreated time.Time  `json:"-"`
+
+	// Staleness overlay (set by service layer after fetch, not by SQL).
+	Status        string   `json:"status,omitempty"`         // "needs_verification" when guarded
+	Preview       string   `json:"preview,omitempty"`        // short preview of withheld content
+	VerifyHints   []string `json:"verify_hints,omitempty"`   // code paths to check
+	StaleDays     int      `json:"age_days,omitempty"`       // age of verified_at in days
+	ThresholdDays int      `json:"threshold_days,omitempty"` // threshold for this doc_type
 }
 
 // SearchParams groups the inputs for hybrid search.
@@ -53,7 +64,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 
 	sql := `
 		WITH semantic AS (
-			SELECT s.id, s.document_id, s.heading, s.content,
+			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at, s.created_at AS section_created,
 				   1 - (s.embedding <=> ?::vector) AS score
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
@@ -73,7 +84,8 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		)
 		SELECT sem.id AS section_id, sem.document_id, sem.heading, sem.content,
 			   (0.7 * sem.score + 0.3 * COALESCE(kw.score, 0)) AS score,
-			   d.category, d.subcategory, d.slug, d.title AS doc_title
+			   d.category, d.subcategory, d.slug, d.title AS doc_title,
+			   d.doc_type, sem.verified_at, sem.section_created
 		FROM semantic sem
 		LEFT JOIN keyword kw ON kw.id = sem.id
 		JOIN documents d ON d.id = sem.document_id
@@ -172,4 +184,21 @@ func (r *SectionRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id 
 		return nil, err
 	}
 	return &section, nil
+}
+
+// MarkVerified sets verified_at = NOW() on the section if it belongs to a
+// document in one of the caller's accessible tenants. Returns ErrNotFound if
+// the section doesn't exist in scope.
+func (r *SectionRepository) MarkVerified(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.Section{}).
+		Where(`id = ? AND document_id IN (SELECT id FROM documents WHERE tenant_id IN ?)`, id, readTenants(tenantID)).
+		Update("verified_at", gorm.Expr("NOW()"))
+	if result.Error != nil {
+		return fmt.Errorf("mark verified: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("%w: section %s", apperr.ErrNotFound, id)
+	}
+	return nil
 }

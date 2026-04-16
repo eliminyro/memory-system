@@ -12,6 +12,7 @@ import (
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 type MemoryService struct {
@@ -22,10 +23,26 @@ type MemoryService struct {
 	tenants     *repository.TenantRepository
 	keys        *repository.APIKeyRepository
 	lint        *repository.LintRepository
+	thresholds  *staleness.ThresholdStore
+	overrides   *repository.OverrideLogRepository
 	adminEmails map[string]struct{}
 }
 
-func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections *repository.SectionRepository, embedder EmbeddingProvider, tenants *repository.TenantRepository, keys *repository.APIKeyRepository, lint *repository.LintRepository, adminEmails []string) *MemoryService {
+// NewMemoryService constructs the service. Optional deps (tenants, keys, lint,
+// thresholds, overrides) may be nil when the service is used outside the MCP
+// server (e.g. the import CLI) — nil deps disable the features that need them.
+func NewMemoryService(
+	db *gorm.DB,
+	docs *repository.DocumentRepository,
+	sections *repository.SectionRepository,
+	embedder EmbeddingProvider,
+	tenants *repository.TenantRepository,
+	keys *repository.APIKeyRepository,
+	lint *repository.LintRepository,
+	thresholds *staleness.ThresholdStore,
+	overrides *repository.OverrideLogRepository,
+	adminEmails []string,
+) *MemoryService {
 	ae := make(map[string]struct{}, len(adminEmails))
 	for _, e := range adminEmails {
 		ae[strings.TrimSpace(e)] = struct{}{}
@@ -38,6 +55,8 @@ func NewMemoryService(db *gorm.DB, docs *repository.DocumentRepository, sections
 		tenants:     tenants,
 		keys:        keys,
 		lint:        lint,
+		thresholds:  thresholds,
+		overrides:   overrides,
 		adminEmails: ae,
 	}
 }
@@ -67,8 +86,12 @@ func (s *MemoryService) isAdmin(ctx context.Context) bool {
 	return ok
 }
 
-// Search performs hybrid semantic + keyword search.
-func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, overrideID *uuid.UUID) ([]repository.SearchResult, error) {
+// Search performs hybrid semantic + keyword search, applying staleness filter.
+// When forceRead is true, Reason is required and the override is audited.
+func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, error) {
+	if forceRead && strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
+	}
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
@@ -77,7 +100,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	return s.sections.HybridSearch(ctx, repository.SearchParams{
+	results, err := s.sections.HybridSearch(ctx, repository.SearchParams{
 		TenantID:    tid,
 		Embedding:   embedding,
 		Query:       query,
@@ -85,15 +108,66 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		Subcategory: subcategory,
 		Limit:       limit,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if s.thresholds != nil {
+		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, forceRead)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if forceRead && s.overrides != nil {
+		_ = s.overrides.Log(ctx, repository.OverrideEvent{
+			TenantID:     tid,
+			Tool:         models.OverrideToolSearchMemory,
+			OverrideType: models.OverrideTypeForceRead,
+			Reason:       reason,
+		})
+	}
+	return results, nil
 }
 
-// GetDocument fetches a document with all sections by path.
-func (s *MemoryService) GetDocument(ctx context.Context, category string, subcategory *string, slug string, overrideID *uuid.UUID) (*models.Document, error) {
+// GetDocument fetches a document with all sections by path, applying staleness
+// filter to each section. forceRead + reason override the filter and log to
+// override_log.
+func (s *MemoryService) GetDocument(ctx context.Context, category string, subcategory *string, slug string, forceRead bool, reason string, overrideID *uuid.UUID) (*DocumentView, error) {
+	if forceRead && strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
+	}
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
-	return s.docs.GetByPath(ctx, tid, category, subcategory, slug)
+	doc, err := s.docs.GetByPath(ctx, tid, category, subcategory, slug)
+	if err != nil {
+		return nil, err
+	}
+	view, err := buildDocumentView(ctx, s.thresholds, doc, forceRead)
+	if err != nil {
+		return nil, err
+	}
+	if forceRead && s.overrides != nil {
+		docID := doc.ID
+		_ = s.overrides.Log(ctx, repository.OverrideEvent{
+			TenantID:     tid,
+			Tool:         models.OverrideToolGetDocument,
+			TargetID:     &docID,
+			OverrideType: models.OverrideTypeForceRead,
+			Reason:       reason,
+		})
+	}
+	return &view, nil
+}
+
+// MarkVerified stamps verified_at = NOW() on a section. Agents call this after
+// confirming a claim against current source.
+func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, overrideID *uuid.UUID) error {
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return err
+	}
+	return s.sections.MarkVerified(ctx, tid, sectionID)
 }
 
 // StoreDocument parses markdown content into sections, embeds them, and stores.

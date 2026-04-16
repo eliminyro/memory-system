@@ -16,6 +16,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/mcp"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
+	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 func main() {
@@ -47,6 +48,10 @@ func main() {
 	tenantRepo := repository.NewTenantRepository(db)
 	keyRepo := repository.NewAPIKeyRepository(db)
 	lintRepo := repository.NewLintRepository(db)
+	overrideRepo := repository.NewOverrideLogRepository(db)
+
+	// Staleness threshold cache — loads from staleness_thresholds table.
+	thresholdStore := staleness.NewThresholdStore(db)
 
 	// Embedding provider
 	embedder, err := service.NewEmbeddingProvider(cfg.EmbeddingProvider, cfg.EmbeddingCfg())
@@ -62,7 +67,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, allowedEmails)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, allowedEmails)
 
 	// MCP server
 	mcpServer := mcp.NewServer(memorySvc, allowedEmails)
