@@ -14,6 +14,7 @@ type Section struct {
 	Heading    *string         `gorm:"size:500" json:"heading,omitempty"`
 	Content    string          `gorm:"type:text;not null" json:"content"`
 	Embedding  pgvector.Vector `gorm:"type:vector" json:"-"`
+	VerifiedAt *time.Time      `gorm:"index:idx_sections_verified_at" json:"verified_at,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
 	UpdatedAt  time.Time       `json:"updated_at"`
 

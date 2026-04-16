@@ -7,6 +7,27 @@ import (
 	"github.com/google/uuid"
 )
 
+// DocType enumerates document kinds for staleness threshold lookup.
+// Agents pick one when storing; mapped automatically from category for legacy docs.
+const (
+	DocTypeProjectState = "project_state"
+	DocTypeAudit        = "audit"
+	DocTypeLearning     = "learning"
+	DocTypePreference   = "preference"
+	DocTypeTool         = "tool"
+	DocTypeReference    = "reference"
+)
+
+// ValidDocTypes lists all accepted doc_type values.
+var ValidDocTypes = map[string]struct{}{
+	DocTypeProjectState: {},
+	DocTypeAudit:        {},
+	DocTypeLearning:     {},
+	DocTypePreference:   {},
+	DocTypeTool:         {},
+	DocTypeReference:    {},
+}
+
 type Document struct {
 	ID          uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	TenantID    uuid.UUID `gorm:"type:uuid;not null;default:'00000000-0000-0000-0000-000000000001';index" json:"tenant_id"`
@@ -14,6 +35,7 @@ type Document struct {
 	Subcategory *string   `gorm:"size:100" json:"subcategory,omitempty"`
 	Slug        string    `gorm:"size:100;not null" json:"slug"`
 	Title       string    `gorm:"size:500;not null" json:"title"`
+	DocType     string    `gorm:"size:32;not null;default:'reference';index" json:"doc_type"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 

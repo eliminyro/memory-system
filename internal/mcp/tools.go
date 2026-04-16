@@ -68,6 +68,11 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 		Name:        "lint_memory",
 		Description: "Run health checks on the knowledge base. Detects stale docs, sparse content, near-duplicates, and empty categories. All checks are SQL-based, no LLM calls.",
 	}, s.LintMemory)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "mark_verified",
+		Description: "Mark a section as verified against current source. Use AFTER confirming a stale claim is still accurate (or after updating the content). Clears the needs_verification guard for the staleness threshold window.",
+	}, s.MarkVerified)
 }
 
 // --- Input types ---
@@ -77,6 +82,8 @@ type SearchMemoryInput struct {
 	Category    *string `json:"category,omitempty" jsonschema:"Filter by category: learnings, preferences, projects"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory: go, infrastructure, hilo, etc."`
 	Limit       int     `json:"limit,omitempty" jsonschema:"Max results (default 10)"`
+	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Bypass staleness guard. Requires reason. Audited in override_log."`
+	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -84,7 +91,14 @@ type GetDocumentInput struct {
 	Category    string  `json:"category" jsonschema:"Document category"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory"`
 	Slug        string  `json:"slug" jsonschema:"Document slug"`
+	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Bypass staleness guard. Requires reason. Audited in override_log."`
+	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type MarkVerifiedInput struct {
+	SectionID string  `json:"section_id" jsonschema:"Section UUID to mark as verified"`
+	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type StoreMemoryInput struct {
@@ -158,8 +172,11 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, tenantOverride)
+	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride)
 	if err != nil {
+		if errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
 		return nil, nil, fmt.Errorf("search: %w", err)
 	}
 	return jsonResult(results), nil, nil
@@ -176,14 +193,35 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug, tenantOverride)
+	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug, input.ForceRead, input.Reason, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrNotFound) {
+		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
 			return errorResult(err.Error()), nil, nil
 		}
 		return nil, nil, fmt.Errorf("get document: %w", err)
 	}
 	return jsonResult(doc), nil, nil
+}
+
+func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, input MarkVerifiedInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.SectionID == "" {
+		return errorResult("section_id is required"), nil, nil
+	}
+	id, err := uuid.Parse(input.SectionID)
+	if err != nil {
+		return errorResult("invalid section_id: " + err.Error()), nil, nil
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	if err := s.memory.MarkVerified(ctx, id, tenantOverride); err != nil {
+		if errors.Is(err, apperr.ErrNotFound) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("mark verified: %w", err)
+	}
+	return jsonResult(map[string]string{"status": "verified", "section_id": id.String()}), nil, nil
 }
 
 func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, input StoreMemoryInput) (*mcpsdk.CallToolResult, any, error) {
