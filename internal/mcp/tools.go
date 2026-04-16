@@ -106,6 +106,8 @@ type StoreMemoryInput struct {
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory: go, infrastructure, hilo, etc."`
 	Slug        string  `json:"slug" jsonschema:"Document slug/filename without extension"`
 	Content     string  `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
+	Force       bool    `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Prefer update_section on a returned candidate instead."`
+	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force=true. Brief explanation of why this is not a duplicate."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -238,14 +240,25 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	doc, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content, tenantOverride)
+	result, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content, input.Force, input.Reason, tenantOverride)
 	if err != nil {
+		if errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
 		return nil, nil, fmt.Errorf("store: %w", err)
 	}
+	if result.Status == "similar_exists" {
+		return jsonResult(map[string]any{
+			"status":     "similar_exists",
+			"candidates": result.Candidates,
+			"hint":       "Prefer update_section on the closest candidate, or resubmit with force=true and a reason if the collision is a false positive.",
+		}), nil, nil
+	}
 	return jsonResult(map[string]any{
-		"id":       doc.ID,
-		"path":     doc.Path(),
-		"sections": len(doc.Sections),
+		"status":   "ok",
+		"id":       result.Document.ID,
+		"path":     result.Path,
+		"sections": result.Sections,
 	}), nil, nil
 }
 
