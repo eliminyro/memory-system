@@ -55,6 +55,7 @@ func Migrate(db *gorm.DB, dimensions int) error {
 		&models.Section{},
 		&models.StalenessThreshold{},
 		&models.OverrideLog{},
+		&models.CleanupQueue{},
 	); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}

@@ -128,6 +128,43 @@ func (r *LintRepository) CheckSparse(ctx context.Context, tenantID uuid.UUID, th
 	return findings, nil
 }
 
+// NearDuplicatePair is a raw doc pair from the near-duplicate scan. The
+// document IDs let the cleanup scanner upsert into the cleanup_queue table.
+type NearDuplicatePair struct {
+	DocAID     uuid.UUID `gorm:"column:doc_a_id"`
+	DocBID     uuid.UUID `gorm:"column:doc_b_id"`
+	Similarity float64   `gorm:"column:similarity"`
+}
+
+// FindNearDuplicatePairs returns doc ID pairs whose average embeddings meet
+// the threshold. Same logic as CheckNearDuplicates but returns IDs instead of
+// human-readable findings — used by the cleanup pipeline to populate the queue.
+func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uuid.UUID, threshold float64) ([]NearDuplicatePair, error) {
+	tenants := readTenants(tenantID)
+
+	sql := `
+		WITH doc_avg AS (
+			SELECT d.id, AVG(s.embedding) AS avg_embedding
+			FROM documents d
+			JOIN sections s ON s.document_id = d.id
+			WHERE d.tenant_id IN ?
+			  AND s.embedding IS NOT NULL
+			GROUP BY d.id
+		)
+		SELECT a.id AS doc_a_id, b.id AS doc_b_id,
+		       1 - (a.avg_embedding <=> b.avg_embedding) AS similarity
+		FROM doc_avg a
+		JOIN doc_avg b ON a.id < b.id
+		WHERE 1 - (a.avg_embedding <=> b.avg_embedding) >= ?
+		ORDER BY similarity DESC
+	`
+	var pairs []NearDuplicatePair
+	if err := r.db.WithContext(ctx).Raw(sql, tenants, threshold).Scan(&pairs).Error; err != nil {
+		return nil, fmt.Errorf("find near duplicate pairs: %w", err)
+	}
+	return pairs, nil
+}
+
 // CheckNearDuplicates finds pairs of documents whose average embeddings are highly similar.
 func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.UUID, thresholds LintThresholds) ([]LintFinding, error) {
 	tenants := readTenants(tenantID)

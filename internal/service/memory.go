@@ -26,6 +26,7 @@ type MemoryService struct {
 	lint        *repository.LintRepository
 	thresholds  *staleness.ThresholdStore
 	overrides   *repository.OverrideLogRepository
+	cleanup     *repository.CleanupQueueRepository
 	adminEmails map[string]struct{}
 }
 
@@ -42,6 +43,7 @@ func NewMemoryService(
 	lint *repository.LintRepository,
 	thresholds *staleness.ThresholdStore,
 	overrides *repository.OverrideLogRepository,
+	cleanup *repository.CleanupQueueRepository,
 	adminEmails []string,
 ) *MemoryService {
 	ae := make(map[string]struct{}, len(adminEmails))
@@ -58,6 +60,7 @@ func NewMemoryService(
 		lint:        lint,
 		thresholds:  thresholds,
 		overrides:   overrides,
+		cleanup:     cleanup,
 		adminEmails: ae,
 	}
 }

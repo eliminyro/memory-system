@@ -73,6 +73,21 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 		Name:        "mark_verified",
 		Description: "Mark a section as verified against current source. Use AFTER confirming a stale claim is still accurate (or after updating the content). Clears the needs_verification guard for the staleness threshold window.",
 	}, s.MarkVerified)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "get_cleanup_queue",
+		Description: "Return pending near-duplicate candidates detected by the nightly cleanup scan. Each entry names two documents that collide above threshold; the cleanup agent reads these, merges with merge_documents, and resolves with mark_cleanup_done.",
+	}, s.GetCleanupQueue)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "mark_cleanup_done",
+		Description: "Resolve a cleanup queue entry. resolution must be 'merged', 'ignored', or 'false_positive'. When merged, pass merged_into with the surviving document's ID.",
+	}, s.MarkCleanupDone)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "merge_documents",
+		Description: "Merge two documents: move the caller-specified sections (from either doc) into the winner, delete the rest, and delete the loser. The cleanup agent decides which sections to keep; this tool is the dumb mechanical merge.",
+	}, s.MergeDocuments)
 }
 
 // --- Input types ---
@@ -99,6 +114,27 @@ type GetDocumentInput struct {
 type MarkVerifiedInput struct {
 	SectionID string  `json:"section_id" jsonschema:"Section UUID to mark as verified"`
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type GetCleanupQueueInput struct {
+	Limit           int     `json:"limit,omitempty" jsonschema:"Max entries to return (default 50)"`
+	IncludeResolved bool    `json:"include_resolved,omitempty" jsonschema:"Include already-resolved rows in the result (default false — only pending)"`
+	TenantID        *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type MarkCleanupDoneInput struct {
+	QueueID    string  `json:"queue_id" jsonschema:"Cleanup queue entry UUID"`
+	Resolution string  `json:"resolution" jsonschema:"One of: merged, ignored, false_positive"`
+	Note       string  `json:"note,omitempty" jsonschema:"Optional note recording why/how this was resolved"`
+	MergedInto *string `json:"merged_into,omitempty" jsonschema:"Document UUID that won the merge. Required when resolution=merged."`
+	TenantID   *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type MergeDocumentsInput struct {
+	WinnerID       string   `json:"winner_id" jsonschema:"Document UUID that survives the merge"`
+	LoserID        string   `json:"loser_id" jsonschema:"Document UUID that gets deleted after sections are moved"`
+	SectionsToKeep []string `json:"sections_to_keep" jsonschema:"Ordered list of section UUIDs (from either doc) to retain. Order determines final ordinal."`
+	TenantID       *string  `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type StoreMemoryInput struct {
@@ -224,6 +260,90 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		return nil, nil, fmt.Errorf("mark verified: %w", err)
 	}
 	return jsonResult(map[string]string{"status": "verified", "section_id": id.String()}), nil, nil
+}
+
+func (s *Server) GetCleanupQueue(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetCleanupQueueInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.Limit > maxSearchLimit {
+		input.Limit = maxSearchLimit
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	rows, err := s.memory.GetCleanupQueue(ctx, input.Limit, input.IncludeResolved, tenantOverride)
+	if err != nil {
+		if errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("get cleanup queue: %w", err)
+	}
+	return jsonResult(rows), nil, nil
+}
+
+func (s *Server) MarkCleanupDone(ctx context.Context, _ *mcpsdk.CallToolRequest, input MarkCleanupDoneInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.QueueID == "" || input.Resolution == "" {
+		return errorResult("queue_id and resolution are required"), nil, nil
+	}
+	qid, err := uuid.Parse(input.QueueID)
+	if err != nil {
+		return errorResult("invalid queue_id: " + err.Error()), nil, nil
+	}
+	var mergedInto *uuid.UUID
+	if input.MergedInto != nil && *input.MergedInto != "" {
+		id, err := uuid.Parse(*input.MergedInto)
+		if err != nil {
+			return errorResult("invalid merged_into: " + err.Error()), nil, nil
+		}
+		mergedInto = &id
+	}
+	if input.Resolution == "merged" && mergedInto == nil {
+		return errorResult("merged_into is required when resolution=merged"), nil, nil
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	if err := s.memory.MarkCleanupDone(ctx, qid, input.Resolution, input.Note, mergedInto, tenantOverride); err != nil {
+		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("mark cleanup done: %w", err)
+	}
+	return jsonResult(map[string]string{"status": "resolved", "queue_id": qid.String()}), nil, nil
+}
+
+func (s *Server) MergeDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, input MergeDocumentsInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.WinnerID == "" || input.LoserID == "" || len(input.SectionsToKeep) == 0 {
+		return errorResult("winner_id, loser_id, and sections_to_keep are required"), nil, nil
+	}
+	winnerID, err := uuid.Parse(input.WinnerID)
+	if err != nil {
+		return errorResult("invalid winner_id: " + err.Error()), nil, nil
+	}
+	loserID, err := uuid.Parse(input.LoserID)
+	if err != nil {
+		return errorResult("invalid loser_id: " + err.Error()), nil, nil
+	}
+	keep := make([]uuid.UUID, 0, len(input.SectionsToKeep))
+	for i, raw := range input.SectionsToKeep {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid sections_to_keep[%d]: %s", i, err.Error())), nil, nil
+		}
+		keep = append(keep, id)
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	result, err := s.memory.MergeDocuments(ctx, winnerID, loserID, keep, tenantOverride)
+	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("merge documents: %w", err)
+	}
+	return jsonResult(result), nil, nil
 }
 
 func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, input StoreMemoryInput) (*mcpsdk.CallToolResult, any, error) {

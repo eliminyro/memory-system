@@ -28,6 +28,15 @@ type Config struct {
 
 	// Admin
 	AdminAllowedEmails string `env:"ADMIN_ALLOWED_EMAILS"`
+
+	// Cleanup pipeline — nightly lint scan populates cleanup_queue with
+	// near-duplicate candidates. When TELEGRAM_* are set, a summary is posted
+	// after each scan. All cleanup knobs are optional: leaving them empty
+	// disables the respective feature gracefully.
+	CleanupIntervalHours int    `env:"CLEANUP_INTERVAL_HOURS" envDefault:"24"`
+	CleanupEnabled       bool   `env:"CLEANUP_ENABLED" envDefault:"true"`
+	TelegramBotToken     string `env:"TELEGRAM_BOT_TOKEN"`
+	TelegramChatID       string `env:"TELEGRAM_CHAT_ID"`
 }
 
 func Load() (*Config, error) {
