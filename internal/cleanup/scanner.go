@@ -71,6 +71,10 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 	}
 
 	for _, tenant := range allTenants {
+		// Opt-in per tenant — skip anyone who didn't enable the scan.
+		if !tenant.CleanupScanEnabled {
+			continue
+		}
 		stats.TenantsScanned++
 		if err := s.scanTenant(ctx, tenant.ID, &stats); err != nil {
 			s.logger.Warn("cleanup scan: tenant failed", "tenant_id", tenant.ID, "error", err)

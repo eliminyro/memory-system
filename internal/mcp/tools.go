@@ -88,6 +88,11 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 		Name:        "merge_documents",
 		Description: "Merge two documents: move the caller-specified sections (from either doc) into the winner, delete the rest, and delete the loser. The cleanup agent decides which sections to keep; this tool is the dumb mechanical merge.",
 	}, s.MergeDocuments)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "update_my_tenant_settings",
+		Description: "Update feature toggles on your own tenant: staleness_mode (off|advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool). Any field you omit stays unchanged. Defaults are the safest — opt in to enforcement explicitly.",
+	}, s.UpdateMyTenantSettings)
 }
 
 // --- Input types ---
@@ -135,6 +140,12 @@ type MergeDocumentsInput struct {
 	LoserID        string   `json:"loser_id" jsonschema:"Document UUID that gets deleted after sections are moved"`
 	SectionsToKeep []string `json:"sections_to_keep" jsonschema:"Ordered list of section UUIDs (from either doc) to retain. Order determines final ordinal."`
 	TenantID       *string  `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type UpdateMyTenantSettingsInput struct {
+	StalenessMode      *string `json:"staleness_mode,omitempty" jsonschema:"Enforcement level: off | advisory | hard"`
+	DuplicateGuard     *bool   `json:"duplicate_guard,omitempty" jsonschema:"When true, store_memory refuses near-duplicate content"`
+	CleanupScanEnabled *bool   `json:"cleanup_scan_enabled,omitempty" jsonschema:"When true, this tenant is included in the nightly near-duplicate scan"`
 }
 
 type StoreMemoryInput struct {
@@ -310,6 +321,17 @@ func (s *Server) MarkCleanupDone(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		return nil, nil, fmt.Errorf("mark cleanup done: %w", err)
 	}
 	return jsonResult(map[string]string{"status": "resolved", "queue_id": qid.String()}), nil, nil
+}
+
+func (s *Server) UpdateMyTenantSettings(ctx context.Context, _ *mcpsdk.CallToolRequest, input UpdateMyTenantSettingsInput) (*mcpsdk.CallToolResult, any, error) {
+	tenant, err := s.memory.UpdateMyTenantSettings(ctx, input.StalenessMode, input.DuplicateGuard, input.CleanupScanEnabled)
+	if err != nil {
+		if errors.Is(err, apperr.ErrInvalidInput) || errors.Is(err, apperr.ErrNotFound) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("update my tenant settings: %w", err)
+	}
+	return jsonResult(tenant), nil, nil
 }
 
 func (s *Server) MergeDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, input MergeDocumentsInput) (*mcpsdk.CallToolResult, any, error) {

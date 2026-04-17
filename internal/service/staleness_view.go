@@ -44,10 +44,10 @@ type DocumentView struct {
 	Sections    []SectionView `json:"sections,omitempty"`
 }
 
-// buildDocumentView applies the staleness filter to each section. Sections that
-// are guarded and not force-read are returned with withheld content + hints.
-// When store is nil (e.g. import CLI), staleness filtering is skipped.
-func buildDocumentView(ctx context.Context, store *staleness.ThresholdStore, doc *models.Document, forceRead bool) (DocumentView, error) {
+// buildDocumentView applies the staleness filter to each section according to
+// the tenant's mode. When store is nil (e.g. import CLI) or mode is "off",
+// staleness is entirely skipped and content passes through unchanged.
+func buildDocumentView(ctx context.Context, store *staleness.ThresholdStore, doc *models.Document, mode string, forceRead bool) (DocumentView, error) {
 	view := DocumentView{
 		ID:          doc.ID,
 		TenantID:    doc.TenantID,
@@ -61,7 +61,7 @@ func buildDocumentView(ctx context.Context, store *staleness.ThresholdStore, doc
 	}
 	view.Sections = make([]SectionView, 0, len(doc.Sections))
 	for _, sec := range doc.Sections {
-		sv, err := sectionViewFromModel(ctx, store, sec, doc.DocType, forceRead)
+		sv, err := sectionViewFromModel(ctx, store, sec, doc.DocType, mode, forceRead)
 		if err != nil {
 			return DocumentView{}, err
 		}
@@ -70,7 +70,7 @@ func buildDocumentView(ctx context.Context, store *staleness.ThresholdStore, doc
 	return view, nil
 }
 
-func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, sec models.Section, docType string, forceRead bool) (SectionView, error) {
+func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, sec models.Section, docType, mode string, forceRead bool) (SectionView, error) {
 	view := SectionView{
 		ID:         sec.ID,
 		DocumentID: sec.DocumentID,
@@ -80,7 +80,7 @@ func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, 
 		CreatedAt:  sec.CreatedAt,
 		UpdatedAt:  sec.UpdatedAt,
 	}
-	if store == nil {
+	if store == nil || mode == models.StalenessModeOff {
 		view.Content = sec.Content
 		return view, nil
 	}
@@ -91,21 +91,23 @@ func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, 
 	view.ThresholdDays = check.ThresholdDays
 	view.StaleDays = int(check.Age / (24 * time.Hour))
 
-	if check.Guarded && !forceRead {
+	if mode == models.StalenessModeHard && check.Guarded && !forceRead {
 		view.Status = "needs_verification"
 		view.Preview = staleness.Preview(sec.Content, 200)
 		view.VerifyHints = staleness.ExtractVerifyHints(sec.Content, 5)
 		return view, nil
 	}
+	// advisory (or hard-but-not-guarded) — metadata present, content returned.
 	view.Content = sec.Content
 	return view, nil
 }
 
-// applyStalenessToSearchResults overlays staleness metadata on search results
-// and, when guarded without force_read, replaces Content with Preview + hints.
-// When store is nil this is a no-op.
-func applyStalenessToSearchResults(ctx context.Context, store *staleness.ThresholdStore, results []repository.SearchResult, forceRead bool) ([]repository.SearchResult, error) {
-	if store == nil {
+// applyStalenessToSearchResults overlays staleness metadata on search results.
+// In "hard" mode, guarded sections have Content replaced with Preview + hints.
+// In "advisory" mode, metadata is set but Content is preserved.
+// In "off" mode (or with nil store), this is a no-op.
+func applyStalenessToSearchResults(ctx context.Context, store *staleness.ThresholdStore, results []repository.SearchResult, mode string, forceRead bool) ([]repository.SearchResult, error) {
+	if store == nil || mode == models.StalenessModeOff {
 		return results, nil
 	}
 	for i := range results {
@@ -120,7 +122,7 @@ func applyStalenessToSearchResults(ctx context.Context, store *staleness.Thresho
 		}
 		r.ThresholdDays = check.ThresholdDays
 		r.StaleDays = int(check.Age / (24 * time.Hour))
-		if check.Guarded && !forceRead {
+		if mode == models.StalenessModeHard && check.Guarded && !forceRead {
 			r.Status = "needs_verification"
 			r.Preview = staleness.Preview(r.Content, 200)
 			r.VerifyHints = staleness.ExtractVerifyHints(r.Content, 5)

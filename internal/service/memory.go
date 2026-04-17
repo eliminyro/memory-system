@@ -90,6 +90,32 @@ func (s *MemoryService) isAdmin(ctx context.Context) bool {
 	return ok
 }
 
+// tenantSettings loads the per-tenant feature toggles. When the tenants repo
+// is not wired (e.g. import CLI) it returns safe defaults: staleness off,
+// duplicate guard off. The common/bootstrap pool is treated as the fetching
+// tenant's own, so settings are always the requester's.
+type tenantSettings struct {
+	StalenessMode  string
+	DuplicateGuard bool
+}
+
+func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenantSettings {
+	if s.tenants == nil {
+		return tenantSettings{StalenessMode: models.StalenessModeOff}
+	}
+	t, err := s.tenants.GetByID(ctx, tid)
+	if err != nil {
+		// Fail safe: if we can't read tenant config, act as if staleness is off
+		// so we never accidentally refuse content due to an infra glitch.
+		return tenantSettings{StalenessMode: models.StalenessModeOff}
+	}
+	mode := t.StalenessMode
+	if _, ok := models.ValidStalenessModes[mode]; !ok {
+		mode = models.StalenessModeAdvisory
+	}
+	return tenantSettings{StalenessMode: mode, DuplicateGuard: t.DuplicateGuard}
+}
+
 // Search performs hybrid semantic + keyword search, applying staleness filter.
 // When forceRead is true, Reason is required and the override is audited.
 func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, error) {
@@ -115,8 +141,9 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if err != nil {
 		return nil, err
 	}
+	settings := s.tenantSettings(ctx, tid)
 	if s.thresholds != nil {
-		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, forceRead)
+		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, settings.StalenessMode, forceRead)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +174,8 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	if err != nil {
 		return nil, err
 	}
-	view, err := buildDocumentView(ctx, s.thresholds, doc, forceRead)
+	settings := s.tenantSettings(ctx, tid)
+	view, err := buildDocumentView(ctx, s.thresholds, doc, settings.StalenessMode, forceRead)
 	if err != nil {
 		return nil, err
 	}
@@ -233,8 +261,9 @@ func (s *MemoryService) StoreDocument(
 
 	// Duplicate-guard: compare new section embeddings against existing docs
 	// in the same tenant (excluding the target path so re-saves of the same
-	// doc never trip the guard). Only runs when not forcing.
-	if !force && len(embeddings) > 0 {
+	// doc never trip the guard). Only runs when enabled per-tenant AND not forcing.
+	settings := s.tenantSettings(ctx, tid)
+	if settings.DuplicateGuard && !force && len(embeddings) > 0 {
 		candidates, err := s.sections.FindSimilarDocuments(
 			ctx, tid, embeddings, DuplicateThreshold, 5, category, subcategory, slug,
 		)
@@ -414,19 +443,61 @@ func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*
 	return tenant, nil
 }
 
-func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, name, email *string) (*models.Tenant, error) {
+// UpdateTenantFields bundles the optional patches admin/self tools may apply.
+// Any nil pointer leaves the corresponding column unchanged.
+type UpdateTenantFields struct {
+	Name               *string
+	Email              *string
+	StalenessMode      *string
+	DuplicateGuard     *bool
+	CleanupScanEnabled *bool
+}
+
+// UpdateTenant is the admin-only patcher. It can touch any field.
+func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields UpdateTenantFields) (*models.Tenant, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
 	}
+	return s.applyTenantPatch(ctx, id, fields)
+}
+
+// UpdateMyTenantSettings lets any authenticated caller adjust the feature
+// toggles on their own tenant (staleness mode, duplicate guard, cleanup scan).
+// Name/email stay off limits to non-admins.
+func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
+	tid := auth.TenantIDFromContext(ctx)
+	if tid == uuid.Nil {
+		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
+	}
+	return s.applyTenantPatch(ctx, tid, UpdateTenantFields{
+		StalenessMode:      stalenessMode,
+		DuplicateGuard:     duplicateGuard,
+		CleanupScanEnabled: cleanupScanEnabled,
+	})
+}
+
+func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fields UpdateTenantFields) (*models.Tenant, error) {
 	tenant, err := s.tenants.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if name != nil {
-		tenant.Name = *name
+	if fields.Name != nil {
+		tenant.Name = *fields.Name
 	}
-	if email != nil {
-		tenant.Email = *email
+	if fields.Email != nil {
+		tenant.Email = *fields.Email
+	}
+	if fields.StalenessMode != nil {
+		if _, ok := models.ValidStalenessModes[*fields.StalenessMode]; !ok {
+			return nil, fmt.Errorf("%w: staleness_mode must be off, advisory, or hard", apperr.ErrInvalidInput)
+		}
+		tenant.StalenessMode = *fields.StalenessMode
+	}
+	if fields.DuplicateGuard != nil {
+		tenant.DuplicateGuard = *fields.DuplicateGuard
+	}
+	if fields.CleanupScanEnabled != nil {
+		tenant.CleanupScanEnabled = *fields.CleanupScanEnabled
 	}
 	if err := s.tenants.Update(ctx, tenant); err != nil {
 		return nil, fmt.Errorf("update tenant: %w", err)
