@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,12 +17,6 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 )
-
-// DuplicateThreshold is the cosine-similarity bar for enqueuing a pair. Matches
-// the store-time guard in service.DuplicateThreshold — keep in sync manually,
-// they are not wired as the same const because the store-time check runs
-// per-section while this one runs per-doc-average.
-const DuplicateThreshold = 0.70
 
 // ScanStats summarises one sweep across all tenants.
 type ScanStats struct {
@@ -39,6 +34,11 @@ type Scanner struct {
 	queue    *repository.CleanupQueueRepository
 	notifier *Notifier
 	logger   *slog.Logger
+
+	// runMu serialises RunOnce so a ticker fire that lands while the previous
+	// sweep is still draining won't produce concurrent upserts (which, absent
+	// a partial unique index, could insert duplicate pending rows).
+	runMu sync.Mutex
 }
 
 // NewScanner constructs the scanner. notifier may be nil — in that case the
@@ -63,6 +63,9 @@ func NewScanner(
 // the caller can log them; individual per-tenant errors are counted but do not
 // abort the run.
 func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
 	stats := ScanStats{}
 
 	allTenants, err := s.tenants.List(ctx)
@@ -92,7 +95,7 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 }
 
 func (s *Scanner) scanTenant(ctx context.Context, tenantID uuid.UUID, stats *ScanStats) error {
-	pairs, err := s.lint.FindNearDuplicatePairs(ctx, tenantID, DuplicateThreshold)
+	pairs, err := s.lint.FindNearDuplicatePairs(ctx, tenantID, models.DuplicateThreshold)
 	if err != nil {
 		return err
 	}
@@ -126,13 +129,8 @@ func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 		interval = 24 * time.Hour
 	}
 	go func() {
-		// Small initial delay so startup doesn't race with migrations.
-		select {
-		case <-time.After(30 * time.Second):
-		case <-ctx.Done():
-			return
-		}
-
+		// Migrations already ran synchronously before we got here, so no
+		// startup delay is needed before the first sweep.
 		s.runAndLog(ctx)
 
 		t := time.NewTicker(interval)

@@ -9,6 +9,12 @@ type StalenessThreshold struct {
 
 func (StalenessThreshold) TableName() string { return "staleness_thresholds" }
 
+// DuplicateThreshold is the cosine-similarity bar at which two sections or
+// documents are considered near-duplicates. Used by both the write-time
+// duplicate guard and the nightly cleanup scanner; keep one canonical value
+// so the two paths can't drift.
+const DuplicateThreshold = 0.70
+
 // DefaultStalenessThresholds is the seed set written on first migration.
 // Project state decays fastest; preferences essentially never.
 var DefaultStalenessThresholds = []StalenessThreshold{

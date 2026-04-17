@@ -28,7 +28,7 @@ import (
 //   - file extensions on tokens (".go", ".ts", ".py", ".rs", ".tsx", ".jsx")
 //   - function/file:line references ("foo.go:42")
 var codePathPattern = regexp.MustCompile(
-	`(?i)(?:\b(?:internal|cmd|pkg|src|app|lib|ops|bin)/[\w./-]+` +
+	`(?:\b(?:internal|cmd|pkg|src|app|lib|ops|bin)/[\w./-]+` +
 		`|\b[\w.-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|kt|rb|php|sh|yaml|yml|tf|hcl|sql)\b` +
 		`|\b[\w.-]+\.(?:go|ts|tsx|js|jsx|py|rs):\d+)`,
 )
@@ -119,6 +119,16 @@ func (s *ThresholdStore) refreshIfStale(ctx context.Context) error {
 		return nil
 	}
 
+	// Acquire write lock before loading so concurrent cache misses serialise —
+	// otherwise every goroutine that hits a stale cache issues its own DB load.
+	// Double-check under the write lock in case another goroutine refreshed
+	// while we were waiting.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cache != nil && time.Since(s.cachedAt) < s.defaultTTL {
+		return nil
+	}
+
 	var rows []models.StalenessThreshold
 	if err := s.db.WithContext(ctx).Find(&rows).Error; err != nil {
 		return fmt.Errorf("load staleness thresholds: %w", err)
@@ -128,11 +138,8 @@ func (s *ThresholdStore) refreshIfStale(ctx context.Context) error {
 	for _, r := range rows {
 		cache[r.DocType] = r.Days
 	}
-
-	s.mu.Lock()
 	s.cache = cache
 	s.cachedAt = time.Now()
-	s.mu.Unlock()
 	return nil
 }
 

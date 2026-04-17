@@ -52,15 +52,22 @@ func (r *CleanupQueueRepository) ListAll(ctx context.Context, tenantID uuid.UUID
 	return rows, nil
 }
 
+// NormalizePair returns (lo, hi) such that lo.String() <= hi.String(). Exposed
+// so callers and tests can reason about the invariant that cleanup_queue rows
+// always store the smaller UUID in doc_a_id and the larger in doc_b_id,
+// preventing two rows for the same unordered pair.
+func NormalizePair(a, b uuid.UUID) (uuid.UUID, uuid.UUID) {
+	if b.String() < a.String() {
+		return b, a
+	}
+	return a, b
+}
+
 // Upsert inserts a new queue entry for a (tenant, doc_a, doc_b) pair only if
 // there isn't already an unresolved row for the same unordered pair. Returns
 // true if a row was inserted, false if a matching pending entry already exists.
 func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.CleanupQueue) (bool, error) {
-	// Normalize pair ordering so we don't end up with two rows for (a,b) and (b,a).
-	lo, hi := entry.DocAID, entry.DocBID
-	if hi.String() < lo.String() {
-		lo, hi = hi, lo
-	}
+	lo, hi := NormalizePair(entry.DocAID, entry.DocBID)
 	entry.DocAID, entry.DocBID = lo, hi
 
 	var existing models.CleanupQueue

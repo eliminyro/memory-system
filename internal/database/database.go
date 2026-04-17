@@ -47,8 +47,17 @@ func Migrate(db *gorm.DB, dimensions int) error {
 		return fmt.Errorf("embedding dimension mismatch: existing vectors are %d-dim, config wants %d — re-embed all data to fix", existingDim, dimensions)
 	}
 
+	// All schema changes, backfills, and seed data in a single transaction so a
+	// crash mid-migration rolls back cleanly. Postgres supports DDL in
+	// transactions, so this covers CREATE / ALTER / UPDATE / INSERT uniformly.
+	return db.Transaction(func(tx *gorm.DB) error {
+		return migrateInTx(tx, dimensions)
+	})
+}
+
+func migrateInTx(tx *gorm.DB, dimensions int) error {
 	// Migrate all models — Tenant first (referenced by Document and APIKey)
-	if err := db.AutoMigrate(
+	if err := tx.AutoMigrate(
 		&models.Tenant{},
 		&models.APIKey{},
 		&models.Document{},
@@ -61,7 +70,7 @@ func Migrate(db *gorm.DB, dimensions int) error {
 	}
 
 	// Bootstrap tenant: insert default tenant for existing data
-	if err := db.Exec(`
+	if err := tx.Exec(`
 		INSERT INTO tenants (id, name, email, created_at, updated_at)
 		VALUES ('00000000-0000-0000-0000-000000000001', 'default', '', NOW(), NOW())
 		ON CONFLICT (id) DO NOTHING
@@ -73,7 +82,7 @@ func Migrate(db *gorm.DB, dimensions int) error {
 	alterSQL := fmt.Sprintf(
 		`ALTER TABLE sections ALTER COLUMN embedding TYPE vector(%d)`, dimensions,
 	)
-	if err := db.Exec(alterSQL).Error; err != nil {
+	if err := tx.Exec(alterSQL).Error; err != nil {
 		return fmt.Errorf("set embedding dimension: %w", err)
 	}
 
@@ -104,7 +113,7 @@ func Migrate(db *gorm.DB, dimensions int) error {
 	}
 
 	for _, m := range migrations {
-		if err := db.Exec(m).Error; err != nil {
+		if err := tx.Exec(m).Error; err != nil {
 			return fmt.Errorf("migration: %w", err)
 		}
 	}
@@ -112,7 +121,7 @@ func Migrate(db *gorm.DB, dimensions int) error {
 	// Seed staleness_thresholds — idempotent via ON CONFLICT DO NOTHING so operator
 	// can tweak rows afterwards without the seed overwriting them.
 	for _, t := range models.DefaultStalenessThresholds {
-		if err := db.Exec(
+		if err := tx.Exec(
 			`INSERT INTO staleness_thresholds (doc_type, days) VALUES (?, ?) ON CONFLICT (doc_type) DO NOTHING`,
 			t.DocType, t.Days,
 		).Error; err != nil {
