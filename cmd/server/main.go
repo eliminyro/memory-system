@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/cleanup"
 	"github.com/eliminyro/memory-system/internal/config"
 	"github.com/eliminyro/memory-system/internal/database"
 	"github.com/eliminyro/memory-system/internal/mcp"
@@ -49,6 +50,7 @@ func main() {
 	keyRepo := repository.NewAPIKeyRepository(db)
 	lintRepo := repository.NewLintRepository(db)
 	overrideRepo := repository.NewOverrideLogRepository(db)
+	cleanupRepo := repository.NewCleanupQueueRepository(db)
 
 	// Staleness threshold cache — loads from staleness_thresholds table.
 	thresholdStore := staleness.NewThresholdStore(db)
@@ -67,7 +69,21 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, allowedEmails)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, allowedEmails)
+
+	// Root context for background work — cancelled on SIGINT/SIGTERM so the
+	// cleanup scanner and HTTP server shut down together.
+	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Cleanup pipeline — nightly near-duplicate scan + Telegram summary.
+	// Notifier is nil when Telegram creds aren't set, in which case the scanner
+	// runs silently.
+	cleanupNotifier := cleanup.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
+	cleanupScanner := cleanup.NewScanner(lintRepo, tenantRepo, cleanupRepo, cleanupNotifier, slog.Default())
+	if cfg.CleanupEnabled {
+		cleanupScanner.Start(rootCtx, time.Duration(cfg.CleanupIntervalHours)*time.Hour)
+	}
 
 	// MCP server
 	mcpServer := mcp.NewServer(memorySvc, allowedEmails)
@@ -112,10 +128,6 @@ func main() {
 		WriteTimeout: 60 * time.Second,
 	}
 
-	// Graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
 		slog.Info("memory-mcp listening", "addr", cfg.ServerAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -124,7 +136,7 @@ func main() {
 		}
 	}()
 
-	<-ctx.Done()
+	<-rootCtx.Done()
 	slog.Info("shutting down...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
