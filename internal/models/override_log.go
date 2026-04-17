@@ -8,16 +8,18 @@ import (
 
 // Override type constants for OverrideLog entries.
 const (
-	OverrideTypeForceCreate = "force_create"
-	OverrideTypeForceRead   = "force_read"
+	OverrideTypeForceCreate    = "force_create"
+	OverrideTypeForceRead      = "force_read"
+	OverrideTypeSettingsChange = "settings_change"
 )
 
 // Tool name constants for OverrideLog entries.
 const (
-	OverrideToolStoreMemory   = "store_memory"
-	OverrideToolGetDocument   = "get_document"
-	OverrideToolSearchMemory  = "search_memory"
-	OverrideToolUpdateSection = "update_section"
+	OverrideToolStoreMemory            = "store_memory"
+	OverrideToolGetDocument            = "get_document"
+	OverrideToolSearchMemory           = "search_memory"
+	OverrideToolUpdateSection          = "update_section"
+	OverrideToolUpdateMyTenantSettings = "update_my_tenant_settings"
 )
 
 // OverrideLog records every force-override call against the guarded tools.

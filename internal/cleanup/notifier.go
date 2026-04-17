@@ -46,19 +46,6 @@ func (n *Notifier) SendScanSummary(ctx context.Context, stats ScanStats) error {
 	return n.send(ctx, text)
 }
 
-// SendMergeReport posts a summary of a client-side merge run. Reserved for
-// future use by the scheduled cleanup agent after it drains the queue.
-func (n *Notifier) SendMergeReport(ctx context.Context, merged, skipped, failed int) error {
-	text := fmt.Sprintf(
-		"memory-mcp cleanup agent run\n"+
-			"merged: %d\n"+
-			"skipped: %d\n"+
-			"failed: %d",
-		merged, skipped, failed,
-	)
-	return n.send(ctx, text)
-}
-
 func (n *Notifier) send(ctx context.Context, text string) error {
 	url := "https://api.telegram.org/bot" + n.botToken + "/sendMessage"
 	payload := map[string]string{

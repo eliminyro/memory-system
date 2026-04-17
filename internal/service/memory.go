@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -15,6 +16,23 @@ import (
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/staleness"
 )
+
+// logOverride attempts to persist an audit row. If the write fails, it logs a
+// warning and continues — the user's primary operation already succeeded, and
+// dropping an audit row beats failing their request. The warning makes the
+// drop visible so operators can alert on it.
+func (s *MemoryService) logOverride(ctx context.Context, ev repository.OverrideEvent) {
+	if s.overrides == nil {
+		return
+	}
+	if err := s.overrides.Log(ctx, ev); err != nil {
+		slog.Default().Warn("override audit write failed",
+			"tool", ev.Tool,
+			"override_type", ev.OverrideType,
+			"error", err,
+		)
+	}
+}
 
 type MemoryService struct {
 	db          *gorm.DB
@@ -148,8 +166,8 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 			return nil, err
 		}
 	}
-	if forceRead && s.overrides != nil {
-		_ = s.overrides.Log(ctx, repository.OverrideEvent{
+	if forceRead {
+		s.logOverride(ctx, repository.OverrideEvent{
 			TenantID:     tid,
 			Tool:         models.OverrideToolSearchMemory,
 			OverrideType: models.OverrideTypeForceRead,
@@ -179,9 +197,9 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	if err != nil {
 		return nil, err
 	}
-	if forceRead && s.overrides != nil {
+	if forceRead {
 		docID := doc.ID
-		_ = s.overrides.Log(ctx, repository.OverrideEvent{
+		s.logOverride(ctx, repository.OverrideEvent{
 			TenantID:     tid,
 			Tool:         models.OverrideToolGetDocument,
 			TargetID:     &docID,
@@ -201,11 +219,6 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	}
 	return s.sections.MarkVerified(ctx, tid, sectionID)
 }
-
-// DuplicateThreshold is the minimum cosine similarity (0..1) at which a new
-// document is considered a near-duplicate of an existing one and the store is
-// refused unless force=true.
-const DuplicateThreshold = 0.70
 
 // StoreResult is the outcome of StoreDocument. When Status is "similar_exists"
 // the candidates list describes existing docs that collided; Document is nil
@@ -265,7 +278,7 @@ func (s *MemoryService) StoreDocument(
 	settings := s.tenantSettings(ctx, tid)
 	if settings.DuplicateGuard && !force && len(embeddings) > 0 {
 		candidates, err := s.sections.FindSimilarDocuments(
-			ctx, tid, embeddings, DuplicateThreshold, 5, category, subcategory, slug,
+			ctx, tid, embeddings, models.DuplicateThreshold, 5, category, subcategory, slug,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("similarity check: %w", err)
@@ -326,9 +339,9 @@ func (s *MemoryService) StoreDocument(
 
 	doc.Sections = sectionModels
 
-	if force && s.overrides != nil {
+	if force {
 		docID := doc.ID
-		_ = s.overrides.Log(ctx, repository.OverrideEvent{
+		s.logOverride(ctx, repository.OverrideEvent{
 			TenantID:     tid,
 			Tool:         models.OverrideToolStoreMemory,
 			TargetID:     &docID,
@@ -463,17 +476,49 @@ func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields U
 
 // UpdateMyTenantSettings lets any authenticated caller adjust the feature
 // toggles on their own tenant (staleness mode, duplicate guard, cleanup scan).
-// Name/email stay off limits to non-admins.
+// Name/email stay off limits to non-admins. Every call is audited to
+// override_log so a compromised API key silencing enforcement leaves a trail.
 func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
 		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
 	}
-	return s.applyTenantPatch(ctx, tid, UpdateTenantFields{
+	tenant, err := s.applyTenantPatch(ctx, tid, UpdateTenantFields{
 		StalenessMode:      stalenessMode,
 		DuplicateGuard:     duplicateGuard,
 		CleanupScanEnabled: cleanupScanEnabled,
 	})
+	if err != nil {
+		return nil, err
+	}
+	target := tid
+	s.logOverride(ctx, repository.OverrideEvent{
+		TenantID:     tid,
+		Tool:         models.OverrideToolUpdateMyTenantSettings,
+		TargetID:     &target,
+		OverrideType: models.OverrideTypeSettingsChange,
+		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, cleanupScanEnabled),
+	})
+	return tenant, nil
+}
+
+// formatSettingsChange renders the requested patch as a compact string for
+// the override_log.reason column.
+func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) string {
+	parts := make([]string, 0, 3)
+	if stalenessMode != nil {
+		parts = append(parts, "staleness_mode="+*stalenessMode)
+	}
+	if duplicateGuard != nil {
+		parts = append(parts, fmt.Sprintf("duplicate_guard=%t", *duplicateGuard))
+	}
+	if cleanupScanEnabled != nil {
+		parts = append(parts, fmt.Sprintf("cleanup_scan_enabled=%t", *cleanupScanEnabled))
+	}
+	if len(parts) == 0 {
+		return "noop"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fields UpdateTenantFields) (*models.Tenant, error) {
