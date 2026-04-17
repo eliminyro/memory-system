@@ -15,6 +15,62 @@ func (StalenessThreshold) TableName() string { return "staleness_thresholds" }
 // so the two paths can't drift.
 const DuplicateThreshold = 0.70
 
+// InferDocType classifies a document by category/slug when the caller didn't
+// set doc_type explicitly. Mirrors the SQL backfill rules applied to legacy
+// docs on first migration so new writes land in the same buckets.
+func InferDocType(category string, subcategory *string, slug string) string {
+	switch category {
+	case "projects":
+		if slug == "state" {
+			return DocTypeProjectState
+		}
+		// Treat design / plan / audit / backlog docs as audit-tier (30d threshold).
+		for _, marker := range []string{"audit", "plan", "design", "backlog"} {
+			if containsFold(slug, marker) {
+				return DocTypeAudit
+			}
+		}
+		return DocTypeReference
+	case "learnings":
+		return DocTypeLearning
+	case "preferences":
+		return DocTypePreference
+	case "tools":
+		return DocTypeTool
+	default:
+		return DocTypeReference
+	}
+}
+
+// containsFold is a local, case-insensitive substring test — avoids importing
+// strings from a constants package.
+func containsFold(s, sub string) bool {
+	if len(sub) > len(s) {
+		return false
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			a := s[i+j]
+			b := sub[j]
+			if a >= 'A' && a <= 'Z' {
+				a += 32
+			}
+			if b >= 'A' && b <= 'Z' {
+				b += 32
+			}
+			if a != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultStalenessThresholds is the seed set written on first migration.
 // Project state decays fastest; preferences essentially never.
 var DefaultStalenessThresholds = []StalenessThreshold{

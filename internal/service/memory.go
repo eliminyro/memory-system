@@ -298,6 +298,7 @@ func (s *MemoryService) StoreDocument(
 		Subcategory: subcategory,
 		Slug:        slug,
 		Title:       title,
+		DocType:     models.InferDocType(category, subcategory, slug),
 	}
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -307,9 +308,12 @@ func (s *MemoryService) StoreDocument(
 		// Check for existing document (only in this tenant, not common pool)
 		existing, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
 		if err == nil && existing.TenantID == tid {
-			// Update existing: delete sections first, then update document
+			// Update existing: delete sections first, then update document.
+			// Preserve the existing doc_type — admin may have changed it from
+			// the inferred default, and an update shouldn't silently revert.
 			doc.ID = existing.ID
 			doc.CreatedAt = existing.CreatedAt
+			doc.DocType = existing.DocType
 			if err := txSections.DeleteByDocumentID(ctx, existing.ID); err != nil {
 				return fmt.Errorf("delete old sections: %w", err)
 			}
