@@ -158,7 +158,10 @@ func (s *MemoryService) MergeDocuments(
 	if err != nil {
 		return nil, fmt.Errorf("reload winner: %w", err)
 	}
-	view, err := buildDocumentView(ctx, s.thresholds, postMerge, true /* force read — caller just merged it */)
+	// Post-merge view uses the caller's tenant settings for staleness; force-read
+	// is true because the caller just authored the merge — no need to refuse it.
+	settings := s.tenantSettings(ctx, tid)
+	view, err := buildDocumentView(ctx, s.thresholds, postMerge, settings.StalenessMode, true)
 	if err != nil {
 		return nil, err
 	}

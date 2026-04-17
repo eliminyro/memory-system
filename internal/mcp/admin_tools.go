@@ -9,6 +9,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/service"
 )
 
 const maxAdminFieldLen = 200
@@ -23,9 +24,12 @@ type CreateTenantInput struct {
 }
 
 type UpdateTenantInput struct {
-	TenantID string  `json:"tenant_id" jsonschema:"Tenant UUID to update"`
-	Name     *string `json:"name,omitempty" jsonschema:"New tenant name (max 200 chars)"`
-	Email    *string `json:"email,omitempty" jsonschema:"New tenant email"`
+	TenantID           string  `json:"tenant_id" jsonschema:"Tenant UUID to update"`
+	Name               *string `json:"name,omitempty" jsonschema:"New tenant name (max 200 chars)"`
+	Email              *string `json:"email,omitempty" jsonschema:"New tenant email"`
+	StalenessMode      *string `json:"staleness_mode,omitempty" jsonschema:"Staleness enforcement: off, advisory, or hard"`
+	DuplicateGuard     *bool   `json:"duplicate_guard,omitempty" jsonschema:"Refuse store_memory on near-duplicate content (default false)"`
+	CleanupScanEnabled *bool   `json:"cleanup_scan_enabled,omitempty" jsonschema:"Include this tenant in the nightly near-duplicate scan (default false)"`
 }
 
 type DeleteTenantInput struct {
@@ -113,7 +117,13 @@ func (s *Server) UpdateTenant(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if input.Name != nil && len(*input.Name) > maxAdminFieldLen {
 		return errorResult("name must be <= 200 characters"), nil, nil
 	}
-	tenant, err := s.memory.UpdateTenant(ctx, id, input.Name, input.Email)
+	tenant, err := s.memory.UpdateTenant(ctx, id, service.UpdateTenantFields{
+		Name:               input.Name,
+		Email:              input.Email,
+		StalenessMode:      input.StalenessMode,
+		DuplicateGuard:     input.DuplicateGuard,
+		CleanupScanEnabled: input.CleanupScanEnabled,
+	})
 	if err != nil {
 		return handleAdminError(err)
 	}
