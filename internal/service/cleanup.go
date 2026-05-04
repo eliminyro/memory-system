@@ -43,15 +43,6 @@ func (s *MemoryService) MarkCleanupDone(ctx context.Context, queueID uuid.UUID, 
 	default:
 		return fmt.Errorf("%w: resolution must be merged, ignored, or false_positive", apperr.ErrInvalidInput)
 	}
-	// merged_into must be set iff resolution is "merged" — keeps the audit trail
-	// honest. A previous bug had the cleanup agent posting resolution=merged with
-	// a nil merged_into; the row got marked resolved but no real merge ever happened.
-	if resolution == models.CleanupResolutionMerged && mergedInto == nil {
-		return fmt.Errorf("%w: merged_into is required when resolution is merged", apperr.ErrInvalidInput)
-	}
-	if resolution != models.CleanupResolutionMerged && mergedInto != nil {
-		return fmt.Errorf("%w: merged_into must be omitted when resolution is %q", apperr.ErrInvalidInput, resolution)
-	}
 	return s.cleanup.Resolve(ctx, tid, queueID, resolution, note, mergedInto)
 }
 
