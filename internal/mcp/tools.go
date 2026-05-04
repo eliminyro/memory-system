@@ -458,14 +458,16 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return nil, nil, fmt.Errorf("list: %w", err)
 	}
-	// Return compact listing
+	// Return compact listing. ID is needed by clients that have a doc UUID
+	// (e.g. cleanup_queue rows) and want to map back to a path.
 	type docEntry struct {
+		ID    string `json:"id"`
 		Path  string `json:"path"`
 		Title string `json:"title"`
 	}
 	entries := make([]docEntry, len(docs))
 	for i, d := range docs {
-		entries[i] = docEntry{Path: d.Path(), Title: d.Title}
+		entries[i] = docEntry{ID: d.ID.String(), Path: d.Path(), Title: d.Title}
 	}
 	return jsonResult(entries), nil, nil
 }
