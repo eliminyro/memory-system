@@ -71,7 +71,7 @@ func resolveGCP(ctx context.Context, uri string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create secret manager client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	name := fmt.Sprintf("projects/%s/secrets/%s/versions/%s", project, secretName, version)
 	result, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{

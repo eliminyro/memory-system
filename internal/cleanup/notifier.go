@@ -66,7 +66,7 @@ func (n *Notifier) send(ctx context.Context, text string) error {
 	if err != nil {
 		return fmt.Errorf("telegram request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("telegram returned %d: %s", resp.StatusCode, string(snippet))

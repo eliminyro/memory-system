@@ -19,8 +19,7 @@ func TestResolve_Literal(t *testing.T) {
 }
 
 func TestResolve_Env(t *testing.T) {
-	os.Setenv("TEST_SECRET_KEY", "env-secret-value")
-	t.Cleanup(func() { os.Unsetenv("TEST_SECRET_KEY") })
+	t.Setenv("TEST_SECRET_KEY", "env-secret-value")
 
 	val, err := secret.Resolve(context.Background(), "env://TEST_SECRET_KEY")
 	require.NoError(t, err)
@@ -35,7 +34,7 @@ func TestResolve_Env_NotSet(t *testing.T) {
 func TestResolve_File(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secret")
-	os.WriteFile(path, []byte("file-secret-value\n"), 0600)
+	require.NoError(t, os.WriteFile(path, []byte("file-secret-value\n"), 0600))
 
 	val, err := secret.Resolve(context.Background(), "file://"+path)
 	require.NoError(t, err)

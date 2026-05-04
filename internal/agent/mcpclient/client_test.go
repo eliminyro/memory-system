@@ -19,7 +19,7 @@ func TestClient_SearchMemory(t *testing.T) {
 		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
 
 		var req map[string]any
-		json.NewDecoder(r.Body).Decode(&req)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		assert.Equal(t, "tools/call", req["method"])
 
 		params := req["params"].(map[string]any)
@@ -34,7 +34,7 @@ func TestClient_SearchMemory(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
 	}))
 	defer srv.Close()
 
@@ -48,7 +48,7 @@ func TestClient_SearchMemory(t *testing.T) {
 func TestClient_StoreMemory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
-		json.NewDecoder(r.Body).Decode(&req)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 
 		params := req["params"].(map[string]any)
 		assert.Equal(t, "store_memory", params["name"])
@@ -66,7 +66,7 @@ func TestClient_StoreMemory(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
 	}))
 	defer srv.Close()
 
