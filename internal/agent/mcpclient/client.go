@@ -108,7 +108,7 @@ func (c *Client) callTool(ctx context.Context, toolName string, arguments map[st
 	if err != nil {
 		return "", fmt.Errorf("MCP request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

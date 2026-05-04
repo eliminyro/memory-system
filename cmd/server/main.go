@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,15 +22,30 @@ import (
 )
 
 func main() {
+	// --opts overrides MEMORY_DEFAULT_OPTS. Format:
+	//   --opts staleness=off,duplicate_guard=false,cleanup_scan_enabled=false
+	optsFlag := flag.String("opts", "", "tenant-toggle defaults (key=value,...): staleness, duplicate_guard, cleanup_scan_enabled")
+	flag.Parse()
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
 
+	// CLI flag wins over env var.
+	if *optsFlag != "" {
+		td, err := config.ParseTenantDefaults(*optsFlag)
+		if err != nil {
+			slog.Error("invalid --opts", "error", err)
+			os.Exit(1)
+		}
+		cfg.TenantDefaults = td
+	}
+
 	// Wire log level
 	var level slog.Level
-	level.UnmarshalText([]byte(cfg.LogLevel))
+	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	db, err := database.Connect(cfg.DatabaseURL)
@@ -38,7 +54,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := database.Migrate(db, cfg.EmbeddingDimensions); err != nil {
+	if err := database.Migrate(db, cfg.EmbeddingDimensions, database.TenantColumnDefaults{
+		StalenessMode:      cfg.TenantDefaults.StalenessMode,
+		DuplicateGuard:     cfg.TenantDefaults.DuplicateGuard,
+		CleanupScanEnabled: cfg.TenantDefaults.CleanupScanEnabled,
+	}); err != nil {
 		slog.Error("failed to run migrations", "error", err)
 		os.Exit(1)
 	}
@@ -103,22 +123,22 @@ func main() {
 	// Health
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		sqlDB, err := db.DB()
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("db: " + err.Error()))
+			_, _ = w.Write([]byte("db: " + err.Error()))
 			return
 		}
 		if err := sqlDB.PingContext(r.Context()); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("db ping: " + err.Error()))
+			_, _ = w.Write([]byte("db ping: " + err.Error()))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ready"))
+		_, _ = w.Write([]byte("ready"))
 	})
 
 	srv := &http.Server{
@@ -141,5 +161,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("server shutdown error", "error", err)
+	}
 }

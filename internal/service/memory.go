@@ -129,7 +129,10 @@ func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenan
 	}
 	mode := t.StalenessMode
 	if _, ok := models.ValidStalenessModes[mode]; !ok {
-		mode = models.StalenessModeAdvisory
+		// Fail safe: an unrecognised value (data corruption, bad migration) flips
+		// to "off" rather than "advisory" — same rationale as the surrounding
+		// branches: never refuse content because of an infra glitch.
+		mode = models.StalenessModeOff
 	}
 	return tenantSettings{StalenessMode: mode, DuplicateGuard: t.DuplicateGuard}
 }

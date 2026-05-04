@@ -23,7 +23,7 @@ func main() {
 	// Log to both stderr and a persistent log file
 	logFile := setupLogFile()
 	if logFile != nil {
-		defer logFile.Close()
+		defer func() { _ = logFile.Close() }()
 	}
 
 	if len(os.Args) < 2 {
@@ -38,7 +38,7 @@ func main() {
 		slog.Info("recursion guard: skipping (MEMORY_AGENT_INVOKED=1)")
 		return
 	}
-	os.Setenv("MEMORY_AGENT_INVOKED", "1")
+	_ = os.Setenv("MEMORY_AGENT_INVOKED", "1")
 
 	switch os.Args[1] {
 	case "capture":
@@ -60,7 +60,7 @@ func runCapture(args []string) error {
 
 	fs := flag.NewFlagSet("capture", flag.ExitOnError)
 	configPath := fs.String("config", defCfg, "Path to config file")
-	fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError handles real failures; nothing to check here.
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: memory-agent capture <session.jsonl>")
@@ -122,7 +122,9 @@ func runCapture(args []string) error {
 	}
 	slog.Info("extracted candidates", "count", len(candidates))
 	if len(candidates) == 0 {
-		st.MarkCaptured(sessionID)
+		if err := st.MarkCaptured(sessionID); err != nil {
+			slog.Warn("mark captured failed", "session", sessionID, "error", err)
+		}
 		return nil
 	}
 
@@ -141,7 +143,9 @@ func runCapture(args []string) error {
 
 	slog.Info("capture complete", "accepted", accepted, "merged", merged, "rejected", rejected)
 
-	st.MarkCaptured(sessionID)
+	if err := st.MarkCaptured(sessionID); err != nil {
+		slog.Warn("mark captured failed", "session", sessionID, "error", err)
+	}
 	return nil
 }
 
@@ -173,7 +177,7 @@ func setupLogFile() *os.File {
 	}
 
 	logDir := filepath.Join(home, ".claude", "logs")
-	os.MkdirAll(logDir, 0700)
+	_ = os.MkdirAll(logDir, 0700)
 	logPath := filepath.Join(logDir, "memory-capture.log")
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)

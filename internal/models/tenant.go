@@ -28,7 +28,7 @@ type Tenant struct {
 	// Per-tenant feature toggles. All default to the safest, least-surprising
 	// behavior so a tenant upgrading from pre-tightening infrastructure sees
 	// no behavior change unless it opts in.
-	StalenessMode      string `gorm:"size:16;not null;default:'advisory'" json:"staleness_mode"`
+	StalenessMode      string `gorm:"size:16;not null;default:'off'" json:"staleness_mode"`
 	DuplicateGuard     bool   `gorm:"not null;default:false" json:"duplicate_guard"`
 	CleanupScanEnabled bool   `gorm:"not null;default:false" json:"cleanup_scan_enabled"`
 

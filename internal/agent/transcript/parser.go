@@ -32,7 +32,7 @@ func Parse(path string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open transcript: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	session := &Session{Path: path}
 	scanner := bufio.NewScanner(f)

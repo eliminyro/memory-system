@@ -36,7 +36,17 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 	return db, nil
 }
 
-func Migrate(db *gorm.DB, dimensions int) error {
+// TenantColumnDefaults are the operator-chosen DB-level defaults for the three
+// per-tenant feature toggles. Migrate applies them via ALTER COLUMN SET DEFAULT
+// after AutoMigrate, so any future raw INSERT into tenants picks up the
+// operator's deploy-time choice.
+type TenantColumnDefaults struct {
+	StalenessMode      string
+	DuplicateGuard     bool
+	CleanupScanEnabled bool
+}
+
+func Migrate(db *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 	// Check existing vector dimensions BEFORE AutoMigrate (which may reset atttypmod).
 	// If sections table exists with data, verify dimensions match.
 	var existingDim int
@@ -51,11 +61,11 @@ func Migrate(db *gorm.DB, dimensions int) error {
 	// crash mid-migration rolls back cleanly. Postgres supports DDL in
 	// transactions, so this covers CREATE / ALTER / UPDATE / INSERT uniformly.
 	return db.Transaction(func(tx *gorm.DB) error {
-		return migrateInTx(tx, dimensions)
+		return migrateInTx(tx, dimensions, td)
 	})
 }
 
-func migrateInTx(tx *gorm.DB, dimensions int) error {
+func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 	// Migrate all models — Tenant first (referenced by Document and APIKey)
 	if err := tx.AutoMigrate(
 		&models.Tenant{},
@@ -115,6 +125,20 @@ func migrateInTx(tx *gorm.DB, dimensions int) error {
 	for _, m := range migrations {
 		if err := tx.Exec(m).Error; err != nil {
 			return fmt.Errorf("migration: %w", err)
+		}
+	}
+
+	// Apply operator-chosen DB-level defaults for the three tenant toggles.
+	// Values are pre-validated by config.ParseTenantDefaults to a fixed enum,
+	// so direct interpolation is safe (Postgres DDL doesn't accept bind params).
+	tenantDefaultMigrations := []string{
+		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN staleness_mode SET DEFAULT '%s'`, td.StalenessMode),
+		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN duplicate_guard SET DEFAULT %t`, td.DuplicateGuard),
+		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN cleanup_scan_enabled SET DEFAULT %t`, td.CleanupScanEnabled),
+	}
+	for _, m := range tenantDefaultMigrations {
+		if err := tx.Exec(m).Error; err != nil {
+			return fmt.Errorf("apply tenant column default: %w", err)
 		}
 	}
 

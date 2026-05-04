@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/caarlos0/env/v10"
 
@@ -37,6 +39,80 @@ type Config struct {
 	CleanupEnabled       bool   `env:"CLEANUP_ENABLED" envDefault:"true"`
 	TelegramBotToken     string `env:"TELEGRAM_BOT_TOKEN"`
 	TelegramChatID       string `env:"TELEGRAM_CHAT_ID"`
+
+	// Tenant-toggle defaults. The raw spec comes in via env; cmd/server can
+	// override via --opts before validation. ParseTenantDefaults turns the spec
+	// into the typed TenantDefaults applied at AutoMigrate and tenant-create time.
+	TenantDefaultsSpec string `env:"MEMORY_DEFAULT_OPTS"`
+	TenantDefaults     TenantDefaults
+}
+
+// TenantDefaults is the operator-chosen baseline for the three per-tenant
+// feature toggles. Applied as the Postgres column DEFAULT after AutoMigrate
+// and as the zero-value fill in service.CreateTenant.
+type TenantDefaults struct {
+	StalenessMode      string
+	DuplicateGuard     bool
+	CleanupScanEnabled bool
+}
+
+// DefaultTenantDefaults returns the safe baseline: every toggle off.
+// A fresh deploy with no operator config picks this up.
+func DefaultTenantDefaults() TenantDefaults {
+	return TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
+}
+
+// ParseTenantDefaults turns "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
+// into a TenantDefaults. Empty input yields the safe baseline. Whitespace is
+// tolerated, values are case-insensitive. Unknown keys or invalid values fail.
+func ParseTenantDefaults(spec string) (TenantDefaults, error) {
+	out := DefaultTenantDefaults()
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return out, nil
+	}
+
+	for pair := range strings.SplitSeq(spec, ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			return TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
+		}
+		key := strings.ToLower(strings.TrimSpace(kv[0]))
+		val := strings.ToLower(strings.TrimSpace(kv[1]))
+		if key == "" {
+			return TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
+		}
+		switch key {
+		case "staleness":
+			switch val {
+			case "off", "advisory", "hard":
+				out.StalenessMode = val
+			default:
+				return TenantDefaults{}, fmt.Errorf("invalid staleness value %q (want off|advisory|hard)", val)
+			}
+		case "duplicate_guard":
+			b, err := parseBool(val)
+			if err != nil {
+				return TenantDefaults{}, fmt.Errorf("invalid duplicate_guard value %q (want true|false|1|0)", val)
+			}
+			out.DuplicateGuard = b
+		case "cleanup_scan_enabled":
+			b, err := parseBool(val)
+			if err != nil {
+				return TenantDefaults{}, fmt.Errorf("invalid cleanup_scan_enabled value %q (want true|false|1|0)", val)
+			}
+			out.CleanupScanEnabled = b
+		default:
+			return TenantDefaults{}, fmt.Errorf("unknown key %q (want staleness|duplicate_guard|cleanup_scan_enabled)", key)
+		}
+	}
+	return out, nil
+}
+
+// parseBool accepts strconv.ParseBool inputs (true/false/1/0/etc) plus enforces
+// case-insensitivity via lower-casing upstream.
+func parseBool(s string) (bool, error) {
+	return strconv.ParseBool(s)
 }
 
 func Load() (*Config, error) {
@@ -44,6 +120,11 @@ func Load() (*Config, error) {
 	if err := env.Parse(cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	td, err := ParseTenantDefaults(cfg.TenantDefaultsSpec)
+	if err != nil {
+		return nil, fmt.Errorf("parse MEMORY_DEFAULT_OPTS: %w", err)
+	}
+	cfg.TenantDefaults = td
 	return cfg, nil
 }
 

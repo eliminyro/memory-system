@@ -14,7 +14,7 @@ import (
 func TestLoad_Defaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(""), 0600)
+	require.NoError(t, os.WriteFile(path, []byte(""), 0600))
 
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ reviewer_model: claude-haiku-4-5-20251001
 memory_mcp_url: https://memory.example.com/mcp
 memory_mcp_api_key: literal://test-key-123
 `
-	os.WriteFile(path, []byte(yaml), 0600)
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
 
 	cfg, err := config.Load(path)
 	require.NoError(t, err)
