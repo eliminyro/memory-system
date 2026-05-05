@@ -281,7 +281,7 @@ func (s *MemoryService) StoreDocument(
 	settings := s.tenantSettings(ctx, tid)
 	if settings.DuplicateGuard && !force && len(embeddings) > 0 {
 		candidates, err := s.sections.FindSimilarDocuments(
-			ctx, tid, embeddings, models.DuplicateThreshold, 5, category, subcategory, slug,
+			ctx, tid, embeddings, models.DuplicateGuardThreshold, 5, category, subcategory, slug,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("similarity check: %w", err)
