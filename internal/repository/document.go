@@ -22,6 +22,19 @@ func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 
 // readTenants returns the list of tenant IDs to include in read queries:
 // the requesting tenant plus the common (bootstrap) tenant.
+//
+// The bootstrap pool is a shared, read-merged source of legacy/seed docs.
+// Every tenant's read picks up bootstrap docs in addition to its own. The
+// unique index `idx_doc_tenant_path` is scoped per-tenant, so a tenant can
+// "override" a bootstrap path by creating its own doc at the same path —
+// GetByPath orders the requesting tenant first, so the override wins.
+//
+// Side effect on dedup: list_documents and the cleanup scanner can return
+// pairs of docs at the same path with different tenant_ids (one bootstrap,
+// one tenant-owned). That is NOT a data-integrity bug; it is the override
+// pattern surfacing in the queue. Resolving such a pair means picking
+// which tenant's doc is canonical (admin operation) — the cleanup agent
+// can flag them for human review but should not auto-merge cross-tenant.
 func readTenants(tenantID uuid.UUID) []uuid.UUID {
 	if tenantID == models.BootstrapTenantID {
 		return []uuid.UUID{tenantID}
