@@ -35,6 +35,11 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 	}, s.GetDocument)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "get_document_by_id",
+		Description: "Get a specific document and all its sections by UUID. Use when you have a doc UUID (e.g. from a cleanup_queue row) and the path-based lookup is ambiguous (multiple docs share a path).",
+	}, s.GetDocumentByID)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "store_memory",
 		Description: "Store or update a memory document. Accepts markdown content, splits into sections by ## headings, and generates embeddings for semantic search.",
 	}, s.StoreMemory)
@@ -114,6 +119,13 @@ type GetDocumentInput struct {
 	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Bypass staleness guard. Requires reason. Audited in override_log."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type GetDocumentByIDInput struct {
+	DocumentID string  `json:"document_id" jsonschema:"Document UUID"`
+	ForceRead  bool    `json:"force_read,omitempty" jsonschema:"Bypass staleness guard. Requires reason. Audited in override_log."`
+	Reason     string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
+	TenantID   *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type MarkVerifiedInput struct {
@@ -248,6 +260,28 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 			return errorResult(err.Error()), nil, nil
 		}
 		return nil, nil, fmt.Errorf("get document: %w", err)
+	}
+	return jsonResult(doc), nil, nil
+}
+
+func (s *Server) GetDocumentByID(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetDocumentByIDInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.DocumentID == "" {
+		return errorResult("document_id is required"), nil, nil
+	}
+	id, err := uuid.Parse(input.DocumentID)
+	if err != nil {
+		return errorResult("invalid document_id: " + err.Error()), nil, nil
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	doc, err := s.memory.GetDocumentByID(ctx, id, input.ForceRead, input.Reason, tenantOverride)
+	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
+		return nil, nil, fmt.Errorf("get document by id: %w", err)
 	}
 	return jsonResult(doc), nil, nil
 }

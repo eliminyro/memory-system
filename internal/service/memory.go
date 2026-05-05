@@ -213,6 +213,42 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	return &view, nil
 }
 
+// GetDocumentByID fetches a document by its UUID. Mirrors GetDocument's
+// behaviour (staleness filter + force_read audit) but addresses by ID
+// instead of path. Needed when a caller has a document UUID (e.g. a row
+// from cleanup_queue referencing doc_a_id / doc_b_id) and must access the
+// shadow doc at a path where another doc also lives — path-keyed
+// GetDocument can only return one of them.
+func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, forceRead bool, reason string, overrideID *uuid.UUID) (*DocumentView, error) {
+	if forceRead && strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
+	}
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := s.docs.GetByID(ctx, tid, id)
+	if err != nil {
+		return nil, err
+	}
+	settings := s.tenantSettings(ctx, tid)
+	view, err := buildDocumentView(ctx, s.thresholds, doc, settings.StalenessMode, forceRead)
+	if err != nil {
+		return nil, err
+	}
+	if forceRead {
+		docID := doc.ID
+		s.logOverride(ctx, repository.OverrideEvent{
+			TenantID:     tid,
+			Tool:         models.OverrideToolGetDocument,
+			TargetID:     &docID,
+			OverrideType: models.OverrideTypeForceRead,
+			Reason:       reason,
+		})
+	}
+	return &view, nil
+}
+
 // MarkVerified stamps verified_at = NOW() on a section. Agents call this after
 // confirming a claim against current source.
 func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, overrideID *uuid.UUID) error {
