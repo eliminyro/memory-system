@@ -136,26 +136,30 @@ type NearDuplicatePair struct {
 	Similarity float64   `gorm:"column:similarity"`
 }
 
-// FindNearDuplicatePairs returns doc ID pairs whose average embeddings meet
-// the threshold. Same logic as CheckNearDuplicates but returns IDs instead of
-// human-readable findings — used by the cleanup pipeline to populate the queue.
+// FindNearDuplicatePairs returns doc ID pairs whose section-level cosine
+// similarity reaches the threshold. The metric is "best matching section
+// across the pair" — for each (doc_a, doc_b), MAX(1 - cosine_dist) over all
+// section pairs. This is more discriminating than doc-AVG: two docs that
+// share boilerplate vocabulary won't trip the bar unless at least one
+// section pair is near-identical. Used by the cleanup pipeline to populate
+// the queue.
 func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uuid.UUID, threshold float64) ([]NearDuplicatePair, error) {
 	tenants := readTenants(tenantID)
 
 	sql := `
-		WITH doc_avg AS (
-			SELECT d.id, AVG(s.embedding) AS avg_embedding
+		WITH tenant_secs AS (
+			SELECT s.document_id, s.embedding
 			FROM documents d
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id IN ?
 			  AND s.embedding IS NOT NULL
-			GROUP BY d.id
 		)
-		SELECT a.id AS doc_a_id, b.id AS doc_b_id,
-		       1 - (a.avg_embedding <=> b.avg_embedding) AS similarity
-		FROM doc_avg a
-		JOIN doc_avg b ON a.id < b.id
-		WHERE 1 - (a.avg_embedding <=> b.avg_embedding) >= ?
+		SELECT a.document_id AS doc_a_id, b.document_id AS doc_b_id,
+		       MAX(1 - (a.embedding <=> b.embedding)) AS similarity
+		FROM tenant_secs a
+		JOIN tenant_secs b ON a.document_id < b.document_id
+		GROUP BY a.document_id, b.document_id
+		HAVING MAX(1 - (a.embedding <=> b.embedding)) >= ?
 		ORDER BY similarity DESC
 	`
 	var pairs []NearDuplicatePair
@@ -165,26 +169,30 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 	return pairs, nil
 }
 
-// CheckNearDuplicates finds pairs of documents whose average embeddings are highly similar.
+// CheckNearDuplicates finds pairs of documents that share at least one
+// near-duplicate section. Metric: MAX section-pair cosine similarity per
+// (doc_a, doc_b), filtered above thresholds.DuplicateSimilarity.
 func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.UUID, thresholds LintThresholds) ([]LintFinding, error) {
 	tenants := readTenants(tenantID)
 
 	sql := `
-		WITH doc_avg AS (
-			SELECT d.id, d.category, d.subcategory, d.slug,
-			       AVG(s.embedding) AS avg_embedding
+		WITH tenant_secs AS (
+			SELECT s.document_id, s.embedding,
+			       d.category, d.subcategory, d.slug
 			FROM documents d
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id IN ?
 			  AND s.embedding IS NOT NULL
-			GROUP BY d.id, d.category, d.subcategory, d.slug
 		)
 		SELECT a.category AS cat1, a.subcategory AS sub1, a.slug AS slug1,
 		       b.category AS cat2, b.subcategory AS sub2, b.slug AS slug2,
-		       1 - (a.avg_embedding <=> b.avg_embedding) AS similarity
-		FROM doc_avg a
-		JOIN doc_avg b ON a.id < b.id
-		WHERE 1 - (a.avg_embedding <=> b.avg_embedding) > ?
+		       MAX(1 - (a.embedding <=> b.embedding)) AS similarity
+		FROM tenant_secs a
+		JOIN tenant_secs b ON a.document_id < b.document_id
+		GROUP BY a.document_id, b.document_id,
+		         a.category, a.subcategory, a.slug,
+		         b.category, b.subcategory, b.slug
+		HAVING MAX(1 - (a.embedding <=> b.embedding)) > ?
 		ORDER BY similarity DESC
 	`
 
