@@ -95,7 +95,7 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 }
 
 func (s *Scanner) scanTenant(ctx context.Context, tenantID uuid.UUID, stats *ScanStats) error {
-	pairs, err := s.lint.FindNearDuplicatePairs(ctx, tenantID, models.DuplicateThreshold)
+	pairs, err := s.lint.FindNearDuplicatePairs(ctx, tenantID, models.ScanThreshold)
 	if err != nil {
 		return err
 	}

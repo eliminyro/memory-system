@@ -9,11 +9,30 @@ type StalenessThreshold struct {
 
 func (StalenessThreshold) TableName() string { return "staleness_thresholds" }
 
-// DuplicateThreshold is the cosine-similarity bar at which two sections or
-// documents are considered near-duplicates. Used by both the write-time
-// duplicate guard and the nightly cleanup scanner; keep one canonical value
-// so the two paths can't drift.
-const DuplicateThreshold = 0.70
+// Duplicate-similarity thresholds. Two paths use cosine similarity for
+// near-duplicate detection but compute it differently, so they tune
+// independently:
+//
+//   - DuplicateGuardThreshold gates the write-time store_memory check.
+//     Math: section-level — the candidate's section embeddings are compared
+//     against every existing section's embedding (FindSimilarDocuments). A
+//     match means the new write substantially repeats existing content.
+//
+//   - ScanThreshold gates the nightly cleanup scanner. Math: doc-level — each
+//     doc is collapsed to AVG(section embeddings) and compared pairwise
+//     (FindNearDuplicatePairs). A match means two whole docs share a similar
+//     centroid. This metric is structurally lossier; boilerplate sections
+//     (Overview/Architecture/Status) push averages toward each other even
+//     when the meat differs, so the bar is set higher.
+//
+// Empirical sweep on the pe tenant (142 docs, ~10k pairwise possibilities):
+// at 0.70 the doc-AVG metric flagged ~25% of all pairs (boilerplate noise);
+// at 0.85 it flagged ~1%. 0.85 is the floor for the scanner; the guard is
+// kept at 0.70 because section-level math at 0.70 is already discriminating.
+const (
+	DuplicateGuardThreshold = 0.70
+	ScanThreshold           = 0.85
+)
 
 // InferDocType classifies a document by category/slug when the caller didn't
 // set doc_type explicitly. Mirrors the SQL backfill rules applied to legacy
