@@ -9,26 +9,25 @@ type StalenessThreshold struct {
 
 func (StalenessThreshold) TableName() string { return "staleness_thresholds" }
 
-// Duplicate-similarity thresholds. Two paths use cosine similarity for
-// near-duplicate detection but compute it differently, so they tune
-// independently:
+// Duplicate-similarity thresholds. Both paths use section-level cosine
+// similarity (best-matching section pair across two docs / two embeddings),
+// but they tune independently:
 //
-//   - DuplicateGuardThreshold gates the write-time store_memory check.
-//     Math: section-level — the candidate's section embeddings are compared
-//     against every existing section's embedding (FindSimilarDocuments). A
-//     match means the new write substantially repeats existing content.
+//   - DuplicateGuardThreshold gates the write-time store_memory check
+//     (FindSimilarDocuments — incoming section embeddings vs every existing
+//     section's embedding). A match means the new write substantially
+//     repeats an existing section.
 //
-//   - ScanThreshold gates the nightly cleanup scanner. Math: doc-level — each
-//     doc is collapsed to AVG(section embeddings) and compared pairwise
-//     (FindNearDuplicatePairs). A match means two whole docs share a similar
-//     centroid. This metric is structurally lossier; boilerplate sections
-//     (Overview/Architecture/Status) push averages toward each other even
-//     when the meat differs, so the bar is set higher.
+//   - ScanThreshold gates the nightly cleanup scanner
+//     (FindNearDuplicatePairs — for each pair of docs in a tenant, take the
+//     MAX cosine over all section-pair combinations). A match means two
+//     docs share at least one near-identical section.
 //
-// Empirical sweep on the pe tenant (142 docs, ~10k pairwise possibilities):
-// at 0.70 the doc-AVG metric flagged ~25% of all pairs (boilerplate noise);
-// at 0.85 it flagged ~1%. 0.85 is the floor for the scanner; the guard is
-// kept at 0.70 because section-level math at 0.70 is already discriminating.
+// Both knobs are kept separate so a tenant can run aggressive store-time
+// dedup (low threshold) without flooding the nightly cleanup queue, or vice
+// versa. ScanThreshold defaults higher because the scanner output is queue
+// noise to the human reviewer; the write-time guard fires once per
+// store_memory call so a slightly looser bar is tolerable.
 const (
 	DuplicateGuardThreshold = 0.70
 	ScanThreshold           = 0.85
