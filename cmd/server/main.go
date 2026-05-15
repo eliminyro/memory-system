@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/authletas"
+	"github.com/eliminyro/memory-system/internal/authletstore"
 	"github.com/eliminyro/memory-system/internal/cleanup"
 	"github.com/eliminyro/memory-system/internal/config"
 	"github.com/eliminyro/memory-system/internal/database"
@@ -112,13 +114,45 @@ func main() {
 	keyValidator := auth.NewAPIKeyValidator(db)
 	apiKeyMW := auth.APIKeyMiddleware(keyValidator)
 
+	// authlet OAuth 2.1 / OIDC AS. TrySetup returns nil and logs a warn
+	// when the required env (AUTHLET_MASTER_KEY, MEMORY_MCP_GOOGLE_CLIENT_*)
+	// is missing or when upstream OIDC discovery fails — boot still succeeds
+	// and /mcp serves API-key auth only.
+	authletWiring := authletas.TrySetup(
+		rootCtx,
+		db,
+		authletstore.New(db),
+		cfg.GoogleClientID,
+		cfg.GoogleClientSecret,
+		slog.Default(),
+	)
+
 	// HTTP server
 	mux := http.NewServeMux()
 
-	// MCP endpoints (API key auth)
-	mcpHTTP := mcpServer.HTTPHandler()
-	mux.Handle("/mcp", apiKeyMW(mcpHTTP))
-	mux.Handle("/mcp/", apiKeyMW(mcpHTTP))
+	// MCP endpoints. When authlet wiring is present, requests with a
+	// JWT-shaped Bearer token route through authlet's bearer middleware;
+	// everything else falls back to the legacy API-key middleware. WWWAuth401
+	// wraps both paths so OAuth-discovering clients always see a
+	// WWW-Authenticate challenge on 401. UserContextBridge translates JWT
+	// claims into auth.WithTenantID / auth.WithEmail so handlers see the
+	// same context shape as on the API-key path.
+	mcpHandler := mcpServer.HTTPHandler()
+	if authletWiring != nil {
+		mcpHandler = authletWiring.UserContextBridge()(mcpHandler)
+		mcpHandler = authletWiring.DualAuth(apiKeyMW)(mcpHandler)
+		mcpHandler = authletWiring.WWWAuth401()(mcpHandler)
+		authletWiring.Mount(mux)
+		// Start the AS cleanup goroutine (expires codes / refresh tokens /
+		// DCR clients and rotates signing keys). Returns a channel that
+		// closes on rootCtx cancellation; we don't wait on it here — the
+		// http.Server shutdown is the bound for our exit.
+		_ = authletWiring.RunCleanup(rootCtx)
+	} else {
+		mcpHandler = apiKeyMW(mcpHandler)
+	}
+	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp/", mcpHandler)
 
 	// Health
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
