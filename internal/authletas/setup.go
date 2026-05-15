@@ -162,31 +162,6 @@ func Setup(
 		return nil, fmt.Errorf("upstream oidc: %w", err)
 	}
 
-	// lookupEmail finds the tenant_user email for a tenant_id. Returns the
-	// empty string on any DB error (logged at warn). Used by both
-	// idTokenClaims and AdditionalClaims.
-	//
-	// TODO: this closure captures Setup's ctx; authlet's IDTokenClaims and
-	// AdditionalClaims hooks don't pass a request context, so request-scoped
-	// timeouts/tracing won't propagate and the query gets canceled when Setup's
-	// ctx is canceled at shutdown. Revisit when authlet adds ctx to these hooks.
-	lookupEmail := func(tenantID string) string {
-		var row struct {
-			Email string `gorm:"column:email"`
-		}
-		if err := db.WithContext(ctx).
-			Table("tenant_users").
-			Select("email").
-			Where("tenant_id = ?", tenantID).
-			Limit(1).
-			Scan(&row).Error; err != nil {
-			logger.Warn("authletas: tenant_user email lookup failed",
-				"tenant_id", tenantID, "err", err)
-			return ""
-		}
-		return row.Email
-	}
-
 	// idTokenClaims is invoked when the AS mints an ID token (auth request
 	// scope contained "openid"). It returns the standard OIDC claims for
 	// the user. Errors are logged and we return zero values rather than
@@ -194,8 +169,8 @@ func Setup(
 	// access token is unaffected. The email is treated as verified because
 	// the only path that creates a tenant_users row goes through a verified
 	// Google email (MemoryUserResolver enforces EmailVerified=true).
-	idTokenClaims := func(userID string) (email string, emailVerified bool, name, picture string) {
-		e := lookupEmail(userID)
+	idTokenClaims := func(ctx context.Context, userID string) (email string, emailVerified bool, name, picture string) {
+		e := lookupTenantEmail(ctx, db, logger, userID)
 		if e == "" {
 			return "", false, "", ""
 		}
@@ -205,8 +180,8 @@ func Setup(
 	// additionalClaims merges the resolved email into the access token's
 	// custom claims. UserContextBridge pulls this out of jwt.Claims.Extra
 	// to populate auth.WithEmail for JWT-authenticated requests.
-	additionalClaims := func(userID, _, _ string) map[string]any {
-		e := lookupEmail(userID)
+	additionalClaims := func(ctx context.Context, userID, _, _ string) map[string]any {
+		e := lookupTenantEmail(ctx, db, logger, userID)
 		if e == "" {
 			return nil
 		}
@@ -214,15 +189,15 @@ func Setup(
 	}
 
 	server, err := as.New(as.Config{
-		Issuer:           Issuer,
-		PathPrefix:       PathPrefix,
-		Upstream:         upstream,
-		UserResolver:     &MemoryUserResolver{DB: db},
-		Storage:          store,
-		KeyManager:       mgr,
-		AdditionalClaims: additionalClaims,
-		IDTokenClaims:    idTokenClaims,
-		Logger:           logger,
+		Issuer:              Issuer,
+		PathPrefix:          PathPrefix,
+		Upstream:            upstream,
+		UserResolver:        &MemoryUserResolver{DB: db},
+		Storage:             store,
+		KeyManager:          mgr,
+		AdditionalClaimsCtx: additionalClaims,
+		IDTokenClaimsCtx:    idTokenClaims,
+		Logger:              logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("as.New: %w", err)
@@ -279,6 +254,27 @@ func TrySetup(
 		return nil
 	}
 	return w
+}
+
+// lookupTenantEmail returns the email of any tenant_user row matching
+// tenantID, or the empty string when none exists or on any DB error.
+// Errors are logged at warn; callers map a "" result to a missing claim
+// (idTokenClaims returns zero values; additionalClaims returns nil).
+func lookupTenantEmail(ctx context.Context, db *gorm.DB, logger *slog.Logger, tenantID string) string {
+	var row struct {
+		Email string `gorm:"column:email"`
+	}
+	if err := db.WithContext(ctx).
+		Table("tenant_users").
+		Select("email").
+		Where("tenant_id = ?", tenantID).
+		Limit(1).
+		Scan(&row).Error; err != nil {
+		logger.Warn("authletas: tenant_user email lookup failed",
+			"tenant_id", tenantID, "err", err)
+		return ""
+	}
+	return row.Email
 }
 
 // loadMasterKey reads and base64-decodes AUTHLET_MASTER_KEY. The decoded
