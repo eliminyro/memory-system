@@ -1,0 +1,41 @@
+when:
+  - event: push
+    branch: master
+
+steps:
+  - name: test
+    image: ghcr.io/eliminyro/go-ci:latest
+    volumes:
+      - /tmp/memory-system-ci/go-cache:/root/.cache/go-build
+      - /tmp/memory-system-ci/go-mod:/go/pkg/mod
+    commands:
+      - go test -v ./...
+
+  - name: fmt
+    image: ghcr.io/eliminyro/go-ci:latest
+    commands:
+      - gofmt -w .
+      - git diff --exit-code HEAD
+    depends_on: []
+
+  - name: build-and-push
+    image: docker:27
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      GHCR_TOKEN:
+        from_secret: ghcr_token
+    commands:
+      - echo "$GHCR_TOKEN" | docker login ghcr.io -u eliminyro --password-stdin
+      - docker buildx create --name ci-builder --driver docker-container --use 2>/dev/null || true
+      - >-
+        docker buildx build
+        --builder ci-builder
+        --cache-from type=registry,ref=ghcr.io/eliminyro/memory-system:latest
+        --cache-to type=inline
+        -t ghcr.io/eliminyro/memory-system:latest
+        -t ghcr.io/eliminyro/memory-system:sha-${CI_COMMIT_SHA}
+        --push .
+    depends_on:
+      - test
+      - fmt
