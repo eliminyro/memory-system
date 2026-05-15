@@ -45,6 +45,17 @@ type Config struct {
 	// into the typed TenantDefaults applied at AutoMigrate and tenant-create time.
 	TenantDefaultsSpec string `env:"MEMORY_DEFAULT_OPTS"`
 	TenantDefaults     TenantDefaults
+
+	// authlet — OAuth 2.1 / OIDC authorization server for the /mcp endpoint.
+	// AuthletMasterKey is a 32-byte base64-encoded key used to encrypt the
+	// AS signing-key material at rest. GoogleClientID/Secret identify
+	// memory-mcp as an OAuth client to Google (the upstream IdP); these are
+	// distinct from any other deployment's Google client. When any of the
+	// three are empty, authlet.TrySetup logs a warning and boots without
+	// the OAuth path — /mcp falls back to API-key auth only.
+	AuthletMasterKey   string `env:"AUTHLET_MASTER_KEY"`
+	GoogleClientID     string `env:"MEMORY_MCP_GOOGLE_CLIENT_ID"`
+	GoogleClientSecret string `env:"MEMORY_MCP_GOOGLE_CLIENT_SECRET"`
 }
 
 // TenantDefaults is the operator-chosen baseline for the three per-tenant
