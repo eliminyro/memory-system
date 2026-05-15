@@ -2,7 +2,7 @@ package authletas
 
 import (
 	"context"
-	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -277,17 +277,18 @@ func lookupTenantEmail(ctx context.Context, db *gorm.DB, logger *slog.Logger, te
 	return row.Email
 }
 
-// loadMasterKey reads and base64-decodes AUTHLET_MASTER_KEY. The decoded
-// value MUST be exactly 32 bytes — jwt.NewManager uses it to seal the
-// stored signing-key blob with AES-256-GCM.
+// loadMasterKey reads and hex-decodes AUTHLET_MASTER_KEY. The decoded value
+// MUST be exactly 32 bytes (64 hex chars) — jwt.NewManager uses it to seal
+// the stored signing-key blob with AES-256-GCM. Generate with
+// `openssl rand -hex 32`.
 func loadMasterKey() ([]byte, error) {
-	b64 := os.Getenv("AUTHLET_MASTER_KEY")
-	if b64 == "" {
+	h := os.Getenv("AUTHLET_MASTER_KEY")
+	if h == "" {
 		return nil, errors.New("AUTHLET_MASTER_KEY env var not set")
 	}
-	k, err := base64.StdEncoding.DecodeString(b64)
+	k, err := hex.DecodeString(h)
 	if err != nil {
-		return nil, fmt.Errorf("AUTHLET_MASTER_KEY not valid base64: %w", err)
+		return nil, fmt.Errorf("AUTHLET_MASTER_KEY not valid hex: %w", err)
 	}
 	if len(k) != 32 {
 		return nil, fmt.Errorf("AUTHLET_MASTER_KEY must decode to 32 bytes, got %d", len(k))
