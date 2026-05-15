@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/eliminyro/memory-system/internal/authletstore"
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
@@ -75,6 +76,12 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		&models.StalenessThreshold{},
 		&models.OverrideLog{},
 		&models.CleanupQueue{},
+		// authlet tables — Phase A of authlet integration
+		&authletstore.OAuthClient{},
+		&authletstore.OAuthCode{},
+		&authletstore.OAuthRefreshToken{},
+		&authletstore.FamilyRevocation{},
+		&authletstore.AuthletSigningKey{},
 	); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}

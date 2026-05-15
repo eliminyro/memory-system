@@ -1,0 +1,96 @@
+package authletstore
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/eliminyro/authlet/pkg/storage"
+	"gorm.io/gorm"
+)
+
+// signingKeyStore implements storage.SigningKeyStore against GORM.
+type signingKeyStore struct{ db *gorm.DB }
+
+func toStorageKey(r AuthletSigningKey) storage.SigningKey {
+	return storage.SigningKey{
+		ID:                  r.ID,
+		Algorithm:           r.Algorithm,
+		PublicPEM:           r.PublicPEM,
+		PrivatePEMEncrypted: r.PrivatePEMEncrypted,
+		IsActive:            r.IsActive,
+		CreatedAt:           r.CreatedAt,
+		RetiresAt:           r.RetiresAt,
+	}
+}
+
+// ListActive returns every key that has not yet retired (retires_at is
+// NULL or in the future).
+func (s *signingKeyStore) ListActive(ctx context.Context) ([]storage.SigningKey, error) {
+	var rows []AuthletSigningKey
+	q := s.db.WithContext(ctx).Where("retires_at IS NULL OR retires_at > ?", time.Now().UTC())
+	if err := q.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]storage.SigningKey, len(rows))
+	for i, r := range rows {
+		out[i] = toStorageKey(r)
+	}
+	return out, nil
+}
+
+// GetSigner returns the most recently created active key, or
+// storage.ErrNotFound if none is active.
+func (s *signingKeyStore) GetSigner(ctx context.Context) (storage.SigningKey, error) {
+	var row AuthletSigningKey
+	if err := s.db.WithContext(ctx).
+		Where("is_active = ?", true).
+		Order("created_at DESC").
+		First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return storage.SigningKey{}, storage.ErrNotFound
+		}
+		return storage.SigningKey{}, err
+	}
+	return toStorageKey(row), nil
+}
+
+// Insert persists k. When k.IsActive is true, all prior active rows are
+// deactivated in the same transaction so exactly one row is active at a
+// time.
+func (s *signingKeyStore) Insert(ctx context.Context, k storage.SigningKey) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if k.IsActive {
+			if err := tx.Model(&AuthletSigningKey{}).
+				Where("is_active = ?", true).
+				Update("is_active", false).Error; err != nil {
+				return err
+			}
+		}
+		row := AuthletSigningKey{
+			ID:                  k.ID,
+			Algorithm:           k.Algorithm,
+			PublicPEM:           k.PublicPEM,
+			PrivatePEMEncrypted: k.PrivatePEMEncrypted,
+			IsActive:            k.IsActive,
+			CreatedAt:           k.CreatedAt,
+			RetiresAt:           k.RetiresAt,
+		}
+		return tx.Create(&row).Error
+	})
+}
+
+// Retire marks the key inactive and sets retires_at. Returns
+// storage.ErrNotFound when no row matches id.
+func (s *signingKeyStore) Retire(ctx context.Context, id string, at time.Time) error {
+	res := s.db.WithContext(ctx).Model(&AuthletSigningKey{}).
+		Where("id = ?", id).
+		Updates(map[string]any{"is_active": false, "retires_at": at})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
