@@ -67,9 +67,10 @@ func Migrate(db *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 }
 
 func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
-	// Migrate all models — Tenant first (referenced by Document and APIKey)
+	// Migrate all models — Tenant first (referenced by Document, APIKey, TenantUser)
 	if err := tx.AutoMigrate(
 		&models.Tenant{},
+		&models.TenantUser{},
 		&models.APIKey{},
 		&models.Document{},
 		&models.Section{},

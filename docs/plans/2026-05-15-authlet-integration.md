@@ -61,16 +61,17 @@ New model: `internal/models/tenant_user.go`.
 
 ```go
 type TenantUser struct {
-    ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()"`
-    Email     string    `gorm:"not null;index"`
-    TenantID  string    `gorm:"not null;type:uuid;index"`
-    Role      string    `gorm:"not null;default:member"` // member | admin
+    ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+    Email     string    `gorm:"size:320;not null;uniqueIndex"` // one email → one tenant
+    TenantID  uuid.UUID `gorm:"type:uuid;not null;index"`
+    Role      string    `gorm:"size:16;not null;default:'member'"` // member | admin
     CreatedAt time.Time
+    Tenant    *Tenant   `gorm:"foreignKey:TenantID;constraint:OnDelete:CASCADE"`
 }
 func (TenantUser) TableName() string { return "tenant_users" }
 ```
 
-Migration adds the table + composite unique on `(email, tenant_id)`.
+Schema invariant: `email` is globally unique — a single email maps to exactly one tenant. Resolver does `WHERE email = ? LIMIT 1` and returns deterministically.
 
 `MemoryUserResolver` at `internal/authletas/resolver.go`:
 - Input: `idp.Claims` from Google (claims.Email is the trust anchor; claims.EmailVerified must be true)
