@@ -110,17 +110,51 @@ func TestMount_PRMHandlerInvoked(t *testing.T) {
 }
 
 // TestMount_NonGETWellKnownReturns405 confirms the method restriction in
-// "GET /path" patterns rejects non-GET requests (Go 1.22+ behaviour).
+// "GET /path" patterns rejects non-GET requests on every well-known path
+// (Go 1.22+ behaviour).
 func TestMount_NonGETWellKnownReturns405(t *testing.T) {
 	mux := http.NewServeMux()
 	w := newTestWiring(t)
 	w.Mount(mux)
 
-	req := httptest.NewRequest(http.MethodPost, "/.well-known/jwks.json", nil)
+	paths := []string{
+		"/.well-known/oauth-authorization-server",
+		"/.well-known/openid-configuration",
+		"/.well-known/jwks.json",
+		"/.well-known/oauth-protected-resource/mcp",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, p, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("POST %s: status = %d, want 405", p, rec.Code)
+			}
+		})
+	}
+}
+
+// TestMount_OAuthWithoutTrailingSlashRedirects locks in stdlib ServeMux's
+// behaviour for /oauth (no trailing slash): when only /oauth/ is
+// registered, ServeMux issues a method-preserving 308 (or 307 on older Go
+// versions) redirect to /oauth/. Documented here so a future refactor
+// doesn't silently change this semantics — OAuth clients append paths
+// like /oauth/authorize directly, so the bare /oauth GET is mostly a
+// human-typed URL.
+func TestMount_OAuthWithoutTrailingSlashRedirects(t *testing.T) {
+	mux := http.NewServeMux()
+	w := newTestWiring(t)
+	w.Mount(mux)
+
+	req := httptest.NewRequest(http.MethodGet, PathPrefix, nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405", rec.Code)
+	if rec.Code != http.StatusTemporaryRedirect && rec.Code != http.StatusPermanentRedirect {
+		t.Fatalf("GET %s: status = %d, want 307 or 308", PathPrefix, rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != PathPrefix+"/" {
+		t.Fatalf("Location = %q, want %q", loc, PathPrefix+"/")
 	}
 }

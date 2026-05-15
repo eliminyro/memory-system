@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/secretmanager v1.18.0
 	github.com/anthropics/anthropic-sdk-go v1.35.0
 	github.com/caarlos0/env/v10 v10.0.0
-	github.com/eliminyro/authlet v1.0.1
+	github.com/eliminyro/authlet v1.0.2
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/modelcontextprotocol/go-sdk v1.3.0
