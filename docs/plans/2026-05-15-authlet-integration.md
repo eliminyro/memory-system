@@ -145,25 +145,24 @@ Verify the OAuth metadata endpoints work:
 
 **Branch:** `mount-authletas` (or combined with Phase C). **PR:** "feat: mount authletas on /mcp + /oauth".
 
-## Phase E — Config + Vault keys
+## Phase E — Config + GCP Secret Manager keys
 
 `internal/config/config.go` additions:
 
 ```go
-AuthletMasterKey   string `env:"AUTHLET_MASTER_KEY"`              // 32-byte base64
+AuthletMasterKey   string `env:"AUTHLET_MASTER_KEY"`              // 32-byte hex (64 chars)
 GoogleClientID     string `env:"MEMORY_MCP_GOOGLE_CLIENT_ID"`
 GoogleClientSecret string `env:"MEMORY_MCP_GOOGLE_CLIENT_SECRET"`
-PublicBaseURL      string `env:"PUBLIC_BASE_URL" envDefault:"https://memory-mcp.a11s.dev"`
 ```
 
-Vault provisioning (one-time):
-- `ansible@common:authlet_master_key_memory_mcp` — generate via `openssl rand -base64 32` (separate from hilo's master key so the two services share no key material)
-- `ansible@common:memory_mcp_google_client_id` — from Google Console after Phase F
-- `ansible@common:memory_mcp_google_client_secret` — from Google Console after Phase F
+Issuer/Audience/redirect URI stay hardcoded constants in `internal/authletas/setup.go` — no `PUBLIC_BASE_URL` needed.
 
-Ansible inventory — wire vault templates into the memory-mcp deployment env block.
+GCP Secret Manager provisioning in project `a11s-dev` (one-time):
+- `memory-mcp-authlet-master-key` — `openssl rand -hex 32` (separate from hilo's master key — no shared key material)
+- `memory-mcp-google-client-id` — from Google Console after Phase F
+- `memory-mcp-google-client-secret` — from Google Console after Phase F
 
-**Branch:** `config-vault`. **PR:** "chore: add authlet config keys".
+Memory-mcp deploys via k8s-forge on GKE (not ansible/vault like hilo), so secrets live in **GCP Secret Manager**, not HashiCorp Vault. Wire them into the `memory-mcp-secrets` `SecretConfig` in `a1/ops/k8s/forge/configs/factories/a11s/memory_mcp.py` via `gcp_secret(...)` refs.
 
 ## Phase F — Create memory-mcp Google OAuth client
 
@@ -174,15 +173,17 @@ Manual step in Google Console (mirrors hilo's setup, just a separate client):
 3. Name: `memory-mcp.a11s.dev`
 4. Authorized redirect URIs: `https://memory-mcp.a11s.dev/oauth/idp/callback`
 5. Audience: same Workspace as hilo (`avantistudios.ai` Internal) — restricts who can sign in
-6. Copy `client_id` and `client_secret` → write to Vault per Phase E
+6. Copy `client_id` and `client_secret` → GCP Secret Manager per Phase E
+
+Note: in 2026-05-15 cutover the user opted to reuse Hilo's existing Google OAuth client and just added memory-mcp's redirect URI to its allow-list, rather than provisioning a separate client. Both approaches work; separate clients give better blast-radius isolation, shared client is one less rotation surface.
 
 No Hilo interaction. No DB seed anywhere.
 
 ## Phase G — Deploy + verify
 
-1. Ansible inventory bump for memory-mcp (new env vars).
+1. k8s-forge factory bump (MR on `a11s.ai/a1`) — add the three new env vars to the `memory-mcp-secrets` SecretConfig in `ops/k8s/forge/configs/factories/a11s/memory_mcp.py`.
 2. Build + push image (Woodpecker on memory-system master after PRs merge).
-3. Deploy.
+3. Deploy via scheduled k8s-forge pipeline; manually `kubectl rollout restart deployment/memory-mcp -n a11s` if the running pod needs to pick up a fresh `:latest` (imagePullPolicy:Always pulls on container start, not while running).
 4. Backfill `tenant_users`:
    ```sql
    INSERT INTO tenant_users (email, tenant_id, role) VALUES
@@ -191,8 +192,18 @@ No Hilo interaction. No DB seed anywhere.
 5. Smoke test PRM/AS metadata endpoints (curl from laptop).
 6. MCP Inspector E2E:
    `npx @modelcontextprotocol/inspector@latest --url https://memory-mcp.a11s.dev/mcp`
-   → DCR → /authorize → redirect to Hilo → Hilo redirects to Google → return chain → /token → /mcp call works.
+   → DCR → /authorize → redirect to Google → return chain → /token → /mcp call works.
+   (Topology change 2026-05-15: memory-mcp federates DIRECTLY to Google; no Hilo→Memory MCP coupling.)
 7. Claude.ai Connector: add `https://memory-mcp.a11s.dev/mcp` as custom connector.
+
+## Status (2026-05-15)
+
+All phases complete. memory-mcp authlet is live in prod:
+- AS metadata, PRM, JWKS, /oauth/*, and bearer-protected /mcp all serving.
+- tenant_users backfilled (`pe@avantistudios.ai` → tenant `8e1adf8b-...`, role `admin`).
+- CORS middleware on the OAuth/MCP surface (commit `f991b96`); without it MCP Inspector browser preflight failed on `/.well-known/oauth-authorization-server` and `/oauth/token`.
+- MCP Inspector E2E succeeded (DCR → Google → JWT → tools list).
+- Claude.ai Connector step remains user-driven (not yet attempted).
 
 ## Non-Goals (per design spec backlog)
 
