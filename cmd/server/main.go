@@ -18,6 +18,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/config"
 	"github.com/eliminyro/memory-system/internal/database"
 	"github.com/eliminyro/memory-system/internal/mcp"
+	"github.com/eliminyro/memory-system/internal/middleware"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
 	"github.com/eliminyro/memory-system/internal/staleness"
@@ -177,7 +178,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         cfg.ServerAddr,
-		Handler:      mux,
+		Handler:      middleware.CORS(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
