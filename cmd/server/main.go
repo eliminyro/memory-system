@@ -115,18 +115,26 @@ func main() {
 	keyValidator := auth.NewAPIKeyValidator(db)
 	apiKeyMW := auth.APIKeyMiddleware(keyValidator)
 
-	// authlet OAuth 2.1 / OIDC AS. TrySetup returns nil and logs a warn
-	// when the required env (AUTHLET_MASTER_KEY, MEMORY_MCP_GOOGLE_CLIENT_*)
-	// is missing or when upstream OIDC discovery fails — boot still succeeds
-	// and /mcp serves API-key auth only.
-	authletWiring := authletas.TrySetup(
-		rootCtx,
-		db,
-		authletstore.New(db),
-		cfg.GoogleClientID,
-		cfg.GoogleClientSecret,
-		slog.Default(),
-	)
+	// authlet OAuth 2.1 / OIDC AS. When both Google client envs are set,
+	// the operator has opted into OAuth and any Setup error (malformed
+	// master key, OIDC discovery failure, etc) is fatal — the legacy
+	// silent-downgrade behavior masked deployment bugs. When the Google
+	// envs are unset, /mcp serves API-key auth only and Setup is skipped.
+	var authletWiring *authletas.Wiring
+	if cfg.AuthletEnabled() {
+		authletWiring, err = authletas.Setup(
+			rootCtx,
+			db,
+			authletstore.New(db),
+			cfg.GoogleClientID,
+			cfg.GoogleClientSecret,
+			slog.Default(),
+		)
+		if err != nil {
+			slog.Error("authlet setup failed", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	// HTTP server
 	mux := http.NewServeMux()

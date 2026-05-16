@@ -101,6 +101,43 @@ func TestParseTenantDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresBothGoogleEnvsOrNeither(t *testing.T) {
+	cases := []struct {
+		name        string
+		clientID    string
+		clientSec   string
+		wantErr     string
+		wantEnabled bool
+	}{
+		{name: "neither set: ok, authlet disabled", wantEnabled: false},
+		{name: "both set: ok, authlet enabled", clientID: "id", clientSec: "sec", wantEnabled: true},
+		{name: "only id set fails", clientID: "id", wantErr: "MEMORY_MCP_GOOGLE_CLIENT"},
+		{name: "only secret set fails", clientSec: "sec", wantErr: "MEMORY_MCP_GOOGLE_CLIENT"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_ID", tc.clientID)
+			t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_SECRET", tc.clientSec)
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %q", tc.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := cfg.AuthletEnabled(); got != tc.wantEnabled {
+				t.Fatalf("AuthletEnabled=%v want %v", got, tc.wantEnabled)
+			}
+		})
+	}
+}
+
 func TestDefaultTenantDefaults(t *testing.T) {
 	got := DefaultTenantDefaults()
 	want := TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
