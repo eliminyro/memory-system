@@ -526,6 +526,13 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 	if tid == uuid.Nil {
 		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
 	}
+	// Treat a call with no fields as a status read: return the current row
+	// without touching the DB or the audit log. Callers (including UI / CLI
+	// probes) use this shape to inspect current settings without leaving a
+	// "noop" override_log entry or bumping updated_at.
+	if stalenessMode == nil && duplicateGuard == nil && cleanupScanEnabled == nil {
+		return s.tenants.GetByID(ctx, tid)
+	}
 	tenant, err := s.applyTenantPatch(ctx, tid, UpdateTenantFields{
 		StalenessMode:      stalenessMode,
 		DuplicateGuard:     duplicateGuard,
