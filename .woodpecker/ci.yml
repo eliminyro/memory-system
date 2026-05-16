@@ -2,6 +2,14 @@ when:
   - event: [push, pull_request]
     branch: master
 
+services:
+  - name: postgres
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: memory
+      POSTGRES_DB: memory_test
+
 steps:
   - name: test
     image: ghcr.io/eliminyro/go-ci:latest
@@ -18,6 +26,27 @@ steps:
       - git diff --exit-code HEAD
     depends_on: []
 
+  - name: smoke
+    image: ghcr.io/eliminyro/go-ci:latest
+    environment:
+      DATABASE_URL: postgres://memory:memory@postgres:5432/memory_test?sslmode=disable
+      SERVER_ADDR: ":8080"
+    volumes:
+      - /tmp/memory-system-ci/go-cache:/root/.cache/go-build
+      - /tmp/memory-system-ci/go-mod:/go/pkg/mod
+    commands:
+      - 'trap "echo ---server.log---; cat /tmp/server.log 2>/dev/null || true" EXIT'
+      - until PGPASSWORD=memory pg_isready -h postgres -U memory -d memory_test; do sleep 1; done
+      - go build -o /tmp/memory-server ./cmd/server
+      - /tmp/memory-server > /tmp/server.log 2>&1 &
+      - SERVER_PID=$!
+      - for i in $(seq 1 30); do curl -sf http://localhost:8080/health > /dev/null && break; sleep 1; done
+      - 'curl -sSf -o /dev/null -w "health=%{http_code}\n" http://localhost:8080/health | grep -q health=200'
+      - 'STATUS=$(curl -sS -o /tmp/mcp-body.txt -w "%{http_code} %{content_type}" -X POST http://localhost:8080/mcp); echo "/mcp -> $STATUS"; echo "$STATUS" | grep -q "^401 application/json"'
+      - grep -q '"error"' /tmp/mcp-body.txt
+      - kill $SERVER_PID 2>/dev/null || true
+    depends_on: []
+
   - name: auto-merge
     image: curlimages/curl
     environment:
@@ -28,6 +57,7 @@ steps:
     depends_on:
       - test
       - fmt
+      - smoke
     when:
       - event: pull_request
 
@@ -52,5 +82,6 @@ steps:
     depends_on:
       - test
       - fmt
+      - smoke
     when:
       - event: push
