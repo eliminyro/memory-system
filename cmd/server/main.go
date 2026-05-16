@@ -169,15 +169,20 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		// /ready is unauthenticated (k8s probes). The driver's err.Error()
+		// can include the DB host:port, the credential outcome, or the
+		// internal hostname — those go to the log, not the response body.
 		sqlDB, err := db.DB()
 		if err != nil {
+			slog.Error("readiness: db handle unavailable", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("db: " + err.Error()))
+			_, _ = w.Write([]byte("db unavailable"))
 			return
 		}
 		if err := sqlDB.PingContext(r.Context()); err != nil {
+			slog.Error("readiness: db ping failed", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("db ping: " + err.Error()))
+			_, _ = w.Write([]byte("db unavailable"))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
