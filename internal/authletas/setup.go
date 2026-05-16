@@ -192,7 +192,7 @@ func Setup(
 		Issuer:              Issuer,
 		PathPrefix:          PathPrefix,
 		Upstream:            upstream,
-		UserResolver:        &MemoryUserResolver{DB: db},
+		UserResolver:        &MemoryUserResolver{DB: db, Logger: logger},
 		Storage:             store,
 		KeyManager:          mgr,
 		AdditionalClaimsCtx: additionalClaims,
