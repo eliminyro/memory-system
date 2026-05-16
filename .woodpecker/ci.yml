@@ -1,5 +1,5 @@
 when:
-  - event: push
+  - event: [push, pull_request]
     branch: master
 
 steps:
@@ -17,6 +17,19 @@ steps:
       - gofmt -w .
       - git diff --exit-code HEAD
     depends_on: []
+
+  - name: auto-merge
+    image: curlimages/curl
+    environment:
+      GH_TOKEN:
+        from_secret: gh_repo_token
+    commands:
+      - 'curl -sf -X PUT -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$CI_REPO/pulls/$CI_COMMIT_PULL_REQUEST/merge" -d "{\"merge_method\":\"squash\"}"'
+    depends_on:
+      - test
+      - fmt
+    when:
+      - event: pull_request
 
   - name: build-and-push
     image: docker:27
@@ -39,3 +52,5 @@ steps:
     depends_on:
       - test
       - fmt
+    when:
+      - event: push
