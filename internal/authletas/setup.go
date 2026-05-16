@@ -228,34 +228,6 @@ func Setup(
 	}, nil
 }
 
-// TrySetup wraps Setup so a missing or unreachable OIDC provider does
-// not block server boot. On any Setup error the returned wiring is nil
-// and the error is logged at warn level via the supplied logger.
-// Callers must check for nil before mounting AS routes or invoking
-// DualAuth — the existing nil-guard pattern falls back to legacy
-// API-key auth on /mcp and omits /oauth/* entirely.
-//
-// Intended for environments that have not yet configured an OIDC
-// provider (test backends, fresh installs). Production deployments
-// expect Setup to succeed and should monitor for this warning.
-func TrySetup(
-	ctx context.Context,
-	db *gorm.DB,
-	store storage.Storage,
-	googleClientID, googleClientSecret string,
-	logger *slog.Logger,
-) *Wiring {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	w, err := Setup(ctx, db, store, googleClientID, googleClientSecret, logger)
-	if err != nil {
-		logger.Warn("authlet setup skipped — running without OAuth", "err", err)
-		return nil
-	}
-	return w
-}
-
 // lookupTenantEmail returns the email of any tenant_user row matching
 // tenantID, or the empty string when none exists or on any DB error.
 // Errors are logged at warn; callers map a "" result to a missing claim

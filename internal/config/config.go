@@ -47,12 +47,15 @@ type Config struct {
 	TenantDefaults     TenantDefaults
 
 	// authlet — OAuth 2.1 / OIDC authorization server for the /mcp endpoint.
-	// AuthletMasterKey is a 32-byte base64-encoded key used to encrypt the
+	// AuthletMasterKey is a 32-byte hex-encoded key used to encrypt the
 	// AS signing-key material at rest. GoogleClientID/Secret identify
 	// memory-mcp as an OAuth client to Google (the upstream IdP); these are
-	// distinct from any other deployment's Google client. When any of the
-	// three are empty, authlet.TrySetup logs a warning and boots without
-	// the OAuth path — /mcp falls back to API-key auth only.
+	// distinct from any other deployment's Google client.
+	//
+	// When both Google client envs are set the operator has opted into the
+	// authlet path and authletas.Setup must succeed at boot — any error
+	// (including a malformed master key) is fatal. When the Google envs
+	// are unset, /mcp serves API-key auth only and authlet is skipped.
 	AuthletMasterKey   string `env:"AUTHLET_MASTER_KEY"`
 	GoogleClientID     string `env:"MEMORY_MCP_GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `env:"MEMORY_MCP_GOOGLE_CLIENT_SECRET"`
@@ -136,7 +139,23 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse MEMORY_DEFAULT_OPTS: %w", err)
 	}
 	cfg.TenantDefaults = td
+
+	// MEMORY_MCP_GOOGLE_CLIENT_ID and MEMORY_MCP_GOOGLE_CLIENT_SECRET are
+	// the OAuth opt-in signal. One without the other is a deployment bug:
+	// authlet's OIDC discovery against Google needs both to succeed.
+	if (cfg.GoogleClientID == "") != (cfg.GoogleClientSecret == "") {
+		return nil, fmt.Errorf("MEMORY_MCP_GOOGLE_CLIENT_ID and MEMORY_MCP_GOOGLE_CLIENT_SECRET must be set together")
+	}
+
 	return cfg, nil
+}
+
+// AuthletEnabled reports whether the operator has opted into the authlet
+// OAuth path by setting both Google client envs. When true, the caller must
+// require authletas.Setup to succeed (fail-fast on misconfig). When false,
+// the legacy API-key-only path is the intended mode.
+func (c *Config) AuthletEnabled() bool {
+	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
 }
 
 // EmbeddingCfg converts config fields into a service.EmbeddingConfig.
