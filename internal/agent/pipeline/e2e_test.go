@@ -262,20 +262,26 @@ func TestE2E_LongSession_ChunkedExtractDedupes(t *testing.T) {
 	assert.Equal(t, int64(1), h.CountDocuments())
 }
 
-func TestE2E_ExtractorInvalidJSON_Errors(t *testing.T) {
+func TestE2E_ExtractorInvalidJSON_DropsChunk(t *testing.T) {
 	t.Parallel()
 	h := e2etest.New(t)
 	ctx := context.Background()
 
 	h.LLM.Queue(e2etest.FakeResponse{Out: "this is not JSON, just garbage"})
 
+	// Production contract: a chunk that fails to parse is logged and dropped,
+	// not propagated as an error — one bad chunk must not kill the whole
+	// capture. Result: zero candidates, zero DB writes, reviewer short-circuits
+	// on empty input so it's never called.
 	candidates, err := pipeline.Extract(ctx, h.LLM, h.Model, e2etest.SessionWithText("body"))
-	require.Error(t, err, "extractor must surface JSON parse failure")
-	assert.Nil(t, candidates)
+	require.NoError(t, err)
+	assert.Empty(t, candidates, "garbage chunk must produce no candidates")
 
-	// Reviewer must never have been called.
-	calls := h.LLM.Calls()
-	assert.Len(t, calls, 1)
+	reviewed, err := pipeline.Review(ctx, h.LLM, h.Model, h.MCPClient, candidates)
+	require.NoError(t, err)
+	assert.Empty(t, reviewed)
+
+	assert.Len(t, h.LLM.Calls(), 1, "only the extractor was called; reviewer skipped on empty candidates")
 	assert.Equal(t, int64(0), h.CountDocuments())
 }
 
