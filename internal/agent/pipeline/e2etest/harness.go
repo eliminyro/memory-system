@@ -157,10 +157,12 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// pgvectorOnce ensures the `vector` extension is created exactly once per
-// test process. Concurrent `CREATE EXTENSION IF NOT EXISTS` from parallel
-// tests races on pg_extension_name_index even with IF NOT EXISTS, so we
-// serialize the first install behind a global once.
+// pgvectorOnce serializes pgvector extension setup within a single test
+// process. The harder race is cross-process: the smoke step's server binary
+// runs in parallel with `go test` and also does `CREATE EXTENSION IF NOT
+// EXISTS vector` — two concurrent sessions racing on pg_extension_name_index
+// can both hit a unique-constraint violation despite the IF NOT EXISTS guard.
+// We tolerate that by checking pg_extension before and (on error) after.
 var (
 	pgvectorOnce sync.Once
 	pgvectorErr  error
@@ -178,11 +180,28 @@ func ensurePgvector(dbURL string) error {
 				_ = sqlDB.Close()
 			}
 		}()
+
+		if pgvectorInstalled(admin) {
+			return
+		}
 		if err := admin.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+			// Concurrent installer (smoke step's server binary) likely won the
+			// race. Verify the extension landed; if so, treat as success.
+			if pgvectorInstalled(admin) {
+				return
+			}
 			pgvectorErr = fmt.Errorf("enable pgvector: %w", err)
 		}
 	})
 	return pgvectorErr
+}
+
+func pgvectorInstalled(db *gorm.DB) bool {
+	var count int64
+	if err := db.Raw("SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector'").Scan(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
 }
 
 // openWithSchema creates a fresh Postgres schema and returns a *gorm.DB
