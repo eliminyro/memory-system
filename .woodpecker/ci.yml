@@ -13,11 +13,14 @@ services:
 steps:
   - name: test
     image: ghcr.io/eliminyro/go-ci:latest
+    environment:
+      TEST_DATABASE_URL: postgres://memory:memory@postgres:5432/memory_test?sslmode=disable
     volumes:
       - /tmp/memory-system-ci/go-cache:/root/.cache/go-build
       - /tmp/memory-system-ci/go-mod:/go/pkg/mod
     commands:
-      - go test -v ./...
+      - until PGPASSWORD=memory pg_isready -h postgres -U memory -d memory_test; do sleep 1; done
+      - go test -v -tags=integration ./...
 
   - name: fmt
     image: ghcr.io/eliminyro/go-ci:latest

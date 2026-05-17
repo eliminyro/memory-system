@@ -33,7 +33,7 @@ Respond with ONLY a JSON array of verdict objects, one per candidate IN THE SAME
 Each object has ONLY these fields: "verdict", "reason", and optionally "merge_target".
 Do NOT include the original candidate fields (path, heading, content, type) — they are tracked separately.`
 
-func Review(ctx context.Context, client *claude.Client, model string, mcp *mcpclient.Client, candidates []Candidate) ([]ReviewedCandidate, error) {
+func Review(ctx context.Context, llm claude.LLM, model string, mcp *mcpclient.Client, candidates []Candidate) ([]ReviewedCandidate, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -61,7 +61,7 @@ func Review(ctx context.Context, client *claude.Client, model string, mcp *mcpcl
 		return nil, fmt.Errorf("marshal reviewer input: %w", err)
 	}
 
-	response, err := client.Complete(ctx, model, reviewerSystemPrompt, string(input))
+	response, err := llm.Complete(ctx, model, reviewerSystemPrompt, string(input))
 	if err != nil {
 		return nil, fmt.Errorf("reviewer: %w", err)
 	}
