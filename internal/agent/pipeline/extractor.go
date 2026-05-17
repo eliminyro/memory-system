@@ -34,7 +34,7 @@ Respond with ONLY a JSON array of candidates. No other text.`
 
 const maxChunkRunes = 25_000
 
-func Extract(ctx context.Context, client *claude.Client, model string, session *transcript.Session) ([]Candidate, error) {
+func Extract(ctx context.Context, llm claude.LLM, model string, session *transcript.Session) ([]Candidate, error) {
 	if len(session.Messages) == 0 {
 		return nil, nil
 	}
@@ -51,7 +51,7 @@ func Extract(ctx context.Context, client *claude.Client, model string, session *
 			prompt = fmt.Sprintf("[Chunk %d of %d]\n\n%s", i+1, len(chunks), chunk)
 		}
 
-		response, err := client.Complete(ctx, model, extractorSystemPrompt, prompt)
+		response, err := llm.Complete(ctx, model, extractorSystemPrompt, prompt)
 		if err != nil {
 			slog.Error("extractor chunk failed", "chunk", i+1, "error", err)
 			continue // non-fatal: try remaining chunks

@@ -9,6 +9,8 @@ func NewEmbeddingProvider(provider string, cfg EmbeddingConfig) (EmbeddingProvid
 		return NewOllamaEmbedder(cfg.OllamaURL, cfg.OllamaModel, cfg.Dimensions), nil
 	case "gcp":
 		return NewGCPEmbedder(cfg.GCPProject, cfg.GCPLocation, cfg.GCPModel, cfg.Dimensions)
+	case "fake":
+		return NewFakeEmbedder(cfg.Dimensions), nil
 	default:
 		return nil, fmt.Errorf("unknown embedding provider: %s", provider)
 	}

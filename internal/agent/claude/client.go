@@ -19,6 +19,13 @@ type Client struct {
 	inner *anthropic.Client // non-nil for "api" mode
 }
 
+// LLM is the surface the pipeline uses. *Client satisfies it via Complete.
+type LLM interface {
+	Complete(ctx context.Context, model, system, user string) (string, error)
+}
+
+var _ LLM = (*Client)(nil)
+
 func NewClient(auth, apiKey string) (*Client, error) {
 	switch auth {
 	case "api":
