@@ -192,7 +192,10 @@ func appendSearchPath(t testing.TB, dbURL, schema string) string {
 		t.Fatalf("parse db url: %v", err)
 	}
 	q := u.Query()
-	q.Set("search_path", schema)
+	// Include public in the search_path so the pgvector extension's `vector`
+	// type (installed in public by the pgvector image) is resolvable from
+	// the per-test schema during migrations and queries.
+	q.Set("search_path", schema+",public")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
