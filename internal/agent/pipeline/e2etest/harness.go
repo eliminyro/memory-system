@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,11 +157,44 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// pgvectorOnce ensures the `vector` extension is created exactly once per
+// test process. Concurrent `CREATE EXTENSION IF NOT EXISTS` from parallel
+// tests races on pg_extension_name_index even with IF NOT EXISTS, so we
+// serialize the first install behind a global once.
+var (
+	pgvectorOnce sync.Once
+	pgvectorErr  error
+)
+
+func ensurePgvector(dbURL string) error {
+	pgvectorOnce.Do(func() {
+		admin, err := gorm.Open(postgres.Open(dbURL), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+		if err != nil {
+			pgvectorErr = fmt.Errorf("open admin db for extension: %w", err)
+			return
+		}
+		defer func() {
+			if sqlDB, err := admin.DB(); err == nil {
+				_ = sqlDB.Close()
+			}
+		}()
+		if err := admin.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+			pgvectorErr = fmt.Errorf("enable pgvector: %w", err)
+		}
+	})
+	return pgvectorErr
+}
+
 // openWithSchema creates a fresh Postgres schema and returns a *gorm.DB
 // scoped to it via search_path. The admin connection used to create the
 // schema is closed before returning — only the scoped handle survives.
 func openWithSchema(t testing.TB, dbURL, schema string) *gorm.DB {
 	t.Helper()
+
+	if err := ensurePgvector(dbURL); err != nil {
+		t.Fatalf("ensure pgvector: %v", err)
+	}
+
 	admin, err := gorm.Open(postgres.Open(dbURL), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open admin db: %v", err)
@@ -176,11 +210,6 @@ func openWithSchema(t testing.TB, dbURL, schema string) *gorm.DB {
 	db, err := gorm.Open(postgres.Open(scopedURL), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open scoped db: %v", err)
-	}
-	// pgvector lives in the schema where it's first created — enable here
-	// so the migration's vector columns resolve inside our isolated schema.
-	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
-		t.Fatalf("enable pgvector: %v", err)
 	}
 	return db
 }
