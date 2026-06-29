@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ type SearchResult struct {
 	Heading        *string    `json:"heading,omitempty"`
 	Content        string     `json:"content,omitempty"`
 	Score          float64    `json:"score"`
+	Tier           string     `json:"relevance,omitempty"` // high | standard | low — calibrated from Score
 	Category       string     `json:"category"`
 	Subcategory    *string    `json:"subcategory,omitempty"`
 	Slug           string     `json:"slug"`
@@ -54,6 +56,117 @@ type SearchParams struct {
 	Limit       int
 }
 
+// Hybrid retrieval fusion constants. Weights and floor follow the
+// production-tested values from the "RAG to memory systems" guidance: lexical
+// signal is weighted higher than vector because a row that matches BOTH is
+// genuinely relevant, while the long tail of weak vector-only matches is noise.
+const (
+	fuseVecWeight = 0.4 // weight of vector similarity when both signals fire
+	fuseLexWeight = 0.6 // weight of lexical rank when both signals fire
+	scoreFloor    = 0.4 // drop fused scores below this (weak-match noise)
+	tierHighMin   = 0.7 // >= this is "high"
+	tierStdMin    = 0.5 // >= this is "standard"; below is "low"
+)
+
+// hybridRow is the raw candidate scanned from the FULL OUTER JOIN: a section
+// that matched the vector search, the lexical search, or both. Fusion happens
+// in Go (fuseHybrid) so normalization, weighting, the floor, and tiering are
+// pure and unit-testable.
+type hybridRow struct {
+	SectionID      uuid.UUID  `gorm:"column:section_id"`
+	DocumentID     uuid.UUID  `gorm:"column:document_id"`
+	Heading        *string    `gorm:"column:heading"`
+	Content        string     `gorm:"column:content"`
+	VecSim         float64    `gorm:"column:vec_sim"`
+	LexRank        float64    `gorm:"column:lex_rank"`
+	HasVec         bool       `gorm:"column:has_vec"`
+	HasLex         bool       `gorm:"column:has_lex"`
+	Category       string     `gorm:"column:category"`
+	Subcategory    *string    `gorm:"column:subcategory"`
+	Slug           string     `gorm:"column:slug"`
+	DocTitle       string     `gorm:"column:doc_title"`
+	DocType        string     `gorm:"column:doc_type"`
+	VerifiedAt     *time.Time `gorm:"column:verified_at"`
+	SectionCreated time.Time  `gorm:"column:section_created"`
+}
+
+// relevanceTier calibrates a fused score into a label the model can act on
+// directly, instead of asking it to interpret a raw float.
+func relevanceTier(score float64) string {
+	switch {
+	case score >= tierHighMin:
+		return "high"
+	case score >= tierStdMin:
+		return "standard"
+	default:
+		return "low"
+	}
+}
+
+// fuseHybrid normalizes lexical ranks against the batch max, fuses them with
+// vector similarity, drops sub-floor results, calibrates tiers, sorts
+// descending, and caps to limit. Lexical-only matches (no vector hit) are
+// retained — that recall is the whole point of the FULL OUTER JOIN — but
+// weighted by the lexical weight alone, so they top out at the "standard" tier.
+func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
+	var maxLex float64
+	for _, r := range rows {
+		if r.HasLex && r.LexRank > maxLex {
+			maxLex = r.LexRank
+		}
+	}
+
+	out := make([]SearchResult, 0, len(rows))
+	for _, r := range rows {
+		vec := r.VecSim
+		if vec < 0 {
+			vec = 0 // cosine similarity can go negative; clamp.
+		}
+		var lex float64
+		if r.HasLex && maxLex > 0 {
+			lex = r.LexRank / maxLex
+		}
+
+		var score float64
+		switch {
+		case r.HasVec && r.HasLex:
+			score = fuseVecWeight*vec + fuseLexWeight*lex
+		case r.HasVec:
+			score = vec
+		default: // lexical-only
+			score = fuseLexWeight * lex
+		}
+		if score < scoreFloor {
+			continue
+		}
+
+		out = append(out, SearchResult{
+			SectionID:      r.SectionID,
+			DocumentID:     r.DocumentID,
+			Heading:        r.Heading,
+			Content:        r.Content,
+			Score:          score,
+			Tier:           relevanceTier(score),
+			Category:       r.Category,
+			Subcategory:    r.Subcategory,
+			Slug:           r.Slug,
+			DocTitle:       r.DocTitle,
+			DocType:        r.DocType,
+			VerifiedAt:     r.VerifiedAt,
+			SectionCreated: r.SectionCreated,
+		})
+	}
+
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// HybridSearch gathers vector and lexical candidates (each scope-filtered and
+// capped) via a FULL OUTER JOIN so lexical-only matches are recalled, then
+// fuses them in Go. Scope filters run inside both CTEs, before ranking.
 func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([]SearchResult, error) {
 	if p.Limit <= 0 {
 		p.Limit = 10
@@ -64,8 +177,9 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 
 	sql := `
 		WITH semantic AS (
-			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at, s.created_at AS section_created,
-				   1 - (s.embedding <=> ?::vector) AS score
+			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
+				   s.created_at AS section_created,
+				   1 - (s.embedding <=> ?::vector) AS vec_sim
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
 			WHERE d.tenant_id IN ?
@@ -76,34 +190,45 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			LIMIT 20
 		),
 		keyword AS (
-			SELECT s.id, ts_rank(s.tsv, plainto_tsquery('english', ?)) AS score
+			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
+				   s.created_at AS section_created,
+				   ts_rank(s.tsv, plainto_tsquery('english', ?)) AS lex_rank
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
 			WHERE d.tenant_id IN ?
+			  AND (?::text IS NULL OR d.category = ?)
+			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND s.tsv @@ plainto_tsquery('english', ?)
+			ORDER BY lex_rank DESC
+			LIMIT 20
 		)
-		SELECT sem.id AS section_id, sem.document_id, sem.heading, sem.content,
-			   (0.7 * sem.score + 0.3 * COALESCE(kw.score, 0)) AS score,
-			   d.category, d.subcategory, d.slug, d.title AS doc_title,
-			   d.doc_type, sem.verified_at, sem.section_created
+		SELECT COALESCE(sem.id, kw.id)                       AS section_id,
+			   COALESCE(sem.document_id, kw.document_id)     AS document_id,
+			   COALESCE(sem.heading, kw.heading)             AS heading,
+			   COALESCE(sem.content, kw.content)             AS content,
+			   COALESCE(sem.vec_sim, 0)                      AS vec_sim,
+			   COALESCE(kw.lex_rank, 0)                      AS lex_rank,
+			   (sem.id IS NOT NULL)                          AS has_vec,
+			   (kw.id IS NOT NULL)                           AS has_lex,
+			   d.category, d.subcategory, d.slug, d.title    AS doc_title,
+			   d.doc_type,
+			   COALESCE(sem.verified_at, kw.verified_at)     AS verified_at,
+			   COALESCE(sem.section_created, kw.section_created) AS section_created
 		FROM semantic sem
-		LEFT JOIN keyword kw ON kw.id = sem.id
-		JOIN documents d ON d.id = sem.document_id
-		ORDER BY score DESC
-		LIMIT ?
+		FULL OUTER JOIN keyword kw ON kw.id = sem.id
+		JOIN documents d ON d.id = COALESCE(sem.document_id, kw.document_id)
 	`
 
 	args := []any{
-		vec, tenants, p.Category, p.Category, p.Subcategory, p.Subcategory, vec,
-		p.Query, tenants, p.Query,
-		p.Limit,
+		vec, tenants, p.Category, p.Category, p.Subcategory, p.Subcategory, vec, // semantic
+		p.Query, tenants, p.Category, p.Category, p.Subcategory, p.Subcategory, p.Query, // keyword
 	}
 
-	var results []SearchResult
-	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {
+	var rows []hybridRow
+	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
-	return results, nil
+	return fuseHybrid(rows, p.Limit), nil
 }
 
 type RelatedResult struct {
