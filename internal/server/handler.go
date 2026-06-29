@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/authletas"
 	"github.com/eliminyro/memory-system/internal/mcp"
 	"github.com/eliminyro/memory-system/internal/middleware"
+	"github.com/eliminyro/memory-system/internal/version"
 )
 
 // Deps is the dependency bundle for NewHandler. Callers (cmd/server, e2e
@@ -48,16 +50,28 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/mcp/", mcpHandler)
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	// Operational endpoints live under the /~/ prefix (liveness, readiness,
+	// version). They are unauthenticated — probes and version checks must work
+	// without credentials.
+	mux.HandleFunc("/~/health", healthHandler)
+	mux.HandleFunc("/~/ready", readyHandler(d.DB))
+	mux.HandleFunc("/~/version", versionHandler)
 
-	// /ready exposes db ping status. Driver errors are logged but never written
-	// to the response body — driver error strings can contain connection-string
-	// fragments or credentials, so we keep them out of probe responses.
-	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		sqlDB, err := d.DB.DB()
+	return middleware.CORS(mux)
+}
+
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+// readyHandler exposes db ping status. Driver errors are logged but never
+// written to the response body — driver error strings can contain
+// connection-string fragments or credentials, so we keep them out of probe
+// responses.
+func readyHandler(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sqlDB, err := db.DB()
 		if err != nil {
 			slog.Error("readiness: db handle unavailable", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -72,7 +86,15 @@ func NewHandler(d Deps) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready"))
-	})
+	}
+}
 
-	return middleware.CORS(mux)
+// versionHandler returns the server version and build commit as JSON.
+func versionHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"version": version.Version,
+		"commit":  version.Commit,
+	})
 }

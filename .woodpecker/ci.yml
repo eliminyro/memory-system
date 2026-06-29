@@ -46,8 +46,8 @@ steps:
       - go build -o /tmp/memory-server ./cmd/server
       - /tmp/memory-server > /tmp/server.log 2>&1 &
       - SERVER_PID=$!
-      - ci wait --http http://localhost:8080/health
-      - 'curl -sSf -o /dev/null -w "health=%{http_code}\n" http://localhost:8080/health | grep -q health=200'
+      - ci wait --http http://localhost:8080/~/health
+      - 'curl -sSf -o /dev/null -w "health=%{http_code}\n" http://localhost:8080/~/health | grep -q health=200'
       - 'STATUS=$(curl -sS -o /tmp/mcp-body.txt -w "%{http_code} %{content_type}" -X POST http://localhost:8080/mcp); echo "/mcp -> $STATUS"; echo "$STATUS" | grep -q "^401 application/json"'
       - grep -q '"error"' /tmp/mcp-body.txt
       - kill $SERVER_PID 2>/dev/null || true
