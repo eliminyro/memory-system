@@ -65,6 +65,10 @@ type Config struct {
 	AuthletMasterKey   string `env:"AUTHLET_MASTER_KEY"`
 	GoogleClientID     string `env:"MEMORY_MCP_GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `env:"MEMORY_MCP_GOOGLE_CLIENT_SECRET"`
+
+	// UIClientID is the pre-registered public PKCE OAuth client the web UI
+	// uses (redirect_uri = Issuer + "/ui"). Non-secret; served to the page.
+	UIClientID string `env:"MEMORY_UI_CLIENT_ID"`
 }
 
 // TenantDefaults is the operator-chosen baseline for the three per-tenant
