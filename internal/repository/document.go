@@ -50,6 +50,7 @@ func (r *DocumentRepository) GetByPath(ctx context.Context, tenantID uuid.UUID, 
 	var doc models.Document
 	q := r.db.WithContext(ctx).
 		Where("tenant_id IN ?", readTenants(tenantID)).
+		Where("archived_at IS NULL").
 		Where("category = ? AND slug = ?", category, slug)
 	if subcategory != nil {
 		q = q.Where("subcategory = ?", *subcategory)
@@ -73,6 +74,7 @@ func (r *DocumentRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id
 	var doc models.Document
 	if err := r.db.WithContext(ctx).
 		Where("tenant_id IN ?", readTenants(tenantID)).
+		Where("archived_at IS NULL").
 		Preload("Sections", func(db *gorm.DB) *gorm.DB {
 			return db.Order("ordinal ASC")
 		}).
@@ -87,7 +89,7 @@ func (r *DocumentRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id
 
 func (r *DocumentRepository) List(ctx context.Context, tenantID uuid.UUID, category *string, subcategory *string) ([]models.Document, error) {
 	var docs []models.Document
-	q := r.db.WithContext(ctx).Where("tenant_id IN ?", readTenants(tenantID))
+	q := r.db.WithContext(ctx).Where("tenant_id IN ?", readTenants(tenantID)).Where("archived_at IS NULL")
 	if category != nil {
 		q = q.Where("category = ?", *category)
 	}
@@ -172,6 +174,7 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UU
 			       string_agg(title, ', ' ORDER BY title) AS topics
 			FROM documents
 			WHERE tenant_id IN ?
+			  AND archived_at IS NULL
 			  AND (?::text IS NULL OR category = ?)
 			GROUP BY category, subcategory
 			ORDER BY category, subcategory
@@ -186,6 +189,7 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UU
 			       title      AS topics
 			FROM documents
 			WHERE tenant_id IN ?
+			  AND archived_at IS NULL
 			  AND (?::text IS NULL OR category = ?)
 			ORDER BY category, subcategory, title
 		`
@@ -199,6 +203,7 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UU
 			       title      AS topics
 			FROM documents
 			WHERE tenant_id IN ?
+			  AND archived_at IS NULL
 			ORDER BY category, subcategory, title
 		`
 		args = []any{tenants}

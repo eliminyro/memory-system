@@ -40,8 +40,10 @@ func (n *Notifier) SendScanSummary(ctx context.Context, stats ScanStats) error {
 			"pairs found: %d\n"+
 			"newly enqueued: %d\n"+
 			"already pending: %d\n"+
+			"docs archived: %d\n"+
+			"docs deleted: %d\n"+
 			"errors: %d",
-		stats.TenantsScanned, stats.PairsFound, stats.PairsInserted, stats.PairsSkipped, stats.Errors,
+		stats.TenantsScanned, stats.PairsFound, stats.PairsInserted, stats.PairsSkipped, stats.DocsArchived, stats.DocsDeleted, stats.Errors,
 	)
 	return n.send(ctx, text)
 }

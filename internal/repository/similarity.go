@@ -67,6 +67,7 @@ func (r *SectionRepository) FindSimilarDocuments(
 		JOIN documents d ON d.id = s.document_id
 		CROSS JOIN unnest(?::vector[]) AS nv(vec)
 		WHERE d.tenant_id IN ?
+		  AND d.archived_at IS NULL
 		  AND NOT (d.category = ? AND COALESCE(d.subcategory, '') = COALESCE(?, '') AND d.slug = ?)
 		  AND s.embedding IS NOT NULL
 		GROUP BY s.document_id, d.category, d.subcategory, d.slug, d.title

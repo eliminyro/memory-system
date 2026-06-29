@@ -152,6 +152,7 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 			FROM documents d
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
 			  AND s.embedding IS NOT NULL
 		)
 		SELECT a.document_id AS doc_a_id, b.document_id AS doc_b_id,

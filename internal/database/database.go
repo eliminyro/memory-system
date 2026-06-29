@@ -77,6 +77,7 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		&models.StalenessThreshold{},
 		&models.OverrideLog{},
 		&models.CleanupQueue{},
+		&models.DeletionEvent{},
 		// authlet tables — Phase A of authlet integration
 		&authletstore.OAuthClient{},
 		&authletstore.OAuthCode{},

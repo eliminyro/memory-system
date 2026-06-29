@@ -38,6 +38,9 @@ type Document struct {
 	DocType     string    `gorm:"size:32;not null;default:'reference';index" json:"doc_type"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// ArchivedAt marks a document retired by the retention sweep. Non-NULL =
+	// excluded from all reads; hard-deleted after the delete grace period.
+	ArchivedAt *time.Time `gorm:"index:idx_documents_archived_at" json:"archived_at,omitempty"`
 
 	Tenant   *Tenant   `gorm:"foreignKey:TenantID" json:"-"`
 	Sections []Section `gorm:"foreignKey:DocumentID;constraint:OnDelete:CASCADE" json:"sections,omitempty"`

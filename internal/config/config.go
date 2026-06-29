@@ -40,6 +40,12 @@ type Config struct {
 	TelegramBotToken     string `env:"TELEGRAM_BOT_TOKEN"`
 	TelegramChatID       string `env:"TELEGRAM_CHAT_ID"`
 
+	// Retention sweep — archives docs unverified past retentionMultiplier ×
+	// the doc_type staleness threshold, then hard-deletes them deleteGraceDays
+	// after archiving. Only runs for tenants with staleness_mode=hard.
+	RetentionMultiplier int `env:"RETENTION_MULTIPLIER" envDefault:"3"`
+	DeleteGraceDays     int `env:"RETENTION_DELETE_GRACE_DAYS" envDefault:"30"`
+
 	// Tenant-toggle defaults. The raw spec comes in via env; cmd/server can
 	// override via --opts before validation. ParseTenantDefaults turns the spec
 	// into the typed TenantDefaults applied at AutoMigrate and tenant-create time.
