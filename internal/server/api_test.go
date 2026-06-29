@@ -101,3 +101,22 @@ func TestUIConfigServed(t *testing.T) {
 		t.Errorf("client_id = %q", body["client_id"])
 	}
 }
+
+func TestUIRedirectPreservesQuery(t *testing.T) {
+	rec := httptest.NewRecorder()
+	uiRedirectHandler(rec, httptest.NewRequest(http.MethodGet, "/ui?code=abc&state=xyz", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/ui/?code=abc&state=xyz" {
+		t.Errorf("Location = %q, want /ui/?code=abc&state=xyz", loc)
+	}
+}
+
+func TestUIRedirectNoQuery(t *testing.T) {
+	rec := httptest.NewRecorder()
+	uiRedirectHandler(rec, httptest.NewRequest(http.MethodGet, "/ui", nil))
+	if loc := rec.Header().Get("Location"); loc != "/ui/" {
+		t.Errorf("Location = %q, want /ui/", loc)
+	}
+}

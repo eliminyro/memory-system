@@ -65,9 +65,7 @@ func NewHandler(d Deps) http.Handler {
 	// the /api routes that return data are what requires the token.
 	uiFiles, uiConfig := uiHandlers(d.UIClientID)
 	mux.HandleFunc("GET /ui/config.json", uiConfig)
-	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui/", http.StatusFound)
-	})
+	mux.HandleFunc("GET /ui", uiRedirectHandler)
 	mux.Handle("GET /ui/", uiFiles)
 
 	// Operational endpoints live under the /~/ prefix (liveness, readiness,
@@ -78,6 +76,18 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("/~/version", versionHandler)
 
 	return middleware.CORS(mux)
+}
+
+// uiRedirectHandler redirects /ui to /ui/ (where the embedded page is served),
+// preserving the query string. authlet returns the OAuth code/state to the
+// registered redirect_uri "/ui"; dropping the query here would lose ?code and
+// loop the login.
+func uiRedirectHandler(w http.ResponseWriter, r *http.Request) {
+	target := "/ui/"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
