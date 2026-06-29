@@ -22,9 +22,10 @@ func NewRetentionRepository(db *gorm.DB) *RetentionRepository {
 
 // ArchiveExpired sets archived_at on documents whose freshest section is older
 // than the cutoff for their doc_type. A document is a candidate only when NO
-// section was verified (or, if never verified, created) on/after the cutoff —
-// i.e. every section is expired. One UPDATE per doc_type keeps the per-type
-// cutoff binding simple.
+// section has been touched on/after the cutoff, where "touched" is the latest
+// of verified_at, updated_at, or created_at — so editing a section (which bumps
+// updated_at but not verified_at) keeps its document alive, not just an explicit
+// mark_verified. One UPDATE per doc_type keeps the per-type cutoff binding simple.
 func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.UUID, cutoffs map[string]time.Time) (int64, error) {
 	const sql = `
 		UPDATE documents d
@@ -35,7 +36,7 @@ func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.
 		  AND NOT EXISTS (
 			SELECT 1 FROM sections s
 			WHERE s.document_id = d.id
-			  AND COALESCE(s.verified_at, s.created_at) >= ?
+			  AND GREATEST(COALESCE(s.verified_at, s.created_at), s.updated_at) >= ?
 		  )
 	`
 	var total int64
