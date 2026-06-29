@@ -183,6 +183,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
 			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
 			  AND (?::text IS NULL OR d.category = ?)
 			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND s.embedding IS NOT NULL
@@ -196,6 +197,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
 			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
 			  AND (?::text IS NULL OR d.category = ?)
 			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND s.tsv @@ plainto_tsquery('english', ?)
@@ -261,6 +263,7 @@ func (r *SectionRepository) GetRelated(ctx context.Context, tenantID uuid.UUID, 
 			JOIN documents d ON d.id = s.document_id
 			WHERE s.document_id != ?
 			  AND d.tenant_id IN ?
+			  AND d.archived_at IS NULL
 			  AND s.embedding IS NOT NULL
 		)
 		SELECT c.document_id, d.category, d.subcategory, d.slug, d.title AS doc_title,

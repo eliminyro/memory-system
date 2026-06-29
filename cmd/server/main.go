@@ -74,6 +74,7 @@ func main() {
 	lintRepo := repository.NewLintRepository(db)
 	overrideRepo := repository.NewOverrideLogRepository(db)
 	cleanupRepo := repository.NewCleanupQueueRepository(db)
+	retentionRepo := repository.NewRetentionRepository(db)
 
 	// Staleness threshold cache — loads from staleness_thresholds table.
 	thresholdStore := staleness.NewThresholdStore(db)
@@ -103,7 +104,11 @@ func main() {
 	// Notifier is nil when Telegram creds aren't set, in which case the scanner
 	// runs silently.
 	cleanupNotifier := cleanup.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
-	cleanupScanner := cleanup.NewScanner(lintRepo, tenantRepo, cleanupRepo, cleanupNotifier, slog.Default())
+	cleanupScanner := cleanup.NewScanner(
+		lintRepo, tenantRepo, cleanupRepo, retentionRepo, thresholdStore,
+		cfg.RetentionMultiplier, cfg.DeleteGraceDays,
+		cleanupNotifier, slog.Default(),
+	)
 	if cfg.CleanupEnabled {
 		cleanupScanner.Start(rootCtx, time.Duration(cfg.CleanupIntervalHours)*time.Hour)
 	}

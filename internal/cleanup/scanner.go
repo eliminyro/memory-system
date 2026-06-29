@@ -16,6 +16,8 @@ import (
 
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/retention"
+	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 // ScanStats summarises one sweep across all tenants.
@@ -25,15 +27,21 @@ type ScanStats struct {
 	PairsInserted  int
 	PairsSkipped   int // already enqueued
 	Errors         int
+	DocsArchived   int
+	DocsDeleted    int
 }
 
 // Scanner runs the near-duplicate scan and keeps cleanup_queue populated.
 type Scanner struct {
-	lint     *repository.LintRepository
-	tenants  *repository.TenantRepository
-	queue    *repository.CleanupQueueRepository
-	notifier *Notifier
-	logger   *slog.Logger
+	lint       *repository.LintRepository
+	tenants    *repository.TenantRepository
+	queue      *repository.CleanupQueueRepository
+	retention  *repository.RetentionRepository
+	thresholds *staleness.ThresholdStore
+	multiplier int
+	graceDays  int
+	notifier   *Notifier
+	logger     *slog.Logger
 
 	// runMu serialises RunOnce so a ticker fire that lands while the previous
 	// sweep is still draining won't produce concurrent upserts (which, absent
@@ -47,15 +55,23 @@ func NewScanner(
 	lint *repository.LintRepository,
 	tenants *repository.TenantRepository,
 	queue *repository.CleanupQueueRepository,
+	retentionRepo *repository.RetentionRepository,
+	thresholds *staleness.ThresholdStore,
+	multiplier int,
+	graceDays int,
 	notifier *Notifier,
 	logger *slog.Logger,
 ) *Scanner {
 	return &Scanner{
-		lint:     lint,
-		tenants:  tenants,
-		queue:    queue,
-		notifier: notifier,
-		logger:   logger,
+		lint:       lint,
+		tenants:    tenants,
+		queue:      queue,
+		retention:  retentionRepo,
+		thresholds: thresholds,
+		multiplier: multiplier,
+		graceDays:  graceDays,
+		notifier:   notifier,
+		logger:     logger,
 	}
 }
 
@@ -74,14 +90,18 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 	}
 
 	for _, tenant := range allTenants {
-		// Opt-in per tenant — skip anyone who didn't enable the scan.
-		if !tenant.CleanupScanEnabled {
-			continue
+		if tenant.CleanupScanEnabled {
+			stats.TenantsScanned++
+			if err := s.scanTenant(ctx, tenant.ID, &stats); err != nil {
+				s.logger.Warn("cleanup scan: tenant failed", "tenant_id", tenant.ID, "error", err)
+				stats.Errors++
+			}
 		}
-		stats.TenantsScanned++
-		if err := s.scanTenant(ctx, tenant.ID, &stats); err != nil {
-			s.logger.Warn("cleanup scan: tenant failed", "tenant_id", tenant.ID, "error", err)
-			stats.Errors++
+		if retentionEligible(tenant) {
+			if err := s.retainTenant(ctx, tenant.ID, &stats); err != nil {
+				s.logger.Warn("retention sweep: tenant failed", "tenant_id", tenant.ID, "error", err)
+				stats.Errors++
+			}
 		}
 	}
 
@@ -146,6 +166,38 @@ func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 	}()
 }
 
+// retentionEligible reports whether the retention sweep should run for a
+// tenant: opted into hard staleness enforcement, and never the shared
+// bootstrap pool (its seed docs are curated, never auto-retired).
+func retentionEligible(t models.Tenant) bool {
+	return t.StalenessMode == models.StalenessModeHard && t.ID != models.BootstrapTenantID
+}
+
+func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *ScanStats) error {
+	now := time.Now()
+	cutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+	for docType := range models.ValidDocTypes {
+		days, err := s.thresholds.DaysFor(ctx, docType)
+		if err != nil {
+			return fmt.Errorf("threshold for %s: %w", docType, err)
+		}
+		cutoffs[docType] = retention.ExpiryCutoff(now, days, s.multiplier)
+	}
+
+	archived, err := s.retention.ArchiveExpired(ctx, tenantID, cutoffs)
+	if err != nil {
+		return err
+	}
+	stats.DocsArchived += int(archived)
+
+	deleted, err := s.retention.DeleteArchived(ctx, tenantID, retention.DeleteCutoff(now, s.graceDays))
+	if err != nil {
+		return err
+	}
+	stats.DocsDeleted += int(deleted)
+	return nil
+}
+
 func (s *Scanner) runAndLog(ctx context.Context) {
 	stats, err := s.RunOnce(ctx)
 	if err != nil {
@@ -158,5 +210,7 @@ func (s *Scanner) runAndLog(ctx context.Context) {
 		"pairs_inserted", stats.PairsInserted,
 		"pairs_skipped", stats.PairsSkipped,
 		"errors", stats.Errors,
+		"docs_archived", stats.DocsArchived,
+		"docs_deleted", stats.DocsDeleted,
 	)
 }
