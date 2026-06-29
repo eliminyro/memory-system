@@ -120,3 +120,33 @@ func TestUIRedirectNoQuery(t *testing.T) {
 		t.Errorf("Location = %q, want /ui/", loc)
 	}
 }
+
+func TestAPIPatchSection_InvalidID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/sections/not-a-uuid", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIVerifySection_InvalidID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/sections/xxx/verify", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIDeleteDocument_InvalidID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/documents/xxx", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
