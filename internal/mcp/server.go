@@ -8,6 +8,7 @@ import (
 
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/service"
+	"github.com/eliminyro/memory-system/internal/version"
 )
 
 type Server struct {
@@ -30,7 +31,7 @@ func NewServer(memory *service.MemoryService, adminEmails []string) *Server {
 
 	impl := &mcpsdk.Implementation{
 		Name:    "memory-mcp",
-		Version: "1.0.0",
+		Version: version.Version,
 	}
 
 	regularInstructions := `Memory MCP server for persistent context across sessions.
