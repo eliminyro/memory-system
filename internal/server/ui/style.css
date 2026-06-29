@@ -98,3 +98,27 @@ main {
 /* Loading / error states */
 .state-msg { color: #666; padding: 2rem 0; text-align: center; }
 .state-err  { color: #c0392b; }
+
+/* Document header row */
+.doc-hdr { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.25rem; }
+.doc-hdr h1 { margin: 0; flex: 1; }
+
+/* Section block */
+.section-block { margin: 1rem 0; padding: 0.75rem 1rem; background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; }
+.section-block.stale { background: #fffbea; border-color: #f0c040; }
+
+/* Section controls row */
+.section-controls { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
+
+/* Section edit textarea */
+.sec-edit-ta { width: 100%; min-height: 12rem; font-family: monospace; font-size: 13px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; resize: vertical; box-sizing: border-box; }
+
+/* Section buttons */
+.sec-btn { padding: 0.25rem 0.6rem; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; cursor: pointer; }
+.sec-btn:hover:not(:disabled) { background: #e8e8e8; }
+.sec-btn:disabled { opacity: 0.5; cursor: default; }
+.sec-btn-primary { background: #0066cc; color: #fff; border-color: #0055aa; }
+.sec-btn-primary:hover:not(:disabled) { background: #0055aa; }
+.sec-btn-danger { background: #fff; color: #c0392b; border-color: #c0392b; }
+.sec-btn-danger:hover:not(:disabled) { background: #fdf0ef; }
+.sec-btn-verified { background: #e6f9ee; color: #1a7a40; border-color: #2ecc71; }

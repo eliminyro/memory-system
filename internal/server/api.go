@@ -28,6 +28,9 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("GET /search", h.getSearch)
 	m.HandleFunc("GET /documents", h.listDocuments)
 	m.HandleFunc("GET /documents/{id}", h.getDocument)
+	m.HandleFunc("PATCH /sections/{id}", h.patchSection)
+	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
+	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 	return m
 }
 
@@ -121,4 +124,58 @@ func (h *apiHandler) getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid section id"})
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Content == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content is required"})
+		return
+	}
+	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, section)
+}
+
+func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid section id"})
+		return
+	}
+	if err := h.memory.MarkVerified(r.Context(), id, nil); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteDocument resolves the doc by id (to its path) then deletes via the
+// audited by-path DeleteDocument — which also refuses common-pool docs.
+func (h *apiHandler) deleteDocument(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+		return
+	}
+	doc, err := h.memory.GetDocumentByID(r.Context(), id, false, "", nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := h.memory.DeleteDocument(r.Context(), doc.Category, doc.Subcategory, doc.Slug, nil); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

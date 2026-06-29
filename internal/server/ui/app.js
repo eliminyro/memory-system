@@ -88,7 +88,9 @@ async function apiFetch(path, opts = {}) {
   });
   if (res.status === 401) { sessionStorage.removeItem("access_token"); await beginLogin(); throw new Error("re-auth"); }
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-  return res.json();
+  if (res.status === 204 || res.headers.get("content-length") === "0") return null;
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : null;
 }
 
 // ── Task 5: Browse / search / read views ─────────────────────────────────────
@@ -109,31 +111,121 @@ function fmtDate(iso) {
 
 // ── Document view ─────────────────────────────────────────────────────────────
 
+// Build a single section container with edit + verify controls.
+function sectionEl(doc, s) {
+  const container = el("div", { className: "section-block" + (s.status === "needs_verification" ? " stale" : "") });
+
+  if (s.heading) container.append(el("h2", { textContent: s.heading }));
+
+  // Content area — either stale preview or rendered markdown.
+  const mdBox = el("div", { className: "md" });
+  if (s.status === "needs_verification") {
+    mdBox.append(
+      el("p", { textContent: s.preview || "" }),
+      el("p", { className: "hint", textContent: "stale — needs verification: " + (s.verify_hints || []).join(", ") }),
+    );
+  } else {
+    mdBox.innerHTML = marked.parse(s.content || "");
+  }
+  container.append(mdBox);
+
+  if (s.verified_at) {
+    container.append(el("p", { className: "meta", textContent: `verified ${fmtDate(s.verified_at)}` }));
+  }
+
+  // Controls row
+  const controls = el("div", { className: "section-controls" });
+
+  // Edit button
+  const editBtn = el("button", { textContent: "Edit", className: "sec-btn" });
+  editBtn.addEventListener("click", () => {
+    // Replace content area with textarea + Save/Cancel.
+    const ta = el("textarea", { className: "sec-edit-ta", value: s.content || "" });
+    const saveBtn = el("button", { textContent: "Save", className: "sec-btn sec-btn-primary" });
+    const cancelBtn = el("button", { textContent: "Cancel", className: "sec-btn" });
+
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      try {
+        const result = await apiFetch("/sections/" + s.id, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: ta.value }),
+        });
+        s.content = result.content;
+        mdBox.innerHTML = marked.parse(s.content || "");
+        container.classList.remove("stale");
+        restoreControls();
+      } catch (err) {
+        saveBtn.disabled = false;
+        alert("Save failed: " + err.message);
+      }
+    });
+
+    cancelBtn.addEventListener("click", restoreControls);
+
+    function restoreControls() {
+      ta.replaceWith(mdBox);
+      editControls.replaceWith(controls);
+    }
+
+    const editControls = el("div", { className: "section-controls" }, saveBtn, cancelBtn);
+    mdBox.replaceWith(ta);
+    controls.replaceWith(editControls);
+  });
+
+  // Verify button
+  const verifyBtn = el("button", { textContent: "Verify", className: "sec-btn" });
+  verifyBtn.addEventListener("click", async () => {
+    verifyBtn.disabled = true;
+    try {
+      await apiFetch("/sections/" + s.id + "/verify", { method: "POST" });
+      container.classList.remove("stale");
+      verifyBtn.textContent = "Verified";
+      verifyBtn.classList.add("sec-btn-verified");
+      setTimeout(() => { verifyBtn.textContent = "Verify"; verifyBtn.classList.remove("sec-btn-verified"); verifyBtn.disabled = false; }, 2000);
+    } catch (err) {
+      verifyBtn.disabled = false;
+      alert("Verify failed: " + err.message);
+    }
+  });
+
+  controls.append(editBtn, verifyBtn);
+  container.append(controls);
+  return container;
+}
+
 async function showDocument(id) {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const doc = await apiFetch(`/documents/${id}`);
   view.replaceChildren();
   const wrap = el("div", { className: "doc-view" });
-  wrap.append(el("h1", { textContent: doc.title }));
+
+  // Header row: title + delete button
+  const hdr = el("div", { className: "doc-hdr" });
+  hdr.append(el("h1", { textContent: doc.title }));
+  const delBtn = el("button", { textContent: "Delete document", className: "sec-btn sec-btn-danger" });
+  delBtn.addEventListener("click", async () => {
+    if (!confirm("Delete this document?")) return;
+    delBtn.disabled = true;
+    try {
+      await apiFetch("/documents/" + doc.id, { method: "DELETE" });
+      renderBrowse();
+    } catch (err) {
+      delBtn.disabled = false;
+      alert("Delete failed: " + err.message);
+    }
+  });
+  hdr.append(delBtn);
+  wrap.append(hdr);
+
   wrap.append(el("div", {
     className: "meta",
     textContent: `${doc.doc_type || ""}  ·  ${doc.category}${doc.subcategory ? "/" + doc.subcategory : ""}/${doc.slug}  ·  updated ${fmtDate(doc.updated_at)}`,
   }));
+
   for (const s of doc.sections || []) {
-    if (s.heading) wrap.append(el("h2", { textContent: s.heading }));
-    if (s.status === "needs_verification") {
-      wrap.append(el("div", { className: "stale" },
-        el("p", { textContent: s.preview || "" }),
-        el("p", { className: "hint", textContent: "stale — needs verification: " + (s.verify_hints || []).join(", ") }),
-      ));
-    } else {
-      const box = el("div", { className: "md" });
-      box.innerHTML = marked.parse(s.content || "");
-      wrap.append(box);
-    }
-    if (s.verified_at) {
-      wrap.append(el("p", { className: "meta", textContent: `verified ${fmtDate(s.verified_at)}` }));
-    }
+    wrap.append(sectionEl(doc, s));
   }
   view.append(wrap);
 }
