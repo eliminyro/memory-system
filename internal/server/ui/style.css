@@ -1,0 +1,100 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #1a1a1a;
+  background: #f8f8f8;
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0.6rem 1rem;
+  z-index: 10;
+}
+
+#q {
+  width: 100%;
+  max-width: 640px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+main {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 4rem;
+}
+
+/* Document list */
+.doc-list { list-style: none; margin: 0; padding: 0; }
+.doc-item {
+  display: block;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+.doc-item:hover { border-color: #999; }
+.doc-item h3 { margin: 0 0 0.25rem; font-size: 15px; }
+.doc-meta { font-size: 12px; color: #666; }
+
+/* Document view */
+.doc-view h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+.doc-view pre { background: #f0f0f0; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+.doc-view code { font-size: 13px; }
+.doc-view a { color: #0066cc; }
+
+/* Tier accents */
+.tier-high   { border-left: 3px solid #2ecc71; }
+.tier-standard { border-left: 3px solid #3498db; }
+.tier-low    { border-left: 3px solid #bdc3c7; }
+
+/* Metadata line */
+.meta { font-size: 12px; color: #888; margin-bottom: 0.75rem; }
+
+/* Markdown content */
+.md { line-height: 1.7; }
+.md pre  { background: #f0f0f0; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+.md code { font-size: 13px; }
+.md a    { color: #0066cc; }
+.md h1, .md h2, .md h3 { margin-top: 1.25rem; }
+
+/* Stale / needs_verification overlay */
+.stale {
+  background: #fffbea;
+  border: 1px solid #f0c040;
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+}
+.stale .hint { font-size: 12px; color: #a05000; margin: 0.25rem 0 0; }
+.stale-badge { color: #a05000; font-weight: 600; }
+.relevance-badge { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Back button */
+.back-btn {
+  background: none;
+  border: none;
+  color: #0066cc;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 0 0.75rem;
+}
+.back-btn:hover { text-decoration: underline; }
+
+/* Loading / error states */
+.state-msg { color: #666; padding: 2rem 0; text-align: center; }
+.state-err  { color: #c0392b; }

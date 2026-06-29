@@ -11,6 +11,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/authletas"
 	"github.com/eliminyro/memory-system/internal/mcp"
 	"github.com/eliminyro/memory-system/internal/middleware"
+	"github.com/eliminyro/memory-system/internal/service"
 	"github.com/eliminyro/memory-system/internal/version"
 )
 
@@ -21,6 +22,8 @@ type Deps struct {
 	MCPServer     *mcp.Server
 	KeyValidator  *auth.APIKeyValidator
 	AuthletWiring *authletas.Wiring // optional; nil = API-key-only path
+	Memory        *service.MemoryService
+	UIClientID    string
 }
 
 // NewHandler returns the full HTTP handler (mux + middleware) for the
@@ -49,6 +52,23 @@ func NewHandler(d Deps) http.Handler {
 	}
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/mcp/", mcpHandler)
+
+	// Web UI JSON API — JWT-only, reusing the same bearer validation + tenant
+	// bridge as /mcp. Requires authlet wiring; without it the UI can't authenticate.
+	if d.AuthletWiring != nil && d.Memory != nil {
+		api := &apiHandler{memory: d.Memory}
+		apiStack := d.AuthletWiring.BearerMW(d.AuthletWiring.UserContextBridge()(http.StripPrefix("/api", api.mux())))
+		mux.Handle("/api/", apiStack)
+	}
+
+	// Web UI static shell — public, no auth. The shell carries no data;
+	// the /api routes that return data are what requires the token.
+	uiFiles, uiConfig := uiHandlers(d.UIClientID)
+	mux.HandleFunc("GET /ui/config.json", uiConfig)
+	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+	})
+	mux.Handle("GET /ui/", uiFiles)
 
 	// Operational endpoints live under the /~/ prefix (liveness, readiness,
 	// version). They are unauthenticated — probes and version checks must work

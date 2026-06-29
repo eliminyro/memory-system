@@ -150,6 +150,8 @@ func main() {
 		MCPServer:     mcpServer,
 		KeyValidator:  keyValidator,
 		AuthletWiring: authletWiring,
+		Memory:        memorySvc,
+		UIClientID:    cfg.UIClientID,
 	})
 
 	srv := &http.Server{
