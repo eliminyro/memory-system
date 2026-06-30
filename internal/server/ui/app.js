@@ -118,7 +118,7 @@ function goBack() {
   (navStack.pop() || renderBrowse)();
 }
 function backBtn() {
-  const b = el("button", { textContent: "← back", className: "back-btn" });
+  const b = el("button", { textContent: "←", className: "back-btn", title: "Back" });
   b.addEventListener("click", goBack);
   return b;
 }
@@ -262,7 +262,7 @@ async function showDocument(id) {
   const hdr = el("div", { className: "doc-hdr" });
   hdr.append(backBtn());
   hdr.append(el("h1", { textContent: doc.title }));
-  const delBtn = el("button", { textContent: "Delete document", className: "sec-btn sec-btn-danger" });
+  const delBtn = el("button", { textContent: "Delete", className: "sec-btn sec-btn-danger", title: "Delete document" });
   delBtn.addEventListener("click", async () => {
     if (!confirm("Delete this document?")) return;
     delBtn.disabled = true;
