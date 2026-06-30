@@ -72,6 +72,25 @@ main {
 .md a    { color: #0066cc; }
 .md h1, .md h2, .md h3 { margin-top: 1.25rem; }
 
+/* Frontmatter metadata block — dim, monospace, line breaks preserved */
+.frontmatter {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #777;
+  background: #fafafa;
+  border: 1px solid #ececec;
+  border-radius: 4px;
+  padding: 0.5rem 0.7rem;
+  margin: 0 0 0.85rem;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* Click-to-edit affordance on editable read views */
+.md.editable { cursor: text; border-radius: 4px; transition: background 0.1s; }
+.md.editable:hover { background: #fcfcfc; outline: 1px dashed #d8d8d8; outline-offset: 4px; }
+
 /* Stale / needs_verification overlay */
 .stale {
   background: #fffbea;

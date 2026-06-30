@@ -111,41 +111,66 @@ function fmtDate(iso) {
 
 // ── Document view ─────────────────────────────────────────────────────────────
 
-// Build a single section container with edit + verify controls.
+// splitFrontmatter separates a leading YAML frontmatter block (delimited by a
+// pair of "---" fence lines) from the markdown body. Returns the raw
+// frontmatter text (without the fences) and the body. If there is no opening
+// fence on the first line, or no closing fence, the whole input is the body.
+function splitFrontmatter(content) {
+  const text = content || "";
+  const lines = text.split("\n");
+  if (lines[0].trim() !== "---") return { frontmatter: "", body: text };
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") {
+      return {
+        frontmatter: lines.slice(1, i).join("\n"),
+        body: lines.slice(i + 1).join("\n").replace(/^\n+/, ""),
+      };
+    }
+  }
+  return { frontmatter: "", body: text };
+}
+
+// Build a single section container. The read view renders frontmatter as a dim
+// metadata block and the body as markdown. Clicking the read view (for
+// editable sections) swaps it for a textarea; blurring it saves and returns to
+// the read view. needs_verification sections show a preview and can only be
+// verified, not edited.
 function sectionEl(doc, s) {
   const container = el("div", { className: "section-block" + (s.status === "needs_verification" ? " stale" : "") });
 
   if (s.heading) container.append(el("h2", { textContent: s.heading }));
 
-  // Content area — either stale preview or rendered markdown.
-  const mdBox = el("div", { className: "md" });
-  if (s.status === "needs_verification") {
-    mdBox.append(
-      el("p", { textContent: s.preview || "" }),
-      el("p", { className: "hint", textContent: "stale — needs verification: " + (s.verify_hints || []).join(", ") }),
-    );
-  } else {
-    mdBox.innerHTML = marked.parse(s.content || "");
+  const editable = s.status !== "needs_verification";
+
+  // Read-view content box.
+  const mdBox = el("div", { className: "md" + (editable ? " editable" : "") });
+
+  function renderRead() {
+    mdBox.replaceChildren();
+    if (!editable) {
+      mdBox.append(
+        el("p", { textContent: s.preview || "" }),
+        el("p", { className: "hint", textContent: "stale — needs verification: " + (s.verify_hints || []).join(", ") }),
+      );
+      return;
+    }
+    const { frontmatter, body } = splitFrontmatter(s.content);
+    if (frontmatter) mdBox.append(el("div", { className: "frontmatter", textContent: frontmatter }));
+    const bodyDiv = el("div", { className: "md-body" });
+    bodyDiv.innerHTML = marked.parse(body || "");
+    mdBox.append(bodyDiv);
   }
-  container.append(mdBox);
+  renderRead();
 
-  if (s.verified_at) {
-    container.append(el("p", { className: "meta", textContent: `verified ${fmtDate(s.verified_at)}` }));
-  }
-
-  // Controls row
-  const controls = el("div", { className: "section-controls" });
-
-  // Edit button
-  const editBtn = el("button", { textContent: "Edit", className: "sec-btn" });
-  editBtn.addEventListener("click", () => {
-    // Replace content area with textarea + Save/Cancel.
+  // Click-to-edit: swap the read view for a textarea; blur commits.
+  function enterEdit() {
     const ta = el("textarea", { className: "sec-edit-ta", value: s.content || "" });
-    const saveBtn = el("button", { textContent: "Save", className: "sec-btn sec-btn-primary" });
-    const cancelBtn = el("button", { textContent: "Cancel", className: "sec-btn" });
+    let settled = false;
 
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.disabled = true;
+    async function commit() {
+      if (settled) return;
+      settled = true;
+      if (ta.value === (s.content || "")) { ta.replaceWith(mdBox); return; } // unchanged
       try {
         const result = await apiFetch("/sections/" + s.id, {
           method: "PATCH",
@@ -153,28 +178,47 @@ function sectionEl(doc, s) {
           body: JSON.stringify({ content: ta.value }),
         });
         s.content = result.content;
-        mdBox.innerHTML = marked.parse(s.content || "");
         container.classList.remove("stale");
-        restoreControls();
+        renderRead();
+        ta.replaceWith(mdBox);
       } catch (err) {
-        saveBtn.disabled = false;
+        settled = false; // keep editing so the user can retry
         alert("Save failed: " + err.message);
+        ta.focus();
       }
-    });
-
-    cancelBtn.addEventListener("click", restoreControls);
-
-    function restoreControls() {
-      ta.replaceWith(mdBox);
-      editControls.replaceWith(controls);
     }
 
-    const editControls = el("div", { className: "section-controls" }, saveBtn, cancelBtn);
-    mdBox.replaceWith(ta);
-    controls.replaceWith(editControls);
-  });
+    function cancel() {
+      if (settled) return;
+      settled = true;
+      ta.replaceWith(mdBox);
+    }
 
-  // Verify button
+    ta.addEventListener("blur", commit);
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    });
+
+    mdBox.replaceWith(ta);
+    ta.focus();
+  }
+
+  if (editable) {
+    mdBox.title = "Click to edit";
+    mdBox.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return; // let links work normally
+      enterEdit();
+    });
+  }
+
+  container.append(mdBox);
+
+  if (s.verified_at) {
+    container.append(el("p", { className: "meta", textContent: `verified ${fmtDate(s.verified_at)}` }));
+  }
+
+  // Controls row — Verify only. Editing is click-to-edit (no Edit button).
+  const controls = el("div", { className: "section-controls" });
   const verifyBtn = el("button", { textContent: "Verify", className: "sec-btn" });
   verifyBtn.addEventListener("click", async () => {
     verifyBtn.disabled = true;
@@ -189,8 +233,7 @@ function sectionEl(doc, s) {
       alert("Verify failed: " + err.message);
     }
   });
-
-  controls.append(editBtn, verifyBtn);
+  controls.append(verifyBtn);
   container.append(controls);
   return container;
 }
