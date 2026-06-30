@@ -108,7 +108,7 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  margin-bottom: 1rem;
+  flex-shrink: 0;
   padding: 0.35rem 0.8rem;
   font-size: 13px;
   font-weight: 500;
@@ -127,8 +127,12 @@ main {
 .state-err  { color: #c0392b; }
 
 /* Document header row */
-.doc-hdr { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.25rem; }
+.doc-hdr { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.25rem; }
 .doc-hdr h1 { margin: 0; flex: 1; }
+
+/* Category header row */
+.cat-hdr { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }
+.cat-hdr h2 { margin: 0; }
 
 /* Section block */
 .section-block { margin: 1rem 0; padding: 0.75rem 1rem; background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; }

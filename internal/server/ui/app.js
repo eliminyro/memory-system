@@ -256,11 +256,11 @@ async function showDocument(id) {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const doc = await apiFetch(`/documents/${id}`);
   view.replaceChildren();
-  view.append(backBtn());
   const wrap = el("div", { className: "doc-view" });
 
-  // Header row: title + delete button
+  // Header row: back + title + delete button
   const hdr = el("div", { className: "doc-hdr" });
+  hdr.append(backBtn());
   hdr.append(el("h1", { textContent: doc.title }));
   const delBtn = el("button", { textContent: "Delete document", className: "sec-btn sec-btn-danger" });
   delBtn.addEventListener("click", async () => {
@@ -371,8 +371,10 @@ async function renderCategoryDocs(category, subcategory) {
   const docs = await apiFetch(`/documents?${params}`);
   view.replaceChildren();
 
-  view.append(backBtn());
-  view.append(el("h2", { textContent: subcategory ? `${category} / ${subcategory}` : category }));
+  const hdr = el("div", { className: "cat-hdr" });
+  hdr.append(backBtn());
+  hdr.append(el("h2", { textContent: subcategory ? `${category} / ${subcategory}` : category }));
+  view.append(hdr);
 
   if (!docs.length) {
     view.append(el("p", { className: "state-msg", textContent: "no documents" }));
