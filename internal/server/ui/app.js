@@ -109,6 +109,20 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+// ── Navigation history ────────────────────────────────────────────────────────
+// A stack of thunks that re-render the previous view. Drilling into a view
+// pushes the way back; the back button pops and re-renders it. The two roots
+// (browse, search results) reset the stack so back never escapes them.
+const navStack = [];
+function goBack() {
+  (navStack.pop() || renderBrowse)();
+}
+function backBtn() {
+  const b = el("button", { textContent: "← back", className: "back-btn" });
+  b.addEventListener("click", goBack);
+  return b;
+}
+
 // ── Document view ─────────────────────────────────────────────────────────────
 
 // splitFrontmatter separates a leading YAML frontmatter block (delimited by a
@@ -242,6 +256,7 @@ async function showDocument(id) {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const doc = await apiFetch(`/documents/${id}`);
   view.replaceChildren();
+  view.append(backBtn());
   const wrap = el("div", { className: "doc-view" });
 
   // Header row: title + delete button
@@ -295,7 +310,10 @@ function renderSearchResults(results) {
         r.status === "needs_verification" ? el("span", { className: "stale-badge", textContent: " · stale" }) : "",
       ),
     );
-    item.addEventListener("click", () => showDocument(r.document_id));
+    item.addEventListener("click", () => {
+      navStack.push(() => renderSearchResults(results));
+      showDocument(r.document_id);
+    });
     list.append(item);
   }
   view.append(list);
@@ -304,6 +322,7 @@ function renderSearchResults(results) {
 // ── Browse (index) view ───────────────────────────────────────────────────────
 
 async function renderBrowse() {
+  navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const entries = await apiFetch("/index?depth=summary");
   view.replaceChildren();
@@ -328,12 +347,18 @@ async function renderBrowse() {
         el("h3", { textContent: label + countText }),
         row.topics ? el("div", { className: "doc-meta", textContent: row.topics }) : "",
       );
-      item.addEventListener("click", () => renderCategoryDocs(cat, row.subcategory || null));
+      item.addEventListener("click", () => {
+        navStack.push(renderBrowse);
+        renderCategoryDocs(cat, row.subcategory || null);
+      });
       sub.append(item);
     }
 
     // clicking the heading also drills into the whole category
-    heading.addEventListener("click", () => renderCategoryDocs(cat, null));
+    heading.addEventListener("click", () => {
+      navStack.push(renderBrowse);
+      renderCategoryDocs(cat, null);
+    });
     section.append(heading, sub);
     view.append(section);
   }
@@ -346,9 +371,7 @@ async function renderCategoryDocs(category, subcategory) {
   const docs = await apiFetch(`/documents?${params}`);
   view.replaceChildren();
 
-  const back = el("button", { textContent: "← back", className: "back-btn" });
-  back.addEventListener("click", renderBrowse);
-  view.append(back);
+  view.append(backBtn());
   view.append(el("h2", { textContent: subcategory ? `${category} / ${subcategory}` : category }));
 
   if (!docs.length) {
@@ -362,7 +385,10 @@ async function renderCategoryDocs(category, subcategory) {
       el("h3", { textContent: doc.title || doc.slug }),
       el("div", { className: "doc-meta", textContent: meta }),
     );
-    item.addEventListener("click", () => showDocument(doc.id));
+    item.addEventListener("click", () => {
+      navStack.push(() => renderCategoryDocs(category, subcategory));
+      showDocument(doc.id);
+    });
     list.append(item);
   }
   view.append(list);
@@ -373,6 +399,7 @@ async function renderCategoryDocs(category, subcategory) {
 let _searchTimer = null;
 
 async function runSearch(q) {
+  navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "searching…" }));
   try {
     const results = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20`);
