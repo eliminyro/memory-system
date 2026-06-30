@@ -46,7 +46,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_section",
-		Description: "Update a single section's content. Re-generates its embedding automatically.",
+		Description: "Update a single section's content (re-generates its embedding) and/or its heading. Heading-only changes do not re-embed.",
 	}, s.UpdateSection)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -171,8 +171,9 @@ type StoreMemoryInput struct {
 }
 
 type UpdateSectionInput struct {
-	SectionID string  `json:"section_id" jsonschema:"Section UUID"`
-	Content   string  `json:"content" jsonschema:"New section content"`
+	SectionID string  `json:"section_id" jsonschema:"the section UUID to update"`
+	Content   string  `json:"content" jsonschema:"the new markdown content for the section"`
+	Heading   *string `json:"heading,omitempty" jsonschema:"optional new heading for the section; empty string clears it"`
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -453,7 +454,7 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	section, err := s.memory.UpdateSection(ctx, id, input.Content, tenantOverride)
+	section, err := s.memory.UpdateSection(ctx, id, &input.Content, input.Heading, tenantOverride)
 	if err != nil {
 		if errors.Is(err, apperr.ErrNotFound) {
 			return errorResult(err.Error()), nil, nil

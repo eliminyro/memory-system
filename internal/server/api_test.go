@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -145,6 +146,26 @@ func TestAPIDeleteDocument_InvalidID(t *testing.T) {
 	h := &apiHandler{}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/documents/xxx", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIPatchSection_EmptyBody(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/sections/"+uuid.NewString(), strings.NewReader(`{}`))
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIPatchDocument_InvalidID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/documents/not-a-uuid", strings.NewReader(`{"title":"x"}`))
 	h.mux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", rec.Code)

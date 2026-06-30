@@ -144,6 +144,48 @@ function splitFrontmatter(content) {
   return { frontmatter: "", body: text };
 }
 
+// inlineEdit turns a display element (h1/h2/placeholder) into a click-to-edit
+// single-line field: click -> input prefilled with `current`; blur -> if the
+// value changed, await onSave(value); Escape -> cancel. onSave returns the
+// value to display (e.g. the server's canonical value). Same blur-commit model
+// as section content editing.
+function inlineEdit(displayEl, current, onSave) {
+  displayEl.classList.add("editable-text");
+  displayEl.title = "Click to edit";
+  displayEl.addEventListener("click", () => {
+    const input = el("input", { className: "inline-edit-input", value: current || "", type: "text" });
+    let settled = false;
+
+    async function commit() {
+      if (settled) return;
+      settled = true;
+      const next = input.value;
+      if (next === (current || "")) { input.replaceWith(displayEl); return; }
+      try {
+        const shown = await onSave(next);
+        current = shown != null ? shown : next;
+        displayEl.textContent = current || displayEl.dataset.placeholder || "";
+        displayEl.classList.toggle("placeholder", !current);
+        input.replaceWith(displayEl);
+      } catch (err) {
+        settled = false;
+        alert("Save failed: " + err.message);
+        input.focus();
+      }
+    }
+
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); settled = true; input.replaceWith(displayEl); }
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    });
+
+    displayEl.replaceWith(input);
+    input.focus();
+    input.select();
+  });
+}
+
 // Build a single section container. The read view renders frontmatter as a dim
 // metadata block and the body as markdown. Clicking the read view (for
 // editable sections) swaps it for a textarea; blurring it saves and returns to
@@ -152,9 +194,28 @@ function splitFrontmatter(content) {
 function sectionEl(doc, s) {
   const container = el("div", { className: "section-block" + (s.status === "needs_verification" ? " stale" : "") });
 
-  if (s.heading) container.append(el("h2", { textContent: s.heading }));
-
   const editable = s.status !== "needs_verification";
+
+  // Heading — editable; sections without one get a faint "add heading" placeholder.
+  if (editable) {
+    const headingEl = el("h2", {
+      textContent: s.heading || "Add heading…",
+      className: s.heading ? "" : "placeholder",
+    });
+    headingEl.dataset.placeholder = "Add heading…";
+    inlineEdit(headingEl, s.heading || "", async (heading) => {
+      const updated = await apiFetch("/sections/" + s.id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ heading }),
+      });
+      s.heading = updated.heading || "";
+      return s.heading;
+    });
+    container.append(headingEl);
+  } else if (s.heading) {
+    container.append(el("h2", { textContent: s.heading }));
+  }
 
   // Read-view content box.
   const mdBox = el("div", { className: "md" + (editable ? " editable" : "") });
@@ -261,7 +322,17 @@ async function showDocument(id) {
   // Header row: back + title + delete button
   const hdr = el("div", { className: "doc-hdr" });
   hdr.append(backBtn());
-  hdr.append(el("h1", { textContent: doc.title }));
+  const titleEl = el("h1", { textContent: doc.title });
+  inlineEdit(titleEl, doc.title, async (title) => {
+    const updated = await apiFetch("/documents/" + doc.id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    doc.title = updated.title;
+    return updated.title;
+  });
+  hdr.append(titleEl);
   const delBtn = el("button", { textContent: "Delete", className: "sec-btn sec-btn-danger", title: "Delete document" });
   delBtn.addEventListener("click", async () => {
     if (!confirm("Delete this document?")) return;

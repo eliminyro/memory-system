@@ -401,8 +401,11 @@ func (s *MemoryService) StoreDocument(
 	}, nil
 }
 
-// UpdateSection updates a single section and re-embeds.
-func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content string, overrideID *uuid.UUID) (*models.Section, error) {
+// UpdateSection partially updates a section: re-embeds and sets content when
+// content != nil; sets the heading when heading != nil (blank/whitespace ->
+// NULL). At least one of content/heading should be non-nil; both nil is a
+// no-op that returns the section unchanged.
+func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content *string, heading *string, overrideID *uuid.UUID) (*models.Section, error) {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
@@ -417,19 +420,57 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 		return nil, fmt.Errorf("%w: cannot update common pool section", apperr.ErrInvalidInput)
 	}
 
-	embedding, err := s.embedder.Embed(ctx, content)
-	if err != nil {
-		return nil, fmt.Errorf("embed section: %w", err)
+	if content != nil {
+		embedding, err := s.embedder.Embed(ctx, *content)
+		if err != nil {
+			return nil, fmt.Errorf("embed section: %w", err)
+		}
+		section.Content = *content
+		section.Embedding = embedding
 	}
 
-	section.Content = content
-	section.Embedding = embedding
+	if heading != nil {
+		trimmed := strings.TrimSpace(*heading)
+		if trimmed == "" {
+			section.Heading = nil
+		} else {
+			section.Heading = &trimmed
+		}
+	}
 
 	if err := s.sections.Update(ctx, section); err != nil {
 		return nil, fmt.Errorf("update section: %w", err)
 	}
 
 	return section, nil
+}
+
+// UpdateDocumentTitle sets a document's title. Blank titles are rejected
+// (Title is NOT NULL). Refuses common-pool docs for non-admins.
+func (s *MemoryService) UpdateDocumentTitle(ctx context.Context, docID uuid.UUID, title string, overrideID *uuid.UUID) (*models.Document, error) {
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return nil, err
+	}
+
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, fmt.Errorf("%w: title is required", apperr.ErrInvalidInput)
+	}
+
+	doc, err := s.docs.GetByID(ctx, tid, docID)
+	if err != nil {
+		return nil, fmt.Errorf("get document: %w", err)
+	}
+	if doc.TenantID != tid && !s.isAdmin(ctx) {
+		return nil, fmt.Errorf("%w: cannot update common pool document", apperr.ErrInvalidInput)
+	}
+
+	doc.Title = title
+	if err := s.docs.Save(ctx, doc.TenantID, doc); err != nil {
+		return nil, fmt.Errorf("save document: %w", err)
+	}
+	return doc, nil
 }
 
 // DeleteDocument removes a document and all its sections in a transaction.

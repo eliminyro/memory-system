@@ -153,3 +153,18 @@ main {
 .sec-btn-danger { background: #fff; color: #c0392b; border-color: #c0392b; }
 .sec-btn-danger:hover:not(:disabled) { background: #fdf0ef; }
 .sec-btn-verified { background: #e6f9ee; color: #1a7a40; border-color: #2ecc71; }
+
+/* Inline-editable headings/title */
+.editable-text { cursor: text; border-radius: 4px; }
+.editable-text:hover { background: #fcfcfc; outline: 1px dashed #d8d8d8; outline-offset: 3px; }
+.editable-text.placeholder { color: #aaa; font-weight: normal; font-style: italic; }
+.inline-edit-input {
+  font: inherit;
+  width: 100%;
+  max-width: 100%;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.doc-hdr .inline-edit-input { flex: 1; }

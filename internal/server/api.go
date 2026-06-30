@@ -29,6 +29,7 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("GET /documents", h.listDocuments)
 	m.HandleFunc("GET /documents/{id}", h.getDocument)
 	m.HandleFunc("PATCH /sections/{id}", h.patchSection)
+	m.HandleFunc("PATCH /documents/{id}", h.patchDocument)
 	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
 	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 	return m
@@ -133,18 +134,44 @@ func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content string `json:"content"`
+		Content *string `json:"content"`
+		Heading *string `json:"heading"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Content == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content is required"})
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, nil)
+	if body.Content == nil && body.Heading == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content or heading is required"})
+		return
+	}
+	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, body.Heading, nil)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, section)
+}
+
+func (h *apiHandler) patchDocument(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	doc, err := h.memory.UpdateDocumentTitle(r.Context(), id, body.Title, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
