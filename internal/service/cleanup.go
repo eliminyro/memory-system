@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/eliminyro/memory-system/internal/authz"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
@@ -29,7 +30,11 @@ func (s *MemoryService) GetCleanupQueue(ctx context.Context, limit int, includeR
 }
 
 // MarkCleanupDone resolves a queue entry. mergedInto is used when resolution
-// is "merged" to record which doc survived.
+// is "merged" to record which doc survived. Routed through an editor Check on
+// the entry's referenced document (finding #17): both docs in a queue entry
+// belong to the entry's tenant, so editor on one is equivalent to membership of
+// that tenant — this denies resolving a common-pool / cross-tenant entry
+// without the corresponding write right.
 func (s *MemoryService) MarkCleanupDone(ctx context.Context, queueID uuid.UUID, resolution, note string, mergedInto *uuid.UUID, overrideID *uuid.UUID) error {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
@@ -42,6 +47,13 @@ func (s *MemoryService) MarkCleanupDone(ctx context.Context, queueID uuid.UUID, 
 	case models.CleanupResolutionMerged, models.CleanupResolutionIgnored, models.CleanupResolutionFalsePositive:
 	default:
 		return fmt.Errorf("%w: resolution must be merged, ignored, or false_positive", apperr.ErrInvalidInput)
+	}
+	entry, err := s.cleanup.GetByID(ctx, tid, queueID)
+	if err != nil {
+		return err
+	}
+	if !s.authorize(ctx, authz.TypeDocument, entry.DocAID.String(), authz.RelEditor) {
+		return fmt.Errorf("%w: not authorized to resolve cleanup entry %s", apperr.ErrInvalidInput, queueID)
 	}
 	return s.cleanup.Resolve(ctx, tid, queueID, resolution, note, mergedInto)
 }

@@ -45,14 +45,23 @@ func (s *codeStore) ConsumeOnce(ctx context.Context, hash string) (*storage.Auth
 	var out *storage.AuthCode
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row OAuthCode
-		if err := tx.Clauses().Where("code_hash = ?", hash).First(&row).Error; err != nil {
+		if err := tx.Where("code_hash = ?", hash).First(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return storage.ErrNotFound
 			}
 			return err
 		}
-		if err := tx.Delete(&row).Error; err != nil {
-			return err
+		// The DELETE is the atomic guard. The read above is only for the
+		// payload: under Postgres READ COMMITTED two concurrent redemptions
+		// both read the row, but the row lock serializes the DELETEs so only
+		// one affects a row. The loser sees RowsAffected == 0 and is treated
+		// as not-found, so a code yields exactly one grant.
+		res := tx.Where("code_hash = ?", hash).Delete(&OAuthCode{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return storage.ErrNotFound
 		}
 		if time.Now().After(row.ExpiresAt) {
 			return storage.ErrAlreadyConsumed

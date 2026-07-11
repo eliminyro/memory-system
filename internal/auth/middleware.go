@@ -35,6 +35,9 @@ func APIKeyMiddleware(validator KeyValidator) func(http.Handler) http.Handler {
 
 			ctx := WithTenantID(r.Context(), info.TenantID)
 			ctx = WithEmail(ctx, info.Email)
+			if info.SubjectID != "" {
+				ctx = WithSubject(ctx, Subject{Type: SubjectTypeUser, ID: info.SubjectID})
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

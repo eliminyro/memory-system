@@ -37,8 +37,9 @@ type DeleteTenantInput struct {
 }
 
 type CreateAPIKeyInput struct {
-	TenantID string `json:"tenant_id" jsonschema:"Tenant UUID to create key for"`
-	Label    string `json:"label" jsonschema:"Key label (required, max 200 chars)"`
+	TenantID  string  `json:"tenant_id" jsonschema:"Tenant UUID to create key for"`
+	Label     string  `json:"label" jsonschema:"Key label (required, max 200 chars)"`
+	SubjectID *string `json:"subject_id,omitempty" jsonschema:"Optional unified authorization subject id to pin the key to; omit for the tenant service principal"`
 }
 
 type ListAPIKeysInput struct {
@@ -149,7 +150,7 @@ func (s *Server) CreateAPIKey(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if input.Label == "" || len(input.Label) > maxAdminFieldLen {
 		return errorResult("label is required and must be <= 200 characters"), nil, nil
 	}
-	plaintext, key, err := s.memory.CreateAPIKey(ctx, tenantID, input.Label)
+	plaintext, key, err := s.memory.CreateAPIKey(ctx, tenantID, input.Label, input.SubjectID)
 	if err != nil {
 		return handleAdminError(err)
 	}

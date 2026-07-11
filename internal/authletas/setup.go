@@ -74,6 +74,12 @@ type Wiring struct {
 	// RunCleanup starts the AS periodic cleanup goroutine and returns the
 	// channel that closes when the goroutine exits (after ctx is canceled).
 	RunCleanup func(ctx context.Context) <-chan struct{}
+
+	// db backs UserContextBridge's verified-email -> tenant_users.id lookup so
+	// the JWT path can attach a unified auth.Subject. Nil when Wiring is
+	// constructed directly in unit tests; the bridge then attaches only the
+	// tenant id + email (no subject) and downstream fails closed in Pass 2.
+	db *gorm.DB
 }
 
 // Mount registers the AS and well-known endpoints on a stdlib ServeMux.
@@ -225,6 +231,7 @@ func Setup(
 		RunCleanup: func(ctx context.Context) <-chan struct{} {
 			return server.RunCleanup(ctx, cleanupInterval)
 		},
+		db: db,
 	}, nil
 }
 
@@ -247,6 +254,29 @@ func lookupTenantEmail(ctx context.Context, db *gorm.DB, logger *slog.Logger, te
 		return ""
 	}
 	return row.Email
+}
+
+// lookupTenantUserID returns the tenant_users.id for a verified email — the
+// unified authorization subject id for the JWT (human) path. It returns
+// ("", false) when no row exists or on any DB error, so the bridge attaches no
+// subject and Pass 2 fails closed. Errors log at warn.
+func lookupTenantUserID(ctx context.Context, db *gorm.DB, logger *slog.Logger, email string) (string, bool) {
+	var row struct {
+		ID string `gorm:"column:id"`
+	}
+	if err := db.WithContext(ctx).
+		Table("tenant_users").
+		Select("id").
+		Where("email = ?", email).
+		Limit(1).
+		Scan(&row).Error; err != nil {
+		logger.Warn("authletas: tenant_user id lookup failed", "err", err)
+		return "", false
+	}
+	if row.ID == "" {
+		return "", false
+	}
+	return row.ID, true
 }
 
 // loadMasterKey reads and hex-decodes AUTHLET_MASTER_KEY. The decoded value

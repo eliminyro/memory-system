@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/config"
 	"github.com/eliminyro/memory-system/internal/database"
 	"github.com/eliminyro/memory-system/internal/models"
@@ -94,7 +95,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, nil)
+	// Real tuple store so bulk-imported documents get their document#tenant
+	// parent edge seeded during import.
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
 
 	// Inject tenant ID into context
 	ctx := auth.WithTenantID(context.Background(), tenantID)

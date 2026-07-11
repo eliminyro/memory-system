@@ -94,6 +94,23 @@ func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.Clean
 	return true, nil
 }
 
+// GetByID returns a single queue entry addressed by id, scoped to the caller's
+// accessible tenants (own tenant + common pool). Returns ErrNotFound when the
+// entry does not exist in scope. Used by the service to resolve the entry's
+// referenced document before an authorization Check.
+func (r *CleanupQueueRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*models.CleanupQueue, error) {
+	var row models.CleanupQueue
+	if err := r.db.WithContext(ctx).
+		Where("id = ? AND tenant_id IN ?", id, readTenants(tenantID)).
+		First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: cleanup queue entry %s", apperr.ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("get cleanup entry: %w", err)
+	}
+	return &row, nil
+}
+
 // Resolve marks a queue entry as resolved with the given resolution/note. If
 // resolution is "merged", set mergedInto to the surviving doc ID.
 func (r *CleanupQueueRepository) Resolve(ctx context.Context, tenantID uuid.UUID, id uuid.UUID, resolution string, note string, mergedInto *uuid.UUID) error {

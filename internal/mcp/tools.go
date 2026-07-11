@@ -300,7 +300,7 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		return errorResult(err.Error()), nil, nil
 	}
 	if err := s.memory.MarkVerified(ctx, id, tenantOverride); err != nil {
-		if errors.Is(err, apperr.ErrNotFound) {
+		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
 			return errorResult(err.Error()), nil, nil
 		}
 		return nil, nil, fmt.Errorf("mark verified: %w", err)
@@ -545,6 +545,9 @@ func (s *Server) GetRelated(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 	}
 	results, err := s.memory.GetRelated(ctx, docID, input.Limit, tenantOverride)
 	if err != nil {
+		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
+			return errorResult(err.Error()), nil, nil
+		}
 		return nil, nil, fmt.Errorf("get related: %w", err)
 	}
 	return jsonResult(results), nil, nil

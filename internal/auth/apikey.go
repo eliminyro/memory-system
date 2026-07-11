@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
@@ -46,6 +47,20 @@ func KeyPrefix(plaintext string) string {
 type KeyInfo struct {
 	TenantID uuid.UUID
 	Email    string
+	// SubjectID is the unified authorization subject id for the key: the key's
+	// explicit subject_id when set, else the tenant service principal
+	// "svc:<tenant_id>". Always a user-type subject.
+	SubjectID string
+}
+
+// keySubjectID resolves an API key's authorization subject id: the explicit
+// subject_id when present and non-empty, else the tenant service principal
+// "svc:<tenant_id>" (see authz.ServicePrincipalID).
+func keySubjectID(subjectID *string, tenantID uuid.UUID) string {
+	if subjectID != nil && *subjectID != "" {
+		return *subjectID
+	}
+	return authz.ServicePrincipalID(tenantID.String())
 }
 
 // APIKeyValidator looks up API keys and resolves them to tenant IDs.
@@ -72,5 +87,9 @@ func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (KeyInfo,
 	if ak.Tenant != nil {
 		email = ak.Tenant.Email
 	}
-	return KeyInfo{TenantID: ak.TenantID, Email: email}, nil
+	return KeyInfo{
+		TenantID:  ak.TenantID,
+		Email:     email,
+		SubjectID: keySubjectID(ak.SubjectID, ak.TenantID),
+	}, nil
 }

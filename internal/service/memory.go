@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/authz"
+	"github.com/eliminyro/memory-system/internal/authzseed"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
@@ -35,22 +37,32 @@ func (s *MemoryService) logOverride(ctx context.Context, ev repository.OverrideE
 }
 
 type MemoryService struct {
-	db          *gorm.DB
-	docs        *repository.DocumentRepository
-	sections    *repository.SectionRepository
-	embedder    EmbeddingProvider
-	tenants     *repository.TenantRepository
-	keys        *repository.APIKeyRepository
-	lint        *repository.LintRepository
-	thresholds  *staleness.ThresholdStore
-	overrides   *repository.OverrideLogRepository
-	cleanup     *repository.CleanupQueueRepository
-	adminEmails map[string]struct{}
+	db         *gorm.DB
+	docs       *repository.DocumentRepository
+	sections   *repository.SectionRepository
+	embedder   EmbeddingProvider
+	tenants    *repository.TenantRepository
+	keys       *repository.APIKeyRepository
+	lint       *repository.LintRepository
+	thresholds *staleness.ThresholdStore
+	overrides  *repository.OverrideLogRepository
+	cleanup    *repository.CleanupQueueRepository
+	// authz is the relationship-tuple store. Lifecycle operations seed tuples
+	// into it out-of-band. Nil disables seeding (e.g. tests that don't
+	// exercise tuples).
+	authz authz.Store
+	// authzEngine evaluates authorization decisions over the tuple store: it is
+	// now the single authoritative gate for admin, tenant_id override, and
+	// cross-tenant/common-pool point access. Nil (when authzStore is nil) makes
+	// every Check fail closed.
+	authzEngine *authz.Engine
 }
 
 // NewMemoryService constructs the service. Optional deps (tenants, keys, lint,
-// thresholds, overrides) may be nil when the service is used outside the MCP
-// server (e.g. the import CLI) — nil deps disable the features that need them.
+// thresholds, overrides, authzStore) may be nil when the service is used
+// outside the MCP server (e.g. the import CLI) — nil deps disable the features
+// that need them. A nil authzStore disables tuple seeding AND makes every
+// authorization Check fail closed.
 func NewMemoryService(
 	db *gorm.DB,
 	docs *repository.DocumentRepository,
@@ -62,11 +74,11 @@ func NewMemoryService(
 	thresholds *staleness.ThresholdStore,
 	overrides *repository.OverrideLogRepository,
 	cleanup *repository.CleanupQueueRepository,
-	adminEmails []string,
+	authzStore authz.Store,
 ) *MemoryService {
-	ae := make(map[string]struct{}, len(adminEmails))
-	for _, e := range adminEmails {
-		ae[strings.TrimSpace(e)] = struct{}{}
+	var engine *authz.Engine
+	if authzStore != nil {
+		engine = authz.NewEngine(authzStore)
 	}
 	return &MemoryService{
 		db:          db,
@@ -79,11 +91,61 @@ func NewMemoryService(
 		thresholds:  thresholds,
 		overrides:   overrides,
 		cleanup:     cleanup,
-		adminEmails: ae,
+		authz:       authzStore,
+		authzEngine: engine,
 	}
 }
 
-// resolveTenant resolves the effective tenant ID.
+// seedTuple writes a relation tuple out-of-band for a lifecycle event. Writes
+// are idempotent. A nil store or a write error is non-fatal: the user's
+// primary operation already succeeded, and in Pass 1 no decision depends on the
+// tuple. The warning makes a drop visible so operators can alert on it.
+func (s *MemoryService) seedTuple(ctx context.Context, t authz.Tuple) {
+	if s.authz == nil {
+		return
+	}
+	if err := s.authz.Write(ctx, t); err != nil {
+		slog.Default().Warn("authz tuple seed failed",
+			"object_type", t.ObjectType,
+			"object_id", t.ObjectID,
+			"relation", t.Relation,
+			"subject_type", t.SubjectType,
+			"subject_id", t.SubjectID,
+			"error", err,
+		)
+	}
+}
+
+// authorize reports whether the request's subject holds relation on
+// objType:objID, per the tuple Check evaluator. It fails closed on every
+// uncertainty: a nil engine (unwired), a subjectless request, or a Check error
+// all deny. This is the single choke point every authorization decision in the
+// service flows through.
+func (s *MemoryService) authorize(ctx context.Context, objType, objID, relation string) bool {
+	if s.authzEngine == nil {
+		return false
+	}
+	subj, ok := auth.SubjectFromContext(ctx)
+	if !ok || subj.ID == "" {
+		return false
+	}
+	granted, err := s.authzEngine.Check(ctx, objType, objID, relation, subj.Type, subj.ID)
+	if err != nil {
+		slog.Default().Warn("authz check errored; denying",
+			"object_type", objType,
+			"object_id", objID,
+			"relation", relation,
+			"subject_id", subj.ID,
+			"error", err,
+		)
+		return false
+	}
+	return granted
+}
+
+// resolveTenant resolves the effective tenant ID. A tenant_id override is
+// admin-gated: only a global admin (system:memory#admin) may target another
+// tenant.
 func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID) (uuid.UUID, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
@@ -92,8 +154,7 @@ func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID
 	if overrideID == nil {
 		return tid, nil
 	}
-	email := auth.EmailFromContext(ctx)
-	if _, ok := s.adminEmails[email]; !ok {
+	if !s.isAdmin(ctx) {
 		return uuid.Nil, fmt.Errorf("%w: tenant_id override requires admin privileges", apperr.ErrInvalidInput)
 	}
 	if _, err := s.tenants.GetByID(ctx, *overrideID); err != nil {
@@ -102,10 +163,11 @@ func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID
 	return *overrideID, nil
 }
 
+// isAdmin reports whether the request's subject is a global admin
+// (system:memory#admin), resolved through the tuple Check — the mutable
+// tenant.Email column has no bearing on this decision.
 func (s *MemoryService) isAdmin(ctx context.Context) bool {
-	email := auth.EmailFromContext(ctx)
-	_, ok := s.adminEmails[email]
-	return ok
+	return s.authorize(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin)
 }
 
 // tenantSettings loads the per-tenant feature toggles. When the tenants repo
@@ -250,11 +312,20 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 }
 
 // MarkVerified stamps verified_at = NOW() on a section. Agents call this after
-// confirming a claim against current source.
+// confirming a claim against current source. Routed through an editor Check on
+// the section's parent document (finding #8): without it, any caller could
+// stamp verified_at on a shared common-pool section it has no write right to.
 func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, overrideID *uuid.UUID) error {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return err
+	}
+	section, err := s.sections.GetByID(ctx, tid, sectionID)
+	if err != nil {
+		return err
+	}
+	if !s.authorize(ctx, authz.TypeDocument, section.DocumentID.String(), authz.RelEditor) {
+		return fmt.Errorf("%w: not authorized to verify section %s", apperr.ErrInvalidInput, sectionID)
 	}
 	return s.sections.MarkVerified(ctx, tid, sectionID)
 }
@@ -382,6 +453,9 @@ func (s *MemoryService) StoreDocument(
 
 	doc.Sections = sectionModels
 
+	// Lifecycle seeding: the document -> owning-tenant parent edge.
+	s.seedTuple(ctx, authzseed.DocumentTenantEdge(doc.ID, tid))
+
 	if force {
 		docID := doc.ID
 		s.logOverride(ctx, repository.OverrideEvent{
@@ -416,7 +490,8 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 		return nil, fmt.Errorf("get section: %w", err)
 	}
 
-	if section.Document != nil && section.Document.TenantID != tid && !s.isAdmin(ctx) {
+	if section.Document != nil && section.Document.TenantID != tid &&
+		!s.authorize(ctx, authz.TypeDocument, section.DocumentID.String(), authz.RelEditor) {
 		return nil, fmt.Errorf("%w: cannot update common pool section", apperr.ErrInvalidInput)
 	}
 
@@ -462,7 +537,7 @@ func (s *MemoryService) UpdateDocumentTitle(ctx context.Context, docID uuid.UUID
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
 	}
-	if doc.TenantID != tid && !s.isAdmin(ctx) {
+	if doc.TenantID != tid && !s.authorize(ctx, authz.TypeDocument, doc.ID.String(), authz.RelEditor) {
 		return nil, fmt.Errorf("%w: cannot update common pool document", apperr.ErrInvalidInput)
 	}
 
@@ -489,7 +564,7 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 		if err != nil {
 			return err
 		}
-		if doc.TenantID != tid && !s.isAdmin(ctx) {
+		if doc.TenantID != tid && !s.authorize(ctx, authz.TypeDocument, doc.ID.String(), authz.RelEditor) {
 			return fmt.Errorf("%w: cannot delete common pool document", apperr.ErrInvalidInput)
 		}
 
@@ -537,7 +612,39 @@ func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*
 	if err := s.tenants.Create(ctx, tenant); err != nil {
 		return nil, fmt.Errorf("create tenant: %w", err)
 	}
+	// Lifecycle seeding: system parent edge (enables global admins) + the
+	// tenant's own service-principal membership.
+	s.seedTuple(ctx, authzseed.TenantSystemEdge(tenant.ID))
+	s.seedTuple(ctx, authzseed.TenantMember(tenant.ID, authz.ServicePrincipalID(tenant.ID.String())))
 	return tenant, nil
+}
+
+// GrantTenantUser maps a verified email to a tenant with a role, creating the
+// tenant_users row and seeding its membership tuples (+ admin when role ==
+// admin). Admin-gated, matching the other tenant-lifecycle operations. This is
+// the lifecycle seam for user grants; no in-band tool writes tuples.
+func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenantID uuid.UUID, role string) (*models.TenantUser, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if role == "" {
+		role = models.TenantUserRoleMember
+	}
+	if _, ok := models.ValidTenantUserRoles[role]; !ok {
+		return nil, fmt.Errorf("%w: role must be member or admin", apperr.ErrInvalidInput)
+	}
+	if _, err := s.tenants.GetByID(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	tu := &models.TenantUser{Email: email, TenantID: tenantID, Role: role}
+	if err := s.db.WithContext(ctx).Create(tu).Error; err != nil {
+		return nil, fmt.Errorf("create tenant_user: %w", err)
+	}
+	s.seedTuple(ctx, authzseed.TenantMember(tenantID, tu.ID.String()))
+	if role == models.TenantUserRoleAdmin {
+		s.seedTuple(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String()))
+	}
+	return tu, nil
 }
 
 // UpdateTenantFields bundles the optional patches admin/self tools may apply.
@@ -651,26 +758,37 @@ func (s *MemoryService) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 	return s.tenants.Delete(ctx, id)
 }
 
-func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string) (string, *models.APIKey, error) {
+// CreateAPIKey mints a key for a tenant. subjectID pins the key to a specific
+// unified authorization subject; nil/empty makes it the tenant service
+// principal ("svc:<tenant_id>"). Either way the key's subject is granted
+// membership on the tenant (idempotent — svc membership is already seeded at
+// tenant create).
+func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string, subjectID *string) (string, *models.APIKey, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return "", nil, err
 	}
 	if _, err := s.tenants.GetByID(ctx, tenantID); err != nil {
 		return "", nil, err
 	}
+	if subjectID != nil && *subjectID == "" {
+		subjectID = nil
+	}
 	plaintext, hash, err := auth.GenerateAPIKey()
 	if err != nil {
 		return "", nil, fmt.Errorf("generate key: %w", err)
 	}
 	key := &models.APIKey{
-		TenantID: tenantID,
-		KeyHash:  hash,
-		Label:    label,
-		Prefix:   auth.KeyPrefix(plaintext),
+		TenantID:  tenantID,
+		KeyHash:   hash,
+		Label:     label,
+		Prefix:    auth.KeyPrefix(plaintext),
+		SubjectID: subjectID,
 	}
 	if err := s.keys.Create(ctx, key); err != nil {
 		return "", nil, fmt.Errorf("create key: %w", err)
 	}
+	// Lifecycle seeding: ensure the key's subject is a member of the tenant.
+	s.seedTuple(ctx, authzseed.TenantMember(tenantID, authzseed.APIKeySubjectID(*key)))
 	return plaintext, key, nil
 }
 
@@ -696,10 +814,19 @@ func (s *MemoryService) GenerateIndex(ctx context.Context, depth string, categor
 	return s.docs.GenerateIndex(ctx, tid, repository.IndexDepth(depth), category)
 }
 
+// GetRelated returns documents semantically related to the target. Routed
+// through a viewer Check on the caller-supplied target document (finding #9,
+// IDOR): without it, a caller could probe another tenant's documents for
+// related content. Read-level (viewer) is deliberate — it still denies
+// cross-tenant private targets but allows relating over world-readable
+// common-pool documents.
 func (s *MemoryService) GetRelated(ctx context.Context, documentID uuid.UUID, limit int, overrideID *uuid.UUID) ([]repository.RelatedResult, error) {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
 		return nil, err
+	}
+	if !s.authorize(ctx, authz.TypeDocument, documentID.String(), authz.RelViewer) {
+		return nil, fmt.Errorf("%w: not authorized for document %s", apperr.ErrInvalidInput, documentID)
 	}
 	return s.sections.GetRelated(ctx, tid, documentID, limit)
 }
