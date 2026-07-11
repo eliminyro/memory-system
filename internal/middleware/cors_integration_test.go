@@ -58,7 +58,7 @@ func TestCORS_AssembledMux(t *testing.T) {
 		if err != nil {
 			t.Fatalf("preflight failed: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("preflight status=%d want 204", resp.StatusCode)
 		}
@@ -84,7 +84,7 @@ func TestCORS_AssembledMux(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST failed: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("POST status=%d want 400 (from stub handler)", resp.StatusCode)
 		}
@@ -104,7 +104,7 @@ func TestCORS_AssembledMux(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		vary := resp.Header.Values("Vary")
 		if len(vary) != 2 {
 			t.Fatalf("Vary headers=%v want 2 entries", vary)
@@ -121,7 +121,7 @@ func TestCORS_AssembledMux(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 			t.Fatalf("/health must not carry Allow-Origin, got %q", got)
 		}
@@ -134,7 +134,7 @@ func TestCORS_AssembledMux(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "" {
 			t.Fatalf("Allow-Credentials must be empty on public OAuth surface, got %q", got)
 		}

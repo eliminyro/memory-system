@@ -1,32 +1,39 @@
 package mcp
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
-	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/eliminyro/memory-system/internal/auth"
+	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/service"
 	"github.com/eliminyro/memory-system/internal/version"
 )
 
-type Server struct {
-	memory      *service.MemoryService
-	mcp         *mcpsdk.Server
-	adminMcp    *mcpsdk.Server
-	adminEmails map[string]struct{}
+// Checker is the authorization capability the server needs to pick between the
+// regular and admin tool surfaces. *authz.Engine satisfies it.
+type Checker interface {
+	Check(ctx context.Context, objType, objID, relation, subjType, subjID string) (bool, error)
 }
 
-func NewServer(memory *service.MemoryService, adminEmails []string) *Server {
-	emailSet := make(map[string]struct{}, len(adminEmails))
-	for _, e := range adminEmails {
-		emailSet[strings.TrimSpace(e)] = struct{}{}
-	}
+type Server struct {
+	memory   *service.MemoryService
+	mcp      *mcpsdk.Server
+	adminMcp *mcpsdk.Server
+	checker  Checker
+}
 
+// NewServer builds the regular + admin MCP tool surfaces. checker drives the
+// per-request admin split: a request is served the admin surface iff its
+// subject holds system:memory#admin. A nil checker collapses every request to
+// the regular surface (fail closed).
+func NewServer(memory *service.MemoryService, checker Checker) *Server {
 	s := &Server{
-		memory:      memory,
-		adminEmails: emailSet,
+		memory:  memory,
+		checker: checker,
 	}
 
 	impl := &mcpsdk.Implementation{
@@ -67,10 +74,30 @@ Admin tools: list_tenants, create_tenant, update_tenant, delete_tenant, create_a
 	return s
 }
 
+// isAdmin reports whether the request context's subject is a global admin
+// (system:memory#admin), resolved through the tuple Check. Fails closed on a
+// nil checker, a subjectless request, or a Check error — the request then gets
+// the regular (non-admin) surface.
+func (s *Server) isAdmin(ctx context.Context) bool {
+	if s.checker == nil {
+		return false
+	}
+	subj, ok := auth.SubjectFromContext(ctx)
+	if !ok || subj.ID == "" {
+		return false
+	}
+	granted, err := s.checker.Check(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin, subj.Type, subj.ID)
+	if err != nil {
+		slog.Default().Warn("mcp admin check errored; treating as non-admin",
+			"subject_id", subj.ID, "error", err)
+		return false
+	}
+	return granted
+}
+
 func (s *Server) HTTPHandler() http.Handler {
 	return mcpsdk.NewStreamableHTTPHandler(func(r *http.Request) *mcpsdk.Server {
-		email := auth.EmailFromContext(r.Context())
-		if _, ok := s.adminEmails[email]; ok {
+		if s.isAdmin(r.Context()) {
 			return s.adminMcp
 		}
 		return s.mcp

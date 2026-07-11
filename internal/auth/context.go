@@ -36,6 +36,38 @@ func EmailFromContext(ctx context.Context) string {
 	return email
 }
 
+// SubjectTypeUser is the only subject type in the unified authorization model:
+// humans and tenant service principals are both "user" subjects. It matches
+// authz.TypeUser and is the value fed to the Check evaluator's subject type in
+// Pass 2.
+const SubjectTypeUser = "user"
+
+// Subject is the unified authorization principal for a request. Both
+// JWT-authenticated humans (subject id == tenant_users.id) and API-key callers
+// (subject id == the key's subject_id, else "svc:<tenant_id>") resolve to a
+// Subject. The relationship-based Check evaluator (wired in Pass 2) is
+// evaluated against it. Type is always SubjectTypeUser today.
+type Subject struct {
+	Type string
+	ID   string
+}
+
+type subjectContextKey struct{}
+
+// WithSubject returns a new context carrying the resolved authorization
+// subject.
+func WithSubject(ctx context.Context, s Subject) context.Context {
+	return context.WithValue(ctx, subjectContextKey{}, s)
+}
+
+// SubjectFromContext extracts the authorization subject. The bool is false when
+// no subject was resolved (e.g. a JWT caller with no tenant_users row); Pass 2
+// callers fail closed on that.
+func SubjectFromContext(ctx context.Context) (Subject, bool) {
+	s, ok := ctx.Value(subjectContextKey{}).(Subject)
+	return s, ok
+}
+
 // BearerToken extracts the Bearer token from an Authorization header.
 // Returns an error if the header is missing or malformed.
 func BearerToken(r *http.Request) (string, error) {

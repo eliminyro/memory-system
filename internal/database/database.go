@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/eliminyro/memory-system/internal/authletstore"
+	"github.com/eliminyro/memory-system/internal/authz"
+	"github.com/eliminyro/memory-system/internal/authzseed"
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
@@ -84,6 +87,8 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		&authletstore.OAuthRefreshToken{},
 		&authletstore.FamilyRevocation{},
 		&authletstore.AuthletSigningKey{},
+		// authorization engine relation tuples
+		&authz.RelationTuple{},
 	); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
@@ -160,6 +165,14 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		).Error; err != nil {
 			return fmt.Errorf("seed staleness threshold %s: %w", t.DocType, err)
 		}
+	}
+
+	// Backfill authorization relation tuples from existing domain rows. Runs in
+	// the same transaction (writes go through the tx-backed store) and is
+	// idempotent, so it is safe on every migrate. Pass 1: tuples are populated
+	// but do not yet drive any authorization decision.
+	if err := authzseed.Backfill(context.Background(), authz.NewPostgresStore(tx), tx); err != nil {
+		return fmt.Errorf("authz backfill: %w", err)
 	}
 
 	return nil

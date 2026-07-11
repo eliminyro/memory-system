@@ -1,6 +1,7 @@
 package authletas
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/eliminyro/authlet/pkg/rs"
@@ -45,6 +46,16 @@ func (w *Wiring) UserContextBridge() func(http.Handler) http.Handler {
 			ctx := auth.WithTenantID(r.Context(), tid)
 			if email, ok := claims.Extra["email"].(string); ok && email != "" {
 				ctx = auth.WithEmail(ctx, email)
+				// Resolve the verified email to the unified authorization
+				// subject (tenant_users.id). No row -> no subject attached, so
+				// Pass 2 fails closed. Skipped when db is nil (unit tests that
+				// construct Wiring directly), preserving the tenant+email-only
+				// behavior.
+				if w.db != nil {
+					if uid, ok := lookupTenantUserID(r.Context(), w.db, slog.Default(), email); ok {
+						ctx = auth.WithSubject(ctx, auth.Subject{Type: auth.SubjectTypeUser, ID: uid})
+					}
+				}
 			}
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})

@@ -68,17 +68,30 @@ func (s *refreshStore) Get(ctx context.Context, hash string) (*storage.RefreshTo
 // storage.ErrAlreadyConsumed; the caller MUST then call RevokeFamily.
 func (s *refreshStore) MarkUsed(ctx context.Context, hash string, replacedBy string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var row OAuthRefreshToken
-		if err := tx.First(&row, "token_hash = ?", hash).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return storage.ErrNotFound
-			}
-			return err
+		// The conditional UPDATE is the atomic guard: only a row whose
+		// replaced_by is still empty is transitioned. Under Postgres READ
+		// COMMITTED two concurrent rotations of the same token would both
+		// pass a naive read-then-check, but the row lock serializes the
+		// UPDATEs so only one matches — the loser sees RowsAffected == 0.
+		res := tx.Model(&OAuthRefreshToken{}).
+			Where("token_hash = ? AND replaced_by = ?", hash, "").
+			Update("replaced_by", replacedBy)
+		if res.Error != nil {
+			return res.Error
 		}
-		if row.ReplacedBy != "" {
+		if res.RowsAffected == 0 {
+			// Distinguish an unknown token from one already consumed so the
+			// caller triggers the rotation-reuse revoke path on the latter.
+			var row OAuthRefreshToken
+			if err := tx.First(&row, "token_hash = ?", hash).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return storage.ErrNotFound
+				}
+				return err
+			}
 			return storage.ErrAlreadyConsumed
 		}
-		return tx.Model(&row).Update("replaced_by", replacedBy).Error
+		return nil
 	})
 }
 

@@ -9,6 +9,14 @@ services:
       POSTGRES_USER: memory
       POSTGRES_PASSWORD: memory
       POSTGRES_DB: memory_test
+  # Dedicated DB for the smoke step so a fresh, empty schema boots the server
+  # in isolation — no shared state or dimension mismatch with the test suite.
+  - name: postgres_smoke
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: memory
+      POSTGRES_DB: memory_test
 
 steps:
   - name: test
@@ -21,7 +29,9 @@ steps:
       - /tmp/memory-system-ci/go-mod:/go/pkg/mod
     commands:
       - ci wait --pg postgres/memory
-      - go test -v -tags=integration ./...
+      # -p 1: integration packages share one DB; serialize them so concurrent
+      # AutoMigrate calls don't race on pg_type (duplicate-key) or cross-talk.
+      - go test -v -tags=integration -p 1 ./...
 
   - name: fmt
     image: ghcr.io/eliminyro/ci-tool:latest
@@ -35,14 +45,14 @@ steps:
     image: ghcr.io/eliminyro/ci-tool:latest
     pull: true
     environment:
-      DATABASE_URL: postgres://memory:memory@postgres:5432/memory_test?sslmode=disable
+      DATABASE_URL: postgres://memory:memory@postgres_smoke:5432/memory_test?sslmode=disable
       SERVER_ADDR: ":8080"
     volumes:
       - /tmp/memory-system-ci/go-cache:/root/.cache/go-build
       - /tmp/memory-system-ci/go-mod:/go/pkg/mod
     commands:
       - 'trap "echo ---server.log---; cat /tmp/server.log 2>/dev/null || true" EXIT'
-      - ci wait --pg postgres/memory
+      - ci wait --pg postgres_smoke/memory
       - go build -o /tmp/memory-server ./cmd/server
       - /tmp/memory-server > /tmp/server.log 2>&1 &
       - SERVER_PID=$!
