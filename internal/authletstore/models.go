@@ -32,15 +32,19 @@ func (OAuthClient) TableName() string { return "oauth_clients" }
 // OAuthCode is the GORM row for a short-lived authorization code. The code
 // itself is never stored; only its hash is.
 type OAuthCode struct {
-	CodeHash      string    `gorm:"primaryKey;column:code_hash"`
-	ClientID      string    `gorm:"column:client_id;index"`
-	UserID        string    `gorm:"column:user_id"`
-	Resource      string    `gorm:"column:resource"`
-	Scope         string    `gorm:"column:scope"`
-	PKCEChallenge string    `gorm:"column:pkce_challenge"`
-	PKCEMethod    string    `gorm:"column:pkce_method"`
-	RedirectURI   string    `gorm:"column:redirect_uri"`
-	ExpiresAt     time.Time `gorm:"column:expires_at;index"`
+	CodeHash      string `gorm:"primaryKey;column:code_hash"`
+	ClientID      string `gorm:"column:client_id;index"`
+	UserID        string `gorm:"column:user_id"`
+	Resource      string `gorm:"column:resource"`
+	Scope         string `gorm:"column:scope"`
+	PKCEChallenge string `gorm:"column:pkce_challenge"`
+	PKCEMethod    string `gorm:"column:pkce_method"`
+	RedirectURI   string `gorm:"column:redirect_uri"`
+	// Nonce carries the client's OIDC nonce from /authorize through to the
+	// minted id_token (authlet v1.0.3 storage.AuthCode.Nonce). Without it the
+	// nonce replay-defense silently no-ops on this Postgres-backed store.
+	Nonce     string    `gorm:"column:nonce"`
+	ExpiresAt time.Time `gorm:"column:expires_at;index"`
 }
 
 // TableName returns the Postgres table name for OAuthCode.

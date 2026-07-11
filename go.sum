@@ -12,8 +12,8 @@ github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ3
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/eliminyro/authlet v1.0.2 h1:xkO0JPTlP3+GBwCe/AgCdxEP0TdS2F4gc7O/yngyj+o=
-github.com/eliminyro/authlet v1.0.2/go.mod h1:9H4f1jKybYiab2AmjOgjeu4J63q96UNc6mGH4PTZz64=
+github.com/eliminyro/authlet v1.0.3 h1:NYWeRZr7bmwiPkwAHaiAMwzQ/7TV8G0d6ylwg1pgjxI=
+github.com/eliminyro/authlet v1.0.3/go.mod h1:9H4f1jKybYiab2AmjOgjeu4J63q96UNc6mGH4PTZz64=
 github.com/go-chi/chi/v5 v5.2.5 h1:Eg4myHZBjyvJmAFjFvWgrqDTXFyOzjj7YIm3L3mu6Ug=
 github.com/go-chi/chi/v5 v5.2.5/go.mod h1:X7Gx4mteadT3eDOMTsXzmI4/rwUpOwBHLpAfupzFJP0=
 github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=

@@ -4,7 +4,7 @@ go 1.25.4
 
 require (
 	github.com/caarlos0/env/v10 v10.0.0
-	github.com/eliminyro/authlet v1.0.2
+	github.com/eliminyro/authlet v1.0.3
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/modelcontextprotocol/go-sdk v1.3.0

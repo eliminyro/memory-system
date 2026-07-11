@@ -24,6 +24,7 @@ func (s *codeStore) Save(ctx context.Context, c storage.AuthCode) error {
 		PKCEChallenge: c.PKCEChallenge,
 		PKCEMethod:    c.PKCEMethod,
 		RedirectURI:   c.RedirectURI,
+		Nonce:         c.Nonce,
 		ExpiresAt:     c.ExpiresAt,
 	}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
@@ -75,6 +76,7 @@ func (s *codeStore) ConsumeOnce(ctx context.Context, hash string) (*storage.Auth
 			PKCEChallenge: row.PKCEChallenge,
 			PKCEMethod:    row.PKCEMethod,
 			RedirectURI:   row.RedirectURI,
+			Nonce:         row.Nonce,
 			ExpiresAt:     row.ExpiresAt,
 		}
 		return nil
