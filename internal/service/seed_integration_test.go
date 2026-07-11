@@ -91,7 +91,7 @@ func TestLifecycleSeeding(t *testing.T) {
 
 	// CreateAPIKey with an explicit subject -> that subject's membership.
 	sub := "tu-" + uuid.NewString()
-	_, _, err = svc.CreateAPIKey(adminCtx, tenant.ID, "key", &sub)
+	_, _, err = svc.CreateAPIKey(adminCtx, tenant.ID, "key", &sub, nil)
 	require.NoError(t, err)
 	requireTuple(t, store, authzseed.TenantMember(tenant.ID, sub))
 

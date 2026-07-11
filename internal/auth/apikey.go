@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -77,12 +78,18 @@ func NewAPIKeyValidator(db *gorm.DB) *APIKeyValidator {
 func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (KeyInfo, error) {
 	hash := HashAPIKey(key)
 	var ak models.APIKey
+	// A key authenticates only when it is not revoked AND not past its expiry.
+	// NULL expires_at means "never expires" (pre-expiry behavior preserved).
 	if err := v.db.WithContext(ctx).
 		Preload("Tenant").
-		Where("key_hash = ? AND revoked_at IS NULL", hash).
+		Where("key_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())", hash).
 		First(&ak).Error; err != nil {
 		return KeyInfo{}, fmt.Errorf("invalid or revoked API key")
 	}
+	// Best-effort last-used stamp for the admin listing — never fail auth on it.
+	v.db.WithContext(ctx).Model(&models.APIKey{}).
+		Where("id = ?", ak.ID).
+		UpdateColumn("last_used_at", time.Now())
 	var email string
 	if ak.Tenant != nil {
 		email = ak.Tenant.Email
