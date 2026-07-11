@@ -107,11 +107,12 @@ func TestLoadRequiresBothGoogleEnvsOrNeither(t *testing.T) {
 		name        string
 		clientID    string
 		clientSec   string
+		baseURL     string
 		wantErr     string
 		wantEnabled bool
 	}{
 		{name: "neither set: ok, authlet disabled", wantEnabled: false},
-		{name: "both set: ok, authlet enabled", clientID: "id", clientSec: "sec", wantEnabled: true},
+		{name: "both set: ok, authlet enabled", clientID: "id", clientSec: "sec", baseURL: "https://mem.example.org", wantEnabled: true},
 		{name: "only id set fails", clientID: "id", wantErr: "MEMORY_MCP_GOOGLE_CLIENT"},
 		{name: "only secret set fails", clientSec: "sec", wantErr: "MEMORY_MCP_GOOGLE_CLIENT"},
 	}
@@ -119,6 +120,7 @@ func TestLoadRequiresBothGoogleEnvsOrNeither(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_ID", tc.clientID)
 			t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_SECRET", tc.clientSec)
+			t.Setenv("PUBLIC_BASE_URL", tc.baseURL)
 			cfg, err := Load()
 			if tc.wantErr != "" {
 				if err == nil {
@@ -134,6 +136,54 @@ func TestLoadRequiresBothGoogleEnvsOrNeither(t *testing.T) {
 			}
 			if got := cfg.AuthletEnabled(); got != tc.wantEnabled {
 				t.Fatalf("AuthletEnabled=%v want %v", got, tc.wantEnabled)
+			}
+		})
+	}
+}
+
+func TestLoadPublicBaseURL(t *testing.T) {
+	cases := []struct {
+		name        string
+		authlet     bool // set both Google envs -> AuthletEnabled
+		baseURL     string
+		wantErr     string
+		wantBaseURL string // expected normalized value when no error
+	}{
+		{name: "authlet on, valid https", authlet: true, baseURL: "https://mem.example.org", wantBaseURL: "https://mem.example.org"},
+		{name: "authlet on, trailing slash trimmed", authlet: true, baseURL: "https://mem.example.org/", wantBaseURL: "https://mem.example.org"},
+		{name: "authlet on, http allowed", authlet: true, baseURL: "http://localhost:8080", wantBaseURL: "http://localhost:8080"},
+		{name: "authlet on, empty rejected", authlet: true, baseURL: "", wantErr: "PUBLIC_BASE_URL is required"},
+		{name: "authlet on, bad scheme rejected", authlet: true, baseURL: "ftp://mem.example.org", wantErr: "http or https"},
+		{name: "authlet on, path rejected", authlet: true, baseURL: "https://mem.example.org/base", wantErr: "must not include a path"},
+		{name: "authlet off, empty ok", authlet: false, baseURL: "", wantBaseURL: ""},
+		{name: "authlet off, no validation but still normalized", authlet: false, baseURL: "https://mem.example.org/", wantBaseURL: "https://mem.example.org"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.authlet {
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_ID", "id")
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_SECRET", "sec")
+			} else {
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_ID", "")
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_SECRET", "")
+			}
+			t.Setenv("PUBLIC_BASE_URL", tc.baseURL)
+
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %q", tc.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.PublicBaseURL != tc.wantBaseURL {
+				t.Fatalf("PublicBaseURL = %q, want %q", cfg.PublicBaseURL, tc.wantBaseURL)
 			}
 		})
 	}

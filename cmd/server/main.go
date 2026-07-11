@@ -210,6 +210,7 @@ func main() {
 			authletstore.New(db),
 			cfg.GoogleClientID,
 			cfg.GoogleClientSecret,
+			cfg.PublicBaseURL,
 			slog.Default(),
 		)
 		if err != nil {
@@ -230,6 +231,7 @@ func main() {
 		AuthletWiring:   authletWiring,
 		Memory:          memorySvc,
 		UIClientID:      cfg.UIClientID,
+		PublicBaseURL:   cfg.PublicBaseURL,
 		MaxRequestBytes: cfg.MaxRequestBytes,
 		RateLimitRPS:    cfg.RateLimitRPS,
 		RateLimitBurst:  cfg.RateLimitBurst,

@@ -66,12 +66,12 @@ func TestUserContextBridge_ResolvesSubjectFromEmail(t *testing.T) {
 	uid := uuid.New().String()
 	if err := db.Exec(
 		"INSERT INTO tenant_users (id, email, tenant_id, role) VALUES (?, ?, ?, 'member')",
-		uid, "pe@avantistudios.ai", tid.String(),
+		uid, "admin@example.com", tid.String(),
 	).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	subj, ok := runBridge(t, &Wiring{db: db}, tid, "pe@avantistudios.ai")
+	subj, ok := runBridge(t, &Wiring{db: db}, tid, "admin@example.com")
 	if !ok {
 		t.Fatal("expected subject to be resolved from verified email")
 	}
@@ -88,7 +88,7 @@ func TestUserContextBridge_NoTenantUserRowNoSubject(t *testing.T) {
 }
 
 func TestUserContextBridge_NilDBNoSubject(t *testing.T) {
-	if _, ok := runBridge(t, &Wiring{}, uuid.New(), "pe@avantistudios.ai"); ok {
+	if _, ok := runBridge(t, &Wiring{}, uuid.New(), "admin@example.com"); ok {
 		t.Fatal("expected no subject when db is nil")
 	}
 }

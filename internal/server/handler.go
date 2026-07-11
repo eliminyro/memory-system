@@ -25,6 +25,11 @@ type Deps struct {
 	Memory        *service.MemoryService
 	UIClientID    string
 
+	// PublicBaseURL is the server's external origin (scheme+host, no trailing
+	// slash). The UI's OAuth config (issuer/redirect_uri/resource) is derived
+	// from it so the web login works on any deployment host.
+	PublicBaseURL string
+
 	// HTTP hardening. MaxRequestBytes caps every request body (<= 0 disables
 	// the cap). RateLimitRPS / RateLimitBurst configure the token-bucket
 	// throttle (RateLimitRPS <= 0 disables it — the zero value leaves tests
@@ -71,7 +76,7 @@ func NewHandler(d Deps) http.Handler {
 
 	// Web UI static shell — public, no auth. The shell carries no data;
 	// the /api routes that return data are what requires the token.
-	uiFiles, uiConfig := uiHandlers(d.UIClientID)
+	uiFiles, uiConfig := uiHandlers(d.UIClientID, d.PublicBaseURL)
 	mux.HandleFunc("GET /ui/config.json", uiConfig)
 	mux.HandleFunc("GET /ui", uiRedirectHandler)
 	mux.Handle("GET /ui/", uiFiles)
