@@ -189,6 +189,43 @@ func TestLoadPublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadProviderRequiredFields(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		openaiM  string
+		awsReg   string
+		awsM     string
+		wantErr  string
+	}{
+		{name: "ollama default needs nothing", provider: "ollama"},
+		{name: "openai with model ok", provider: "openai", openaiM: "text-embedding-3-small"},
+		{name: "openai without model rejected", provider: "openai", wantErr: "OPENAI_EMBEDDING_MODEL is required"},
+		{name: "aws with region+model ok", provider: "aws", awsReg: "us-east-1", awsM: "amazon.titan-embed-text-v2:0"},
+		{name: "aws without region rejected", provider: "aws", awsM: "amazon.titan-embed-text-v2:0", wantErr: "AWS_REGION and AWS_EMBEDDING_MODEL"},
+		{name: "aws without model rejected", provider: "aws", awsReg: "us-east-1", wantErr: "AWS_REGION and AWS_EMBEDDING_MODEL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("EMBEDDING_PROVIDER", tc.provider)
+			t.Setenv("OPENAI_EMBEDDING_MODEL", tc.openaiM)
+			t.Setenv("AWS_REGION", tc.awsReg)
+			t.Setenv("AWS_EMBEDDING_MODEL", tc.awsM)
+
+			_, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsRetentionBelowLowerBound(t *testing.T) {
 	cases := []struct {
 		name       string
