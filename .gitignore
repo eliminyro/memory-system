@@ -4,3 +4,4 @@
 *.exe
 .env
 memory.db
+**/superpowers
