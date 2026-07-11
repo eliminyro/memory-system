@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -99,8 +100,11 @@ func (e *GCPEmbedder) Embed(ctx context.Context, text string) (pgvector.Vector, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return pgvector.Vector{}, fmt.Errorf("vertex ai returned status %d: %s", resp.StatusCode, string(respBody))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		// Log the full upstream detail server-side; never surface it to the
+		// caller (audit #18) — it can carry provider internals.
+		slog.Error("vertex ai embedding request failed", "status", resp.StatusCode, "body", string(respBody))
+		return pgvector.Vector{}, ErrEmbeddingUnavailable
 	}
 
 	var result gcpEmbedResponse

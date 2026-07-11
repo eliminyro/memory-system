@@ -35,7 +35,7 @@ func openLintPG(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if err := database.Migrate(db, dupTestDim, database.TenantColumnDefaults{StalenessMode: "off"}); err != nil {
+	if err := database.Migrate(db, "fake", "fake", dupTestDim, database.TenantColumnDefaults{StalenessMode: "off"}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {

@@ -2,11 +2,13 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 
 	"github.com/eliminyro/memory-system/internal/authletstore"
@@ -21,6 +23,14 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("connect to database: %w", err)
+	}
+
+	// PostgreSQL is mandatory (audit #8.2): the near-duplicate self-joins,
+	// pgvector operators, and tsvector columns are Postgres-only, and the sqlite
+	// gorm driver (retained solely for unit tests that open sqlite directly)
+	// silently degrades them. Fail fast rather than serve a half-broken corpus.
+	if name := db.Name(); name != "postgres" {
+		return nil, fmt.Errorf("unsupported database dialect %q: memory-system requires PostgreSQL", name)
 	}
 
 	// Connection pool settings
@@ -50,14 +60,15 @@ type TenantColumnDefaults struct {
 	CleanupScanEnabled bool
 }
 
-func Migrate(db *gorm.DB, dimensions int, td TenantColumnDefaults) error {
+func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColumnDefaults) error {
 	// Check existing vector dimensions BEFORE AutoMigrate (which may reset atttypmod).
 	// If sections table exists with data, verify dimensions match.
 	var existingDim int
 	dimErr := db.Raw(`
 		SELECT vector_dims(embedding) FROM sections WHERE embedding IS NOT NULL LIMIT 1
 	`).Scan(&existingDim).Error
-	if dimErr == nil && existingDim > 0 && existingDim != dimensions {
+	corpusPopulated := dimErr == nil && existingDim > 0
+	if corpusPopulated && existingDim != dimensions {
 		return fmt.Errorf("embedding dimension mismatch: existing vectors are %d-dim, config wants %d — re-embed all data to fix", existingDim, dimensions)
 	}
 
@@ -65,11 +76,11 @@ func Migrate(db *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 	// crash mid-migration rolls back cleanly. Postgres supports DDL in
 	// transactions, so this covers CREATE / ALTER / UPDATE / INSERT uniformly.
 	return db.Transaction(func(tx *gorm.DB) error {
-		return migrateInTx(tx, dimensions, td)
+		return migrateInTx(tx, provider, model, dimensions, corpusPopulated, td)
 	})
 }
 
-func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
+func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopulated bool, td TenantColumnDefaults) error {
 	// Migrate all models — Tenant first (referenced by Document, APIKey, TenantUser)
 	if err := tx.AutoMigrate(
 		&models.Tenant{},
@@ -81,6 +92,7 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		&models.OverrideLog{},
 		&models.CleanupQueue{},
 		&models.DeletionEvent{},
+		&models.EmbeddingMetadata{},
 		// authlet tables — Phase A of authlet integration
 		&authletstore.OAuthClient{},
 		&authletstore.OAuthCode{},
@@ -91,6 +103,14 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		&authz.RelationTuple{},
 	); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
+	}
+
+	// Embedding-identity guard (audit #13/#16): freeze the (provider, model,
+	// dimension) that produced the corpus and refuse a swap that would silently
+	// corrupt similarity/dedup/retention. Runs after AutoMigrate so the
+	// embedding_metadata table exists.
+	if err := guardEmbeddingIdentity(tx, provider, model, dimensions, corpusPopulated); err != nil {
+		return err
 	}
 
 	// Bootstrap tenant: insert default tenant for existing data
@@ -175,5 +195,60 @@ func migrateInTx(tx *gorm.DB, dimensions int, td TenantColumnDefaults) error {
 		return fmt.Errorf("authz backfill: %w", err)
 	}
 
+	return nil
+}
+
+// guardEmbeddingIdentity enforces that the embedding (provider, model,
+// dimension) of a populated corpus never changes silently (audit #13/#16).
+//
+//   - Empty corpus OR no metadata row yet (fresh install, or the first deploy
+//     of this guard against an existing corpus): adopt the current identity and
+//     proceed. Nothing is corrupted by recording it.
+//   - Populated corpus with a recorded identity: a differing provider OR model
+//     is refused — even at the same dimension — because cosine similarity, the
+//     duplicate guard, and retention scoring are only comparable within one
+//     embedding space. The dimension itself is already validated by the
+//     pre-transaction guard in Migrate.
+func guardEmbeddingIdentity(tx *gorm.DB, provider, model string, dimensions int, corpusPopulated bool) error {
+	var meta models.EmbeddingMetadata
+	err := tx.Where("id = ?", models.EmbeddingMetadataSingletonID).First(&meta).Error
+	metaMissing := errors.Is(err, gorm.ErrRecordNotFound)
+	if err != nil && !metaMissing {
+		return fmt.Errorf("read embedding metadata: %w", err)
+	}
+
+	if !corpusPopulated || metaMissing {
+		rec := models.EmbeddingMetadata{
+			ID:         models.EmbeddingMetadataSingletonID,
+			Provider:   provider,
+			Model:      model,
+			Dimensions: dimensions,
+			UpdatedAt:  time.Now(),
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"provider", "model", "dimensions", "updated_at"}),
+		}).Create(&rec).Error; err != nil {
+			return fmt.Errorf("record embedding metadata: %w", err)
+		}
+		return nil
+	}
+
+	if meta.Provider != provider || meta.Model != model {
+		return fmt.Errorf(
+			"embedding provider/model change refused: corpus was built with provider=%q model=%q (dim %d), config now requests provider=%q model=%q (dim %d) — similarity/dedup/retention would silently corrupt; restore the previous EMBEDDING_PROVIDER/model or re-embed all data",
+			meta.Provider, meta.Model, meta.Dimensions, provider, model, dimensions,
+		)
+	}
+
+	// Same provider+model. Keep the recorded dimension in sync (the value is
+	// already validated by the pre-transaction dimension guard).
+	if meta.Dimensions != dimensions {
+		if err := tx.Model(&models.EmbeddingMetadata{}).
+			Where("id = ?", models.EmbeddingMetadataSingletonID).
+			Update("dimensions", dimensions).Error; err != nil {
+			return fmt.Errorf("sync embedding metadata dimension: %w", err)
+		}
+	}
 	return nil
 }

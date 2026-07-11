@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -63,8 +64,11 @@ func (e *OllamaEmbedder) Embed(ctx context.Context, text string) (pgvector.Vecto
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return pgvector.Vector{}, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		// Log the full upstream detail server-side; never surface it to the
+		// caller (audit #18) — it can carry provider internals.
+		slog.Error("ollama embedding request failed", "status", resp.StatusCode, "body", string(body))
+		return pgvector.Vector{}, ErrEmbeddingUnavailable
 	}
 
 	var result embedResponse

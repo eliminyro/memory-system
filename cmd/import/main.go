@@ -21,15 +21,23 @@ import (
 )
 
 func main() {
-	tenantFlag := flag.String("tenant", "", "Tenant UUID or name (default: bootstrap tenant)")
+	tenantFlag := flag.String("tenant", "", "Tenant UUID or name (required)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: import [flags] <memory-directory>\n")
+		fmt.Fprintf(os.Stderr, "Usage: import --tenant <uuid|name> [flags] <memory-directory>\n")
 		fmt.Fprintf(os.Stderr, "Example: import --tenant default ~/.claude/context/memory\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
 	if flag.NArg() < 1 {
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	// --tenant is mandatory: refuse to silently default to the shared
+	// bootstrap/common pool, which would pollute every tenant's read scope.
+	if *tenantFlag == "" {
+		slog.Error("--tenant is required; refusing to default to the shared bootstrap/common pool")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -47,7 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := database.Migrate(db, cfg.EmbeddingDimensions, database.TenantColumnDefaults{
+	if err := database.Migrate(db, cfg.EmbeddingProvider, cfg.EmbeddingModel(), cfg.EmbeddingDimensions, database.TenantColumnDefaults{
 		StalenessMode:      cfg.TenantDefaults.StalenessMode,
 		DuplicateGuard:     cfg.TenantDefaults.DuplicateGuard,
 		CleanupScanEnabled: cfg.TenantDefaults.CleanupScanEnabled,
@@ -56,32 +64,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Resolve tenant ID
-	tenantID := models.BootstrapTenantID
-	if *tenantFlag != "" {
-		// Try parsing as UUID first
-		if parsed, err := uuid.Parse(*tenantFlag); err == nil {
-			tenantID = parsed
-		} else {
-			// Look up by name
-			tenantRepo := repository.NewTenantRepository(db)
-			tenants, err := tenantRepo.List(context.Background())
-			if err != nil {
-				slog.Error("failed to list tenants", "error", err)
-				os.Exit(1)
+	// Resolve the required tenant flag: UUID first, then name lookup.
+	var tenantID uuid.UUID
+	if parsed, err := uuid.Parse(*tenantFlag); err == nil {
+		tenantID = parsed
+	} else {
+		tenantRepo := repository.NewTenantRepository(db)
+		tenants, err := tenantRepo.List(context.Background())
+		if err != nil {
+			slog.Error("failed to list tenants", "error", err)
+			os.Exit(1)
+		}
+		found := false
+		for _, t := range tenants {
+			if t.Name == *tenantFlag {
+				tenantID = t.ID
+				found = true
+				break
 			}
-			found := false
-			for _, t := range tenants {
-				if t.Name == *tenantFlag {
-					tenantID = t.ID
-					found = true
-					break
-				}
-			}
-			if !found {
-				slog.Error("tenant not found", "name", *tenantFlag)
-				os.Exit(1)
-			}
+		}
+		if !found {
+			slog.Error("tenant not found", "name", *tenantFlag)
+			os.Exit(1)
 		}
 	}
 	slog.Info("importing for tenant", "tenant_id", tenantID)

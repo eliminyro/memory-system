@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,42 +10,14 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eliminyro/memory-system/internal/auth"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 )
 
-// getIndex must call the service with the tenant from context and return JSON.
-// We exercise the handler directly with an injected tenant context (the bearer
-// middleware that populates it is authlet's, tested upstream).
-func TestAPIGetIndex_RequiresServiceCall(t *testing.T) {
-	h := &apiHandler{memory: nil} // nil memory => calling it panics; we assert wiring via routing instead
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/index?depth=summary", nil)
-	req = req.WithContext(auth.WithTenantID(context.Background(), uuid.New()))
-
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected getIndex to dereference h.memory (wiring check)")
-		}
-	}()
-	h.mux().ServeHTTP(rec, req) // routes GET /index -> getIndex -> nil.GenerateIndex panics
-	_, _ = json.Marshal(nil)
-}
-
-func TestAPIListDocuments_RequiresServiceCall(t *testing.T) {
-	h := &apiHandler{memory: nil} // nil memory => calling it panics; we assert wiring via routing instead
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/documents?category=learnings", nil)
-	req = req.WithContext(auth.WithTenantID(context.Background(), uuid.New()))
-
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected listDocuments to dereference h.memory (wiring check)")
-		}
-	}()
-	h.mux().ServeHTTP(rec, req) // routes GET /documents -> listDocuments -> nil.ListDocuments panics
-	_, _ = json.Marshal(nil)
-}
+// The behavioral counterparts to the former nil-panic "wiring check" tests
+// (TestAPIGetIndex_RequiresServiceCall / TestAPIListDocuments_RequiresServiceCall)
+// now live in api_integration_test.go: they inject a real MemoryService and
+// assert each handler forwards the context tenant + query params and marshals
+// the returned data.
 
 func TestAPISearch_RequiresQuery(t *testing.T) {
 	h := &apiHandler{}

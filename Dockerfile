@@ -12,7 +12,10 @@ RUN CGO_ENABLED=0 go build \
 RUN CGO_ENABLED=0 go build -o /memory-import ./cmd/import
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -H -u 10001 -s /sbin/nologin appuser
 COPY --from=builder /memory-server /memory-server
 COPY --from=builder /memory-import /memory-import
+# Run as an unprivileged user — the server needs no root capabilities.
+USER appuser
 ENTRYPOINT ["/memory-server"]

@@ -88,6 +88,24 @@ func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.Clean
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, fmt.Errorf("check existing: %w", err)
 	}
+
+	// Suppress re-enqueue when the operator already dismissed this pair as a
+	// false positive or chose to ignore it (audit #19). Without this, every
+	// nightly scan re-adds a pair the operator explicitly rejected. A "merged"
+	// resolution is not suppressed — that pair can't re-form once one doc is gone.
+	var dismissed int64
+	if err := r.db.WithContext(ctx).
+		Model(&models.CleanupQueue{}).
+		Where("tenant_id = ? AND doc_a_id = ? AND doc_b_id = ? AND resolution IN ?",
+			entry.TenantID, lo, hi,
+			[]string{models.CleanupResolutionFalsePositive, models.CleanupResolutionIgnored}).
+		Count(&dismissed).Error; err != nil {
+		return false, fmt.Errorf("check dismissed: %w", err)
+	}
+	if dismissed > 0 {
+		return false, nil
+	}
+
 	if err := r.db.WithContext(ctx).Create(entry).Error; err != nil {
 		return false, fmt.Errorf("insert cleanup row: %w", err)
 	}

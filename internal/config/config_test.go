@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -181,5 +182,48 @@ func TestDefaultTenantDefaults(t *testing.T) {
 	want := TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+// TestLoadDefaultEmbeddingDimensionsMatchesDefaultModel guards audit #12: a
+// stock deploy uses the default ollama provider + nomic-embed-text (768-dim), so
+// the default EMBEDDING_DIMENSIONS must be 768 or every write fails at insert.
+func TestLoadDefaultEmbeddingDimensionsMatchesDefaultModel(t *testing.T) {
+	orig, had := os.LookupEnv("EMBEDDING_DIMENSIONS")
+	if err := os.Unsetenv("EMBEDDING_DIMENSIONS"); err != nil {
+		t.Fatalf("unset env: %v", err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv("EMBEDDING_DIMENSIONS", orig)
+		}
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.EmbeddingDimensions != 768 {
+		t.Fatalf("default EMBEDDING_DIMENSIONS = %d, want 768 (nomic-embed-text)", cfg.EmbeddingDimensions)
+	}
+	if cfg.EmbeddingProvider != "ollama" {
+		t.Fatalf("default EMBEDDING_PROVIDER = %q, want ollama", cfg.EmbeddingProvider)
+	}
+}
+
+// TestEmbeddingModelResolvesPerProvider verifies the model fingerprint used by
+// the migration swap guard (audit #13/#16) tracks the active provider.
+func TestEmbeddingModelResolvesPerProvider(t *testing.T) {
+	cases := []struct {
+		provider, ollama, gcp, want string
+	}{
+		{"ollama", "nomic-embed-text", "text-embedding-005", "nomic-embed-text"},
+		{"gcp", "nomic-embed-text", "text-embedding-005", "text-embedding-005"},
+		{"fake", "nomic-embed-text", "text-embedding-005", "fake"},
+	}
+	for _, tc := range cases {
+		c := &Config{EmbeddingProvider: tc.provider, OllamaModel: tc.ollama, GCPModel: tc.gcp}
+		if got := c.EmbeddingModel(); got != tc.want {
+			t.Errorf("provider %q: EmbeddingModel()=%q want %q", tc.provider, got, tc.want)
+		}
 	}
 }
