@@ -1,5 +1,15 @@
 // app.js — Knowledge UI auth module (Task 4) + browse/search/read views (Task 5).
 // marked global (loaded via /ui/vendor/marked.min.js): marked.parse(...)
+// DOMPurify global (loaded via /ui/vendor/purify.min.js): DOMPurify.sanitize(...)
+
+// renderMarkdown converts untrusted markdown to HTML and sanitizes it before
+// it is ever assigned to innerHTML. Memory section content is attacker-
+// controllable, so marked's output must pass through DOMPurify — otherwise an
+// <img onerror>/<script>/javascript: payload stored in a section would execute
+// in the reader's session (stored XSS, audit #3). Returns inert HTML.
+function renderMarkdown(md) {
+  return DOMPurify.sanitize(marked.parse(md || ""));
+}
 
 let CONFIG = null;
 async function loadConfig() {
@@ -232,7 +242,7 @@ function sectionEl(doc, s) {
     const { frontmatter, body } = splitFrontmatter(s.content);
     if (frontmatter) mdBox.append(el("div", { className: "frontmatter", textContent: frontmatter }));
     const bodyDiv = el("div", { className: "md-body" });
-    bodyDiv.innerHTML = marked.parse(body || "");
+    bodyDiv.innerHTML = renderMarkdown(body);
     mdBox.append(bodyDiv);
   }
   renderRead();

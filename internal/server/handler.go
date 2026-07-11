@@ -24,6 +24,14 @@ type Deps struct {
 	AuthletWiring *authletas.Wiring // optional; nil = API-key-only path
 	Memory        *service.MemoryService
 	UIClientID    string
+
+	// HTTP hardening. MaxRequestBytes caps every request body (<= 0 disables
+	// the cap). RateLimitRPS / RateLimitBurst configure the token-bucket
+	// throttle (RateLimitRPS <= 0 disables it — the zero value leaves tests
+	// and the API-key-only path unthrottled).
+	MaxRequestBytes int64
+	RateLimitRPS    float64
+	RateLimitBurst  int
 }
 
 // NewHandler returns the full HTTP handler (mux + middleware) for the
@@ -75,7 +83,19 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("/~/ready", readyHandler(d.DB))
 	mux.HandleFunc("/~/version", versionHandler)
 
-	return middleware.CORS(mux)
+	// Middleware stack (innermost first): CORS is closest to the mux; the body
+	// cap and rate limiter wrap the whole surface (the limiter exempts the
+	// /~/health and /~/ready probes internally); SecurityHeaders is outermost
+	// so even 429 / 413 / OPTIONS responses carry the CSP + companion headers.
+	handler := middleware.CORS(mux)
+	if d.MaxRequestBytes > 0 {
+		handler = middleware.MaxBytes(d.MaxRequestBytes)(handler)
+	}
+	if d.RateLimitRPS > 0 {
+		handler = middleware.RateLimit(d.RateLimitRPS, d.RateLimitBurst)(handler)
+	}
+	handler = middleware.SecurityHeaders(handler)
+	return handler
 }
 
 // uiRedirectHandler redirects /ui to /ui/ (where the embedded page is served),

@@ -117,6 +117,7 @@ func APIKeySubjectID(k models.APIKey) string {
 //
 //   - each tenant           -> system parent edge + svc:<tenant> membership
 //   - each tenant_user      -> membership (+ admin when role == admin)
+//   - admin tenant_user     -> system#admin for its tenant's svc principal
 //   - each document         -> document#tenant parent edge
 //   - each api_key          -> its subject's membership
 //   - common/bootstrap pool -> viewer@user:* wildcard (public read)
@@ -154,6 +155,13 @@ func Backfill(ctx context.Context, store authz.Store, db *gorm.DB) error {
 		}
 	}
 
+	// Admin tenant_users also make their tenant's service principal a global
+	// admin, so operator API keys (which resolve to svc:<tenant>) keep the admin
+	// tool surface — see seedAdminServicePrincipals.
+	if err := seedAdminServicePrincipals(ctx, store, db); err != nil {
+		return err
+	}
+
 	var keys []models.APIKey
 	if err := db.WithContext(ctx).Find(&keys).Error; err != nil {
 		return err
@@ -179,8 +187,12 @@ func Backfill(ctx context.Context, store authz.Store, db *gorm.DB) error {
 // BootstrapAdmins seeds system:memory#admin for every email in emails that has
 // a tenant_users row, resolving the verified email to its tenant_users.id
 // subject. Emails without a row are skipped with a log line (never invented).
-// Idempotent: a second run writes no duplicates. Read ADMIN_ALLOWED_EMAILS at
-// startup only and pass the parsed list here.
+// It additionally grants system:memory#admin to the service principal
+// (svc:<tenant_id>) of every tenant that has an admin tenant_user, closing the
+// operator API-key admin gap (see seedAdminServicePrincipals) — this runs on
+// every startup, independent of the allowlist. Idempotent: a second run writes
+// no duplicates. Read ADMIN_ALLOWED_EMAILS at startup only and pass the parsed
+// list here.
 func BootstrapAdmins(ctx context.Context, store authz.Store, db *gorm.DB, emails []string, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
@@ -202,6 +214,42 @@ func BootstrapAdmins(ctx context.Context, store authz.Store, db *gorm.DB, emails
 			return err
 		}
 		logger.Info("authzseed: bootstrap admin seeded", "email", email, "subject_id", tu.ID.String())
+	}
+	// Also grant system#admin to the service principal of every tenant that has
+	// an admin tenant_user, so operator API keys (svc:<tenant>) get the admin
+	// tool surface without manual SQL. Independent of the email allowlist and
+	// idempotent.
+	return seedAdminServicePrincipals(ctx, store, db)
+}
+
+// seedAdminServicePrincipals grants system:memory#admin to the service
+// principal (svc:<tenant_id>) of every tenant that has at least one admin
+// tenant_user (role == admin).
+//
+// This closes the operator API-key admin gap: an API key with no explicit
+// subject_id resolves to its tenant's service principal svc:<tenant_id> (see
+// APIKeySubjectID / authz.ServicePrincipalID), which the tenant backfill only
+// makes a tenant *member*. Bootstrap already grants system#admin to the human
+// JWT identity (system:memory#admin@user:<tenant_users.id>), so without this an
+// operator whose only session is an API key would lose the admin tool surface.
+// Granting the service principal system#admin makes a fresh install give the
+// operator tenant's API keys admin with no manual SQL.
+//
+// Idempotent: store.Write is ON CONFLICT DO NOTHING, and multiple admin
+// tenant_users for one tenant collapse to a single svc grant via DISTINCT.
+func seedAdminServicePrincipals(ctx context.Context, store authz.Store, db *gorm.DB) error {
+	var adminTenantIDs []uuid.UUID
+	if err := db.WithContext(ctx).
+		Model(&models.TenantUser{}).
+		Where("role = ?", models.TenantUserRoleAdmin).
+		Distinct().
+		Pluck("tenant_id", &adminTenantIDs).Error; err != nil {
+		return err
+	}
+	for _, tid := range adminTenantIDs {
+		if err := store.Write(ctx, SystemAdmin(authz.ServicePrincipalID(tid.String()))); err != nil {
+			return err
+		}
 	}
 	return nil
 }

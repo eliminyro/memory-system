@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -38,6 +39,12 @@ type LintThresholds struct {
 	SparseMinContentLen  int     `json:"sparse_min_content_len"`
 	DuplicateSimilarity  float64 `json:"duplicate_similarity"`
 	EmptyCategoryMinDocs int     `json:"empty_category_min_docs"`
+
+	// Bounds on the near-duplicate section self-join (audit #10). Zero means
+	// "use the package default" so existing callers stay unaffected.
+	DuplicateMaxSections int `json:"duplicate_max_sections,omitempty"`
+	DuplicateNeighbors   int `json:"duplicate_neighbors,omitempty"`
+	DuplicateMaxPairs    int `json:"duplicate_max_pairs,omitempty"`
 }
 
 func DefaultLintThresholds() LintThresholds {
@@ -47,7 +54,60 @@ func DefaultLintThresholds() LintThresholds {
 		SparseMinContentLen:  100,
 		DuplicateSimilarity:  0.92,
 		EmptyCategoryMinDocs: 2,
+		DuplicateMaxSections: defaultDupMaxSections,
+		DuplicateNeighbors:   defaultDupNeighbors,
+		DuplicateMaxPairs:    defaultDupMaxPairs,
 	}
+}
+
+// Bounds on the near-duplicate section self-join. Left unbounded the join is
+// O(N^2) in a tenant's sections, so either the user-triggered lint
+// (CheckNearDuplicates, audit #10) or the nightly sweep
+// (FindNearDuplicatePairs, audit #14) can pin a backend for minutes. The
+// candidate pre-filter replaces the exact all-pairs cross join with a
+// per-section k-nearest-neighbour probe over the HNSW index: only the closest
+// sections — the only ones that can clear the similarity bar — are ever
+// compared, the outer scan is capped, and the result set itself is capped.
+const (
+	defaultDupMaxSections = 5000             // candidate sections scanned (outer side of the join)
+	defaultDupNeighbors   = 20               // nearest-neighbour sections probed per candidate via the HNSW index
+	defaultDupMaxPairs    = 1000             // cap on returned document pairs
+	dupScanTimeout        = 30 * time.Second // server-side statement_timeout + matching context deadline
+	dupScanEfSearch       = 100              // HNSW ef_search: keep KNN recall high under the tenant filter
+)
+
+// dupScanCaps resolves the configured bounds, falling back to the package
+// defaults for any field a caller left at zero.
+func (t LintThresholds) dupScanCaps() (maxSections, neighbors, maxPairs int) {
+	maxSections, neighbors, maxPairs = t.DuplicateMaxSections, t.DuplicateNeighbors, t.DuplicateMaxPairs
+	if maxSections <= 0 {
+		maxSections = defaultDupMaxSections
+	}
+	if neighbors <= 0 {
+		neighbors = defaultDupNeighbors
+	}
+	if maxPairs <= 0 {
+		maxPairs = defaultDupMaxPairs
+	}
+	return
+}
+
+// runBoundedScan executes a near-duplicate query under a server-side
+// statement_timeout (belt) and a matching context deadline (suspenders), so a
+// pathological plan can never run unbounded. It runs inside a transaction
+// because SET LOCAL only lives for the current transaction.
+func (r *LintRepository) runBoundedScan(ctx context.Context, dest any, sql string, args ...any) error {
+	ctx, cancel := context.WithTimeout(ctx, dupScanTimeout)
+	defer cancel()
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(fmt.Sprintf("SET LOCAL statement_timeout = %d", dupScanTimeout.Milliseconds())).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", dupScanEfSearch)).Error; err != nil {
+			return err
+		}
+		return tx.Raw(sql, args...).Scan(dest).Error
+	})
 }
 
 // CheckStale finds documents that have not been updated within the stale_days threshold.
@@ -138,33 +198,56 @@ type NearDuplicatePair struct {
 
 // FindNearDuplicatePairs returns doc ID pairs whose section-level cosine
 // similarity reaches the threshold. The metric is "best matching section
-// across the pair" — for each (doc_a, doc_b), MAX(1 - cosine_dist) over all
-// section pairs. This is more discriminating than doc-AVG: two docs that
-// share boilerplate vocabulary won't trip the bar unless at least one
+// across the pair" — for each (doc_a, doc_b), MAX(1 - cosine_dist) over the
+// section pairs compared. This is more discriminating than doc-AVG: two docs
+// that share boilerplate vocabulary won't trip the bar unless at least one
 // section pair is near-identical. Used by the cleanup pipeline to populate
 // the queue.
+//
+// Cost control (audit #14): the scan is scoped to the tenant's OWN documents
+// only — the shared bootstrap/common pool is deliberately excluded, so a
+// per-tenant sweep isn't multiplied by the common pool and cross-tenant
+// override pairs (which must never be auto-merged) are never enqueued. Pair
+// generation is bounded: instead of an exact all-pairs cross join, each
+// candidate section probes its nearest neighbours over the HNSW index, the
+// outer scan and the result set are capped, and the whole query runs under a
+// statement_timeout (see runBoundedScan).
 func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uuid.UUID, threshold float64) ([]NearDuplicatePair, error) {
-	tenants := readTenants(tenantID)
+	maxSections, neighbors, maxPairs := DefaultLintThresholds().dupScanCaps()
 
 	sql := `
-		WITH tenant_secs AS (
+		WITH cand AS (
 			SELECT s.document_id, s.embedding
 			FROM documents d
 			JOIN sections s ON s.document_id = d.id
-			WHERE d.tenant_id IN ?
+			WHERE d.tenant_id = ?
 			  AND d.archived_at IS NULL
 			  AND s.embedding IS NOT NULL
+			LIMIT ?
 		)
-		SELECT a.document_id AS doc_a_id, b.document_id AS doc_b_id,
-		       MAX(1 - (a.embedding <=> b.embedding)) AS similarity
-		FROM tenant_secs a
-		JOIN tenant_secs b ON a.document_id < b.document_id
-		GROUP BY a.document_id, b.document_id
-		HAVING MAX(1 - (a.embedding <=> b.embedding)) >= ?
+		SELECT LEAST(c.document_id, nn.document_id) AS doc_a_id,
+		       GREATEST(c.document_id, nn.document_id) AS doc_b_id,
+		       MAX(nn.similarity) AS similarity
+		FROM cand c
+		CROSS JOIN LATERAL (
+			SELECT s2.document_id, 1 - (s2.embedding <=> c.embedding) AS similarity
+			FROM documents d2
+			JOIN sections s2 ON s2.document_id = d2.id
+			WHERE d2.tenant_id = ?
+			  AND d2.archived_at IS NULL
+			  AND s2.embedding IS NOT NULL
+			  AND s2.document_id <> c.document_id
+			ORDER BY s2.embedding <=> c.embedding
+			LIMIT ?
+		) nn
+		GROUP BY LEAST(c.document_id, nn.document_id), GREATEST(c.document_id, nn.document_id)
+		HAVING MAX(nn.similarity) >= ?
 		ORDER BY similarity DESC
+		LIMIT ?
 	`
 	var pairs []NearDuplicatePair
-	if err := r.db.WithContext(ctx).Raw(sql, tenants, threshold).Scan(&pairs).Error; err != nil {
+	if err := r.runBoundedScan(ctx, &pairs, sql,
+		tenantID, maxSections, tenantID, neighbors, threshold, maxPairs); err != nil {
 		return nil, fmt.Errorf("find near duplicate pairs: %w", err)
 	}
 	return pairs, nil
@@ -175,26 +258,50 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 // (doc_a, doc_b), filtered above thresholds.DuplicateSimilarity.
 func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.UUID, thresholds LintThresholds) ([]LintFinding, error) {
 	tenants := readTenants(tenantID)
+	maxSections, neighbors, maxPairs := thresholds.dupScanCaps()
 
+	// Cost control (audit #10): a user can trigger this, so the exact O(N^2)
+	// all-pairs cross join is replaced by a bounded per-section HNSW
+	// nearest-neighbour probe and the whole query runs under a
+	// statement_timeout (see runBoundedScan). Semantics are preserved: same
+	// "best matching section across the pair" metric (MAX cosine similarity),
+	// same tenant+common-pool read scope, same strict `>` threshold.
 	sql := `
-		WITH tenant_secs AS (
-			SELECT s.document_id, s.embedding,
-			       d.category, d.subcategory, d.slug
+		WITH cand AS (
+			SELECT s.document_id, s.embedding
 			FROM documents d
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id IN ?
 			  AND s.embedding IS NOT NULL
+			LIMIT ?
+		),
+		pairs AS (
+			SELECT LEAST(c.document_id, nn.document_id) AS doc_a_id,
+			       GREATEST(c.document_id, nn.document_id) AS doc_b_id,
+			       MAX(nn.similarity) AS similarity
+			FROM cand c
+			CROSS JOIN LATERAL (
+				SELECT s2.document_id, 1 - (s2.embedding <=> c.embedding) AS similarity
+				FROM documents d2
+				JOIN sections s2 ON s2.document_id = d2.id
+				WHERE d2.tenant_id IN ?
+				  AND s2.embedding IS NOT NULL
+				  AND s2.document_id <> c.document_id
+				ORDER BY s2.embedding <=> c.embedding
+				LIMIT ?
+			) nn
+			GROUP BY LEAST(c.document_id, nn.document_id), GREATEST(c.document_id, nn.document_id)
+			HAVING MAX(nn.similarity) > ?
+			ORDER BY similarity DESC
+			LIMIT ?
 		)
-		SELECT a.category AS cat1, a.subcategory AS sub1, a.slug AS slug1,
-		       b.category AS cat2, b.subcategory AS sub2, b.slug AS slug2,
-		       MAX(1 - (a.embedding <=> b.embedding)) AS similarity
-		FROM tenant_secs a
-		JOIN tenant_secs b ON a.document_id < b.document_id
-		GROUP BY a.document_id, b.document_id,
-		         a.category, a.subcategory, a.slug,
-		         b.category, b.subcategory, b.slug
-		HAVING MAX(1 - (a.embedding <=> b.embedding)) > ?
-		ORDER BY similarity DESC
+		SELECT da.category AS cat1, da.subcategory AS sub1, da.slug AS slug1,
+		       db.category AS cat2, db.subcategory AS sub2, db.slug AS slug2,
+		       p.similarity
+		FROM pairs p
+		JOIN documents da ON da.id = p.doc_a_id
+		JOIN documents db ON db.id = p.doc_b_id
+		ORDER BY p.similarity DESC
 	`
 
 	type row struct {
@@ -208,7 +315,8 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 	}
 
 	var rows []row
-	if err := r.db.WithContext(ctx).Raw(sql, tenants, thresholds.DuplicateSimilarity).Scan(&rows).Error; err != nil {
+	if err := r.runBoundedScan(ctx, &rows, sql,
+		tenants, maxSections, tenants, neighbors, thresholds.DuplicateSimilarity, maxPairs); err != nil {
 		return nil, fmt.Errorf("check near duplicates: %w", err)
 	}
 

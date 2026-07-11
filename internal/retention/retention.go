@@ -19,3 +19,13 @@ func ExpiryCutoff(now time.Time, thresholdDays, multiplier int) time.Time {
 func DeleteCutoff(now time.Time, graceDays int) time.Time {
 	return now.AddDate(0, 0, -graceDays)
 }
+
+// WindowSafe reports whether the retention window parameters are safe to act
+// on. A non-positive multiplier or grace collapses ExpiryCutoff/DeleteCutoff to
+// "now" (or the future), which would archive and then hard-delete live
+// documents wholesale. The sweep refuses to run when this is false. config.Load
+// already rejects sub-1 values at startup; this is the defensive last line
+// (audit #4).
+func WindowSafe(multiplier, graceDays int) bool {
+	return multiplier > 0 && graceDays > 0
+}

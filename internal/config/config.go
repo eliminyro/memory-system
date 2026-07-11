@@ -43,8 +43,19 @@ type Config struct {
 	// Retention sweep — archives docs unverified past retentionMultiplier ×
 	// the doc_type staleness threshold, then hard-deletes them deleteGraceDays
 	// after archiving. Only runs for tenants with staleness_mode=hard.
+	//
+	// Both must be >= 1. A value below 1 collapses the archive/delete cutoffs
+	// to "now" (or the future), which would mass hard-delete live documents —
+	// Load rejects it, and retention.retainTenant refuses to run defensively.
 	RetentionMultiplier int `env:"RETENTION_MULTIPLIER" envDefault:"3"`
 	DeleteGraceDays     int `env:"RETENTION_DELETE_GRACE_DAYS" envDefault:"30"`
+
+	// HTTP hardening. MaxRequestBytes caps every request body (0 disables the
+	// cap). RateLimit* configure the token-bucket throttle applied over the
+	// auth + write surface (RateLimitRPS <= 0 disables throttling).
+	MaxRequestBytes int64   `env:"MAX_REQUEST_BYTES" envDefault:"1048576"`
+	RateLimitRPS    float64 `env:"RATE_LIMIT_RPS" envDefault:"20"`
+	RateLimitBurst  int     `env:"RATE_LIMIT_BURST" envDefault:"40"`
 
 	// Tenant-toggle defaults. The raw spec comes in via env; cmd/server can
 	// override via --opts before validation. ParseTenantDefaults turns the spec
@@ -155,6 +166,23 @@ func Load() (*Config, error) {
 	// authlet's OIDC discovery against Google needs both to succeed.
 	if (cfg.GoogleClientID == "") != (cfg.GoogleClientSecret == "") {
 		return nil, fmt.Errorf("MEMORY_MCP_GOOGLE_CLIENT_ID and MEMORY_MCP_GOOGLE_CLIENT_SECRET must be set together")
+	}
+
+	// Retention lower bounds — fail fast on values that would mass-delete
+	// live data instead of silently running a destructive sweep (audit #4).
+	if cfg.RetentionMultiplier < 1 {
+		return nil, fmt.Errorf("RETENTION_MULTIPLIER must be >= 1, got %d", cfg.RetentionMultiplier)
+	}
+	if cfg.DeleteGraceDays < 1 {
+		return nil, fmt.Errorf("RETENTION_DELETE_GRACE_DAYS must be >= 1, got %d", cfg.DeleteGraceDays)
+	}
+
+	// HTTP hardening bounds.
+	if cfg.MaxRequestBytes < 0 {
+		return nil, fmt.Errorf("MAX_REQUEST_BYTES must be >= 0, got %d", cfg.MaxRequestBytes)
+	}
+	if cfg.RateLimitRPS > 0 && cfg.RateLimitBurst < 1 {
+		return nil, fmt.Errorf("RATE_LIMIT_BURST must be >= 1 when RATE_LIMIT_RPS > 0, got %d", cfg.RateLimitBurst)
 	}
 
 	return cfg, nil

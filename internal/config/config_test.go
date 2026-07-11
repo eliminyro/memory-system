@@ -138,6 +138,44 @@ func TestLoadRequiresBothGoogleEnvsOrNeither(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRetentionBelowLowerBound(t *testing.T) {
+	cases := []struct {
+		name       string
+		multiplier string
+		grace      string
+		wantErr    string
+	}{
+		{name: "defaults ok", multiplier: "3", grace: "30"},
+		{name: "min ok", multiplier: "1", grace: "1"},
+		{name: "multiplier 0 rejected", multiplier: "0", grace: "30", wantErr: "RETENTION_MULTIPLIER must be >= 1"},
+		{name: "multiplier negative rejected", multiplier: "-2", grace: "30", wantErr: "RETENTION_MULTIPLIER must be >= 1"},
+		{name: "grace 0 rejected", multiplier: "3", grace: "0", wantErr: "RETENTION_DELETE_GRACE_DAYS must be >= 1"},
+		{name: "grace negative rejected", multiplier: "3", grace: "-1", wantErr: "RETENTION_DELETE_GRACE_DAYS must be >= 1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RETENTION_MULTIPLIER", tc.multiplier)
+			t.Setenv("RETENTION_DELETE_GRACE_DAYS", tc.grace)
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %q", tc.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.RetentionMultiplier < 1 || cfg.DeleteGraceDays < 1 {
+				t.Fatalf("loaded unsafe retention window: mult=%d grace=%d", cfg.RetentionMultiplier, cfg.DeleteGraceDays)
+			}
+		})
+	}
+}
+
 func TestDefaultTenantDefaults(t *testing.T) {
 	got := DefaultTenantDefaults()
 	want := TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}

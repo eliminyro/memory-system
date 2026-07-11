@@ -23,3 +23,24 @@ func TestDeleteCutoff(t *testing.T) {
 		t.Fatalf("DeleteCutoff = %s, want %s", got, want)
 	}
 }
+
+func TestWindowSafe(t *testing.T) {
+	cases := []struct {
+		multiplier int
+		graceDays  int
+		want       bool
+	}{
+		{3, 30, true},
+		{1, 1, true},
+		{0, 30, false},
+		{3, 0, false},
+		{-1, 30, false},
+		{3, -5, false},
+		{0, 0, false},
+	}
+	for _, c := range cases {
+		if got := WindowSafe(c.multiplier, c.graceDays); got != c.want {
+			t.Errorf("WindowSafe(%d, %d) = %v, want %v", c.multiplier, c.graceDays, got, c.want)
+		}
+	}
+}
