@@ -1,0 +1,201 @@
+# memory-system — Architecture
+
+`memory-system` is a self-hostable [Model Context Protocol](https://modelcontextprotocol.io)
+(MCP) server that gives AI agents a persistent, semantic long-term memory. Documents
+are stored as markdown, split into sections, embedded, and made retrievable through
+hybrid (vector + lexical) search backed by PostgreSQL with the `pgvector` extension.
+
+It is a single Go binary (module `github.com/eliminyro/memory-system`) that serves MCP
+over HTTP, ships a relationship-based authorization engine, and supports two independent
+ways to authenticate: long-lived API keys and OAuth 2.1 / OIDC.
+
+## Major components
+
+All application code lives under `internal/`. The two entry points are in `cmd/`.
+
+| Package | Responsibility |
+|---------|----------------|
+| `cmd/server` | Process entry point. Loads config, connects and migrates the DB, wires repositories, the embedder, the authz engine, the MCP server, the auth paths, and the HTTP server. |
+| `cmd/import` | Offline bulk-import utility for seeding documents. |
+| `internal/config` | Environment-variable configuration (`caarlos0/env`). |
+| `internal/database` | Postgres connection, pool, migrations, `pgvector` setup and indexes. |
+| `internal/repository` | GORM data-access layer (documents, sections, tenants, keys, cleanup, overrides). Owns the hybrid-search SQL. |
+| `internal/models` | GORM row types. |
+| `internal/service` | Business logic (`MemoryService`): embedding orchestration, store/search/update, duplicate guard, staleness application, authorization calls. |
+| `internal/mcp` | MCP tool surface and the Streamable-HTTP transport. |
+| `internal/authz` | Zanzibar-style relationship-based authorization engine — the single decision point. |
+| `internal/authzseed` | Seed/backfill helpers for authz relation tuples and bootstrap admins. |
+| `internal/auth` | API-key authentication path and the shared `Subject` principal abstraction. |
+| `internal/authletas` | OAuth 2.1 / OIDC Authorization Server (the "authlet"), federating to an upstream IdP. |
+| `internal/authletstore` | Persistence for OAuth clients, codes, refresh tokens, and signing keys. |
+| `internal/middleware` | CORS, request-size limit, rate limiting, security headers, and the auth-routing chain. |
+| `internal/server` | HTTP handler assembly and the embedded web UI. |
+| `internal/cleanup` | Periodic scanner: near-duplicate detection and retention sweeps. |
+| `internal/retention` | Archive/delete cutoff math with a safety guard against destructive windows. |
+| `internal/staleness` | Per-`doc_type` staleness thresholds and staleness modes. |
+
+## Data model and storage
+
+`internal/database` connects to Postgres via GORM (SQLite is accepted only for unit
+tests) and enables `pgvector` (`CREATE EXTENSION IF NOT EXISTS vector`). Migrations run
+in a single transaction and, among other things:
+
+- Create documents and sections tables. Each **section** carries an `embedding` column
+  of type `vector(N)`, where `N` is the configured embedding dimension (default `768`).
+- Freeze the embedding identity (provider + model + dimension) in an
+  `embedding_metadata` guard so the server refuses to start if the configured provider,
+  model, or dimension silently changes out from under existing vectors.
+- Build a **HNSW** vector index (`hnsw (embedding vector_cosine_ops)`) for approximate
+  nearest-neighbour search, a GIN index over a generated `tsvector` column for lexical
+  search, and a tenant-scoped unique index on document path.
+
+Similarity is **cosine distance** using pgvector's `<=>` operator; relevance is scored
+as `1 - (embedding <=> query_vector)`.
+
+All data is **tenant-scoped**. Authorization tuples for the relationship graph live in a
+`relation_tuples` table.
+
+## Data flow
+
+### Storing a memory (`store_memory`)
+
+1. The MCP handler validates the request and resolves the target tenant.
+2. `MemoryService.StoreDocument` parses the markdown body into sections.
+3. Each section is embedded via the configured embedding provider **before any DB
+   write**, so a provider failure never leaves a half-written document.
+4. An optional duplicate guard runs a similarity query
+   (`MAX(1 - (embedding <=> new_vector)) >= threshold`); a near-duplicate returns a
+   `similar_exists` result unless the caller forces the write.
+5. The document and its embedded sections are inserted, and a
+   `document#tenant@tenant` relationship tuple is seeded so the document inherits its
+   tenant's access rules.
+
+### Searching (`search_memory`)
+
+1. `MemoryService.Search` embeds the query text.
+2. The repository runs a **hybrid search**: vector candidates ordered by cosine
+   distance are fused with lexical candidates ranked by
+   `ts_rank(tsv, plainto_tsquery(...))`.
+3. Results are filtered/annotated according to the tenant's staleness mode (unless the
+   caller forces a read), then returned.
+
+## MCP surface
+
+`internal/mcp` exposes tools over a stateless Streamable-HTTP transport at `/mcp`. There
+is no separate MCP port — MCP rides on the same HTTP listener as everything else.
+
+The server builds **two** tool surfaces sharing one implementation identity. On every
+request it evaluates whether the caller is an admin (via the authz engine) and routes to
+the admin surface or the regular surface, failing closed to the regular surface when the
+subject is missing or the check errors.
+
+- **Regular tools:** `search_memory`, `get_document`, `get_document_by_id`,
+  `store_memory`, `update_section`, `delete_document`, `list_documents`,
+  `generate_index`, `get_related`, `lint_memory`, `mark_verified`, `get_cleanup_queue`,
+  `mark_cleanup_done`, `merge_documents`, `update_my_tenant_settings`.
+- **Admin tools:** `list_tenants`, `create_tenant`, `update_tenant`, `delete_tenant`,
+  `create_api_key`, `list_api_keys`, `revoke_api_key`.
+
+Tool handlers are thin: they validate input, resolve the tenant, and delegate to
+`MemoryService`.
+
+## Authorization — one engine, two auth paths
+
+Authorization is centralized in `internal/authz`, a Google-Zanzibar-style
+relationship-based engine. It stores tuples of the form
+`object#relation@subject` and answers `Engine.Check(objectType, objectID, relation,
+subjectType, subjectID)` by recursively evaluating a fixed, compile-time namespace
+(with a depth limit and cycle guard). The type/relation model covers `user`, `system`,
+`tenant`, and `document` objects with relations such as `admin`, `member`, `viewer`, and
+`editor`, plus parent edges (`document → tenant → system`) so access inherits downward.
+
+Every access decision — per-request admin routing in the MCP layer, per-document
+read/write in the service layer — goes through `Engine.Check`. The engine **fails
+closed**: a missing subject or an unwired engine denies access.
+
+The two authentication mechanisms both resolve the caller down to the same principal
+abstraction — `auth.Subject{Type: "user", ID: ...}` — placed in the request context, so
+the authorization model is identical regardless of how the caller authenticated:
+
+### API-key path (`internal/auth`)
+
+- Keys are issued as an opaque token, stored only as a SHA-256 hash (plaintext shown
+  once at creation).
+- The API-key middleware extracts the bearer token, hashes it, looks up the active key,
+  and injects a `Subject` — either the key's explicit subject or the tenant's service
+  principal.
+
+### OAuth 2.1 / OIDC path (`internal/authletas` + `internal/authletstore`)
+
+- When configured, the server stands up an OAuth 2.1 / OIDC Authorization Server that
+  **federates to an upstream identity provider** (Google) via OIDC discovery at boot.
+- It mounts standard endpoints under `/oauth` (`/authorize`, `/token`, `/register` for
+  Dynamic Client Registration, `/idp/callback`, `/revoke`, `/userinfo`) plus the
+  well-known documents (`/.well-known/oauth-authorization-server`,
+  `/.well-known/openid-configuration`, `/.well-known/jwks.json`, and the RFC 9728
+  protected-resource metadata for `/mcp`).
+- A **user bridge** maps an authenticated, email-verified identity to an existing tenant
+  and subject: `MemoryUserResolver.Resolve` rejects empty, unverified, or unknown emails
+  (it never auto-provisions), and `UserContextBridge` middleware attaches the resolved
+  tenant and `Subject` to the request context.
+- Signing keys are sealed at rest with a master key (AES-256-GCM) and rotated by a
+  background cleanup goroutine that also expires codes, refresh tokens, and idle DCR
+  clients.
+
+At the HTTP edge, a `DualAuth` router inspects the bearer token: a three-segment JWT is
+verified by the OAuth path; anything else falls through to the API-key path. Whichever
+path succeeds writes the `Subject`, and the MCP transport then calls `Engine.Check`.
+
+## Retention and cleanup
+
+Three packages implement lifecycle management:
+
+- `internal/staleness` tracks per-`doc_type` staleness thresholds and a per-tenant
+  staleness **mode**: `off`, `advisory` (stale results are surfaced but usable), or
+  `hard` (stale content is guarded/withheld unless forced).
+- `internal/cleanup` runs a periodic scanner. Per tenant it performs near-duplicate
+  detection (enqueuing candidates into a `cleanup_queue` for review) and, where enabled,
+  retention sweeps. An optional notifier can send scan summaries.
+- `internal/retention` computes archive and delete cutoffs. Documents are soft-archived
+  once they are stale past `multiplier × threshold` days, then hard-deleted a grace
+  window later (defaults: multiplier `3`, grace `30` days). A safety guard refuses to
+  run a destructive sweep if the retention window would collapse.
+
+## Configuration
+
+The server is configured entirely through environment variables (parsed by
+`internal/config`). Key variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | Postgres DSN (default local dev DSN). |
+| `SERVER_ADDR` | HTTP listen address (default `:8080`). |
+| `LOG_LEVEL` | Log verbosity (default `info`). |
+| `EMBEDDING_PROVIDER` | Embedding backend: `ollama`, `gcp` (Vertex AI), or `fake` (tests). |
+| `EMBEDDING_DIMENSIONS` | Vector dimension; must match the model (default `768`). |
+| `OLLAMA_URL`, `OLLAMA_MODEL` | Ollama endpoint and model. |
+| `GCP_PROJECT`, `GCP_LOCATION`, `GCP_EMBEDDING_MODEL` | Vertex AI embedding config. |
+| `ADMIN_ALLOWED_EMAILS` | Bootstrap admin allowlist. |
+| `CLEANUP_ENABLED`, `CLEANUP_INTERVAL_HOURS` | Enable and schedule the cleanup scanner. |
+| `RETENTION_MULTIPLIER`, `RETENTION_DELETE_GRACE_DAYS` | Retention window tuning. |
+| `MAX_REQUEST_BYTES`, `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` | Request-size and rate limits. |
+| `MEMORY_DEFAULT_OPTS` | Default per-tenant toggles (staleness mode, duplicate guard, cleanup scan). |
+| `PUBLIC_BASE_URL` | Public origin of the deployment; used to derive OAuth issuer, audience, and redirect URIs. |
+| `AUTHLET_MASTER_KEY` | 32-byte hex key that seals OAuth signing keys at rest. |
+| `MEMORY_MCP_GOOGLE_CLIENT_ID`, `MEMORY_MCP_GOOGLE_CLIENT_SECRET` | Upstream OAuth client credentials. Setting **both** enables the OAuth/authlet path; setting neither leaves `/mcp` API-key-only. |
+| `MEMORY_UI_CLIENT_ID` | Public PKCE client id for the web UI. |
+
+The OAuth path is opt-in: it is enabled only when both Google client variables are set,
+and config load then requires a valid `PUBLIC_BASE_URL` (an absolute `http`/`https`
+origin with a host and no path). For example, a deployment reachable at
+`https://mem.example.org` would set `PUBLIC_BASE_URL=https://mem.example.org`, yielding
+an OAuth issuer of `https://mem.example.org` and a protected resource audience of
+`https://mem.example.org/mcp`.
+
+## Request pipeline
+
+The HTTP handler composes middleware (innermost to outermost): CORS, request-size limit,
+rate limiting, and security headers (a strict CSP applied outermost so error and
+preflight responses carry it too). `/mcp` is wrapped by the auth-routing chain described
+above. Health and readiness endpoints (`/~/health`, `/~/ready`, `/~/version`) are
+unauthenticated, and a small static web UI is served under `/ui`.

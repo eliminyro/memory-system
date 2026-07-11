@@ -8,7 +8,8 @@ import (
 )
 
 func TestWWWAuth401_InjectsChallengeOnUnauth(t *testing.T) {
-	w := &Wiring{}
+	const prm = "https://mem.example.test/.well-known/oauth-protected-resource/mcp"
+	w := &Wiring{prmURL: prm}
 	mw := w.WWWAuth401()
 
 	inner := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -27,7 +28,7 @@ func TestWWWAuth401_InjectsChallengeOnUnauth(t *testing.T) {
 	if got == "" {
 		t.Fatalf("WWW-Authenticate header missing on 401")
 	}
-	if !strings.Contains(got, `resource_metadata="`+PRMURL+`"`) {
+	if !strings.Contains(got, `resource_metadata="`+prm+`"`) {
 		t.Fatalf("WWW-Authenticate missing PRM URL; got %q", got)
 	}
 	if !strings.HasPrefix(got, "Bearer") {

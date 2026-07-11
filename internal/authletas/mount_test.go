@@ -31,7 +31,7 @@ func newTestWiring(t *testing.T) *Wiring {
 		t.Fatal(err)
 	}
 	server, err := as.New(as.Config{
-		Issuer:       Issuer,
+		Issuer:       "https://mem.example.test",
 		PathPrefix:   PathPrefix,
 		Upstream:     idp.NewForTest("https://upstream.test"),
 		UserResolver: idp.UserResolverFunc(func(context.Context, idp.Claims) (string, error) { return "u", nil }),

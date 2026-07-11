@@ -19,29 +19,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// Public constants — the issuer/audience/PRM URLs are baked in for now.
-// When memory-system needs to run on a non-prod host these become config fields.
 const (
-	// Issuer is the public base URL memory-system serves authlet under. JWTs
-	// use this as `iss` and the AS metadata documents are anchored here.
-	Issuer = "https://memory-mcp.a11s.dev"
-
-	// PathPrefix is where the AS handler is mounted under Issuer.
+	// PathPrefix is where the AS handler is mounted under the public base URL.
 	PathPrefix = "/oauth"
-
-	// Audience is the canonical resource URL clients request access for.
-	// memory-mcp's Traefik does NOT strip a prefix (unlike hilo), so the
-	// public path and the server path are both `/mcp`.
-	Audience = Issuer + "/mcp"
-
-	// PRMURL is the absolute URL of the Protected Resource Metadata
-	// document for the MCP endpoint (RFC 9728).
-	PRMURL = Issuer + "/.well-known/oauth-protected-resource/mcp"
 
 	// upstreamIssuer is the OIDC issuer used to authenticate users
 	// upstream. authlet does the discovery against this URL at boot.
-	// memory-system federates DIRECTLY to Google (NOT via hilo) — this is
-	// memory-system's own Google client.
+	// memory-system federates DIRECTLY to Google — this is memory-system's
+	// own Google client.
 	upstreamIssuer = "https://accounts.google.com"
 
 	// cleanupInterval is the period for the AS background sweep (expired
@@ -52,9 +37,37 @@ const (
 	jwksCacheTTL = time.Hour
 )
 
-// redirectURI is the upstream OIDC callback this server registers with
-// Google. It must match the entry in the GCP OAuth client allow-list.
-const redirectURI = Issuer + PathPrefix + "/idp/callback"
+// asURLs are the public authlet URLs derived from the server's configured
+// PUBLIC_BASE_URL. Keeping the derivation in one place documents the shape
+// (issuer anchors everything; the resource path is /mcp; the upstream OIDC
+// callback lives under PathPrefix) and keeps the deployment host out of the
+// source tree.
+type asURLs struct {
+	// issuer is the public base URL; JWTs use it as `iss` and the AS
+	// metadata documents are anchored here.
+	issuer string
+	// audience is the canonical resource URL clients request access for.
+	// memory-system does NOT strip a prefix, so the public path and the
+	// server path are both `/mcp`.
+	audience string
+	// prmURL is the absolute URL of the Protected Resource Metadata document
+	// for the MCP endpoint (RFC 9728).
+	prmURL string
+	// redirectURI is the upstream OIDC callback this server registers with
+	// the IdP. It must match the entry in the IdP's OAuth client allow-list.
+	redirectURI string
+}
+
+// deriveURLs builds the authlet URL set from the public base URL (already
+// validated + trailing-slash-trimmed by config.Load).
+func deriveURLs(baseURL string) asURLs {
+	return asURLs{
+		issuer:      baseURL,
+		audience:    baseURL + "/mcp",
+		prmURL:      baseURL + "/.well-known/oauth-protected-resource/mcp",
+		redirectURI: baseURL + PathPrefix + "/idp/callback",
+	}
+}
 
 // Wiring is the result of Setup — everything the main server needs to
 // mount the AS and the bearer-protected MCP endpoint.
@@ -80,6 +93,12 @@ type Wiring struct {
 	// constructed directly in unit tests; the bridge then attaches only the
 	// tenant id + email (no subject) and downstream fails closed in Pass 2.
 	db *gorm.DB
+
+	// prmURL is the absolute Protected Resource Metadata URL, derived from the
+	// public base URL at Setup. WWWAuth401 embeds it in the Bearer challenge so
+	// OAuth-discovering clients can find the AS. Empty on a bare unit-test
+	// Wiring (the challenge then omits resource_metadata).
+	prmURL string
 }
 
 // Mount registers the AS and well-known endpoints on a stdlib ServeMux.
@@ -130,7 +149,7 @@ func Setup(
 	ctx context.Context,
 	db *gorm.DB,
 	store storage.Storage,
-	googleClientID, googleClientSecret string,
+	googleClientID, googleClientSecret, baseURL string,
 	logger *slog.Logger,
 ) (*Wiring, error) {
 	if db == nil {
@@ -142,9 +161,16 @@ func Setup(
 	if googleClientID == "" || googleClientSecret == "" {
 		return nil, errors.New("authletas: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required")
 	}
+	if baseURL == "" {
+		return nil, errors.New("authletas: baseURL (PUBLIC_BASE_URL) is required")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	// urls anchors the issuer/audience/PRM/redirect at the deployment's own
+	// public base URL rather than a hardcoded host.
+	urls := deriveURLs(baseURL)
 
 	masterKey, err := loadMasterKey()
 	if err != nil {
@@ -161,7 +187,7 @@ func Setup(
 		upstreamIssuer,
 		googleClientID,
 		googleClientSecret,
-		redirectURI,
+		urls.redirectURI,
 		[]string{"openid", "email", "profile"},
 	)
 	if err != nil {
@@ -195,7 +221,7 @@ func Setup(
 	}
 
 	server, err := as.New(as.Config{
-		Issuer:              Issuer,
+		Issuer:              urls.issuer,
 		PathPrefix:          PathPrefix,
 		Upstream:            upstream,
 		UserResolver:        &MemoryUserResolver{DB: db, Logger: logger},
@@ -209,17 +235,17 @@ func Setup(
 		return nil, fmt.Errorf("as.New: %w", err)
 	}
 
-	jwksClient := rs.NewJWKSClient(Issuer+"/.well-known/jwks.json", jwksCacheTTL)
+	jwksClient := rs.NewJWKSClient(urls.issuer+"/.well-known/jwks.json", jwksCacheTTL)
 	bearer := rs.Middleware(rs.Config{
-		ExpectedIssuer:   Issuer,
-		ExpectedAudience: Audience,
+		ExpectedIssuer:   urls.issuer,
+		ExpectedAudience: urls.audience,
 		JWKS:             jwksClient,
-		ResourceMetadata: PRMURL,
+		ResourceMetadata: urls.prmURL,
 	})
 
 	prm := mcp.PRMHandler(mcp.PRM{
-		Resource:               Audience,
-		AuthorizationServers:   []string{Issuer},
+		Resource:               urls.audience,
+		AuthorizationServers:   []string{urls.issuer},
 		BearerMethodsSupported: []string{"header"},
 		ScopesSupported:        []string{"mcp"},
 	})
@@ -231,7 +257,8 @@ func Setup(
 		RunCleanup: func(ctx context.Context) <-chan struct{} {
 			return server.RunCleanup(ctx, cleanupInterval)
 		},
-		db: db,
+		db:     db,
+		prmURL: urls.prmURL,
 	}, nil
 }
 

@@ -1,7 +1,23 @@
+# Build artifacts
 /memory-mcp
 /server
 /import
+/memory-admin
 *.exe
+dist/
+
+# Test / coverage output
+*.out
+coverage*
+
+# Local env & data
 .env
+.env.*
+*.db
 memory.db
+
+# OS cruft
+.DS_Store
+
+# Legacy
 **/superpowers

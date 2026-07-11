@@ -90,11 +90,11 @@ func seedTenantUser(t *testing.T, db *gorm.DB, email, tenantID, role string) {
 
 func TestMemoryUserResolver_LooksUpByVerifiedEmail(t *testing.T) {
 	db := openTestDB(t)
-	seedTenantUser(t, db, "pe@avantistudios.ai", "tenant-uuid-1", "admin")
+	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
 	id, err := r.Resolve(context.Background(), idp.Claims{
-		Email:         "pe@avantistudios.ai",
+		Email:         "admin@example.com",
 		EmailVerified: true,
 	})
 	if err != nil {
@@ -124,11 +124,11 @@ func TestMemoryUserResolver_UnknownEmailReturnsUnauthorized(t *testing.T) {
 // any email on an account they don't own.
 func TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized(t *testing.T) {
 	db := openTestDB(t)
-	seedTenantUser(t, db, "pe@avantistudios.ai", "tenant-uuid-1", "admin")
+	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
 	_, err := r.Resolve(context.Background(), idp.Claims{
-		Email:         "pe@avantistudios.ai",
+		Email:         "admin@example.com",
 		EmailVerified: false,
 	})
 	if !errors.Is(err, ErrUnauthorized) {
@@ -143,7 +143,7 @@ func TestMemoryUserResolver_EmptyEmailReturnsUnauthorized(t *testing.T) {
 	db := openTestDB(t)
 	// Seed a row to prove the empty-email guard short-circuits before the
 	// DB is consulted.
-	seedTenantUser(t, db, "pe@avantistudios.ai", "tenant-uuid-1", "admin")
+	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
 	_, err := r.Resolve(context.Background(), idp.Claims{

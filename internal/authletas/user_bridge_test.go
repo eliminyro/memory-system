@@ -26,7 +26,7 @@ func TestUserContextBridge_SetsTenantIDFromClaims(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
 	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{
 		Subject: tid.String(),
-		Extra:   map[string]any{"email": "pe@avantistudios.ai"},
+		Extra:   map[string]any{"email": "admin@example.com"},
 	})
 	req = req.WithContext(ctx)
 
@@ -35,8 +35,8 @@ func TestUserContextBridge_SetsTenantIDFromClaims(t *testing.T) {
 	if seenTenant != tid {
 		t.Fatalf("tenant id: want %s, got %s", tid, seenTenant)
 	}
-	if seenEmail != "pe@avantistudios.ai" {
-		t.Fatalf("email: want pe@avantistudios.ai, got %q", seenEmail)
+	if seenEmail != "admin@example.com" {
+		t.Fatalf("email: want admin@example.com, got %q", seenEmail)
 	}
 }
 

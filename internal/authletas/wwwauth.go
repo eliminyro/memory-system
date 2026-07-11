@@ -9,7 +9,10 @@ import "net/http"
 // API-key path so first-contact MCP clients can always discover the
 // authorization server.
 func (w *Wiring) WWWAuth401() func(http.Handler) http.Handler {
-	challenge := `Bearer realm="MCP", resource_metadata="` + PRMURL + `"`
+	challenge := `Bearer realm="MCP"`
+	if w.prmURL != "" {
+		challenge += `, resource_metadata="` + w.prmURL + `"`
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(&challengeWriter{ResponseWriter: rw, challenge: challenge}, r)

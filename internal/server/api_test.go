@@ -96,7 +96,8 @@ func TestWriteErr_MappedExposesMessage(t *testing.T) {
 }
 
 func TestUIConfigServed(t *testing.T) {
-	_, cfg := uiHandlers("test-client-123")
+	const base = "https://mem.example.org"
+	_, cfg := uiHandlers("test-client-123", base)
 	rec := httptest.NewRecorder()
 	cfg(rec, httptest.NewRequest(http.MethodGet, "/ui/config.json", nil))
 	var body map[string]string
@@ -105,6 +106,17 @@ func TestUIConfigServed(t *testing.T) {
 	}
 	if body["client_id"] != "test-client-123" {
 		t.Errorf("client_id = %q", body["client_id"])
+	}
+	// OAuth config must be derived from the configured base URL, never
+	// hardcoded — this is the deployment-portability guarantee.
+	if body["issuer"] != base {
+		t.Errorf("issuer = %q, want %q", body["issuer"], base)
+	}
+	if body["redirect_uri"] != base+"/ui" {
+		t.Errorf("redirect_uri = %q, want %q", body["redirect_uri"], base+"/ui")
+	}
+	if body["resource"] != base+"/mcp" {
+		t.Errorf("resource = %q, want %q", body["resource"], base+"/mcp")
 	}
 }
 

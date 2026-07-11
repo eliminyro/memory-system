@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -81,8 +82,17 @@ type Config struct {
 	GoogleClientSecret string `env:"MEMORY_MCP_GOOGLE_CLIENT_SECRET"`
 
 	// UIClientID is the pre-registered public PKCE OAuth client the web UI
-	// uses (redirect_uri = Issuer + "/ui"). Non-secret; served to the page.
+	// uses (redirect_uri = PublicBaseURL + "/ui"). Non-secret; served to the page.
 	UIClientID string `env:"MEMORY_UI_CLIENT_ID"`
+
+	// PublicBaseURL is the external origin this server is reachable at
+	// (scheme + host, no path, no trailing slash) — e.g.
+	// "https://mem.example.org". It anchors the authlet issuer, audience,
+	// PRM, and upstream-callback URLs, and the web UI's OAuth config. It is
+	// REQUIRED when the authlet path is enabled (both Google client envs set)
+	// and must be an absolute http(s) URL; startup fails fast otherwise. The
+	// API-key-only path does not use it.
+	PublicBaseURL string `env:"PUBLIC_BASE_URL"`
 }
 
 // TenantDefaults is the operator-chosen baseline for the three per-tenant
@@ -171,6 +181,18 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("MEMORY_MCP_GOOGLE_CLIENT_ID and MEMORY_MCP_GOOGLE_CLIENT_SECRET must be set together")
 	}
 
+	// PUBLIC_BASE_URL anchors every authlet URL and the UI OAuth config.
+	// Normalize away a trailing slash so derived URLs (base+"/mcp" etc.) are
+	// well-formed. It is mandatory when the authlet path is enabled — without
+	// it the issuer/redirect_uri would be empty and the OAuth flow silently
+	// broken (the old code hardcoded a single operator's host here).
+	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	if cfg.AuthletEnabled() {
+		if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
+			return nil, err
+		}
+	}
+
 	// Retention lower bounds — fail fast on values that would mass-delete
 	// live data instead of silently running a destructive sweep (audit #4).
 	if cfg.RetentionMultiplier < 1 {
@@ -197,6 +219,29 @@ func Load() (*Config, error) {
 // the legacy API-key-only path is the intended mode.
 func (c *Config) AuthletEnabled() bool {
 	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
+}
+
+// validatePublicBaseURL enforces that PUBLIC_BASE_URL is an absolute http(s)
+// origin with a host and no path — the shape the authlet issuer/audience/PRM
+// derivations assume.
+func validatePublicBaseURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("PUBLIC_BASE_URL is required when the authlet OAuth path is enabled (MEMORY_MCP_GOOGLE_CLIENT_ID/SECRET set)")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("PUBLIC_BASE_URL is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("PUBLIC_BASE_URL must use http or https scheme, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("PUBLIC_BASE_URL must include a host, got %q", raw)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("PUBLIC_BASE_URL must not include a path, got %q", u.Path)
+	}
+	return nil
 }
 
 // EmbeddingModel returns the model identifier for the active provider. Paired
