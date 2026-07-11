@@ -83,3 +83,25 @@ func TestCodeStore_ExpiredRejected(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// TestCodeStore_NonceRoundTrip guards the authlet v1.0.3 client-nonce
+// replay defense: the nonce set at /authorize must survive Save→ConsumeOnce
+// so it can be minted into the id_token. A dropped nonce silently no-ops
+// the defense on this Postgres-backed store.
+func TestCodeStore_NonceRoundTrip(t *testing.T) {
+	s := New(openTestDB(t))
+	ctx := context.Background()
+	if err := s.Codes().Save(ctx, storage.AuthCode{
+		CodeHash: "h3", ClientID: "c", Nonce: "client-nonce-xyz",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Codes().ConsumeOnce(ctx, "h3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Nonce != "client-nonce-xyz" {
+		t.Fatalf("nonce not round-tripped: got %+v", got)
+	}
+}
