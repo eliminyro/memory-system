@@ -174,6 +174,14 @@ func retentionEligible(t models.Tenant) bool {
 }
 
 func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *ScanStats) error {
+	// Defensive guard (audit #4): refuse to run a destructive sweep when the
+	// window parameters would collapse the cutoffs and mass hard-delete live
+	// data. config.Load already rejects sub-1 values at startup; this backstops
+	// any path that constructs a Scanner directly.
+	if !retention.WindowSafe(s.multiplier, s.graceDays) {
+		return fmt.Errorf("refusing retention sweep: unsafe window (multiplier=%d, graceDays=%d)", s.multiplier, s.graceDays)
+	}
+
 	now := time.Now()
 	cutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
 	for docType := range models.ValidDocTypes {

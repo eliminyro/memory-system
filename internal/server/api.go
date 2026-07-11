@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -41,16 +42,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeErr maps apperr sentinels to HTTP status + a JSON {error} body.
+// writeErr maps apperr sentinels to an HTTP status + a JSON {error} body. Only
+// the mapped, safe-to-expose sentinels (ErrNotFound / ErrInvalidInput) put
+// their message on the wire. Any other error is an internal fault: the full
+// error is logged server-side and the client gets a generic body, so raw
+// internal strings (SQL, driver, connection-string fragments) never leak to
+// /api callers.
 func writeErr(w http.ResponseWriter, err error) {
-	status := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, apperr.ErrNotFound):
-		status = http.StatusNotFound
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	case errors.Is(err, apperr.ErrInvalidInput):
-		status = http.StatusBadRequest
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	default:
+		slog.Error("api: internal error", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 	}
-	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {

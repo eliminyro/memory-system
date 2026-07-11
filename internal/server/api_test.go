@@ -90,6 +90,40 @@ func TestWriteErr_Mapping(t *testing.T) {
 	}
 }
 
+// An unmapped (internal) error must not leak its string to the client; the
+// body is a fixed generic message.
+func TestWriteErr_UnmappedDoesNotLeak(t *testing.T) {
+	secret := "pq: password authentication failed for user \"memory\""
+	rec := httptest.NewRecorder()
+	writeErr(rec, errors.New(secret))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if body["error"] != "internal error" {
+		t.Errorf("error body = %q, want generic %q", body["error"], "internal error")
+	}
+	if strings.Contains(rec.Body.String(), "password") || strings.Contains(rec.Body.String(), "memory") {
+		t.Errorf("internal error string leaked to client: %s", rec.Body.String())
+	}
+}
+
+// Mapped sentinels still surface their (safe) message.
+func TestWriteErr_MappedExposesMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeErr(rec, apperr.ErrNotFound)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not found") {
+		t.Errorf("expected mapped message on the wire, got %s", rec.Body.String())
+	}
+}
+
 func TestUIConfigServed(t *testing.T) {
 	_, cfg := uiHandlers("test-client-123")
 	rec := httptest.NewRecorder()

@@ -224,12 +224,15 @@ func main() {
 	}
 
 	handler := server.NewHandler(server.Deps{
-		DB:            db,
-		MCPServer:     mcpServer,
-		KeyValidator:  keyValidator,
-		AuthletWiring: authletWiring,
-		Memory:        memorySvc,
-		UIClientID:    cfg.UIClientID,
+		DB:              db,
+		MCPServer:       mcpServer,
+		KeyValidator:    keyValidator,
+		AuthletWiring:   authletWiring,
+		Memory:          memorySvc,
+		UIClientID:      cfg.UIClientID,
+		MaxRequestBytes: cfg.MaxRequestBytes,
+		RateLimitRPS:    cfg.RateLimitRPS,
+		RateLimitBurst:  cfg.RateLimitBurst,
 	})
 
 	srv := &http.Server{

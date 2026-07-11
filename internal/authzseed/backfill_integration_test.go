@@ -129,6 +129,9 @@ func TestBackfill_IdempotentAndExpected(t *testing.T) {
 		authzseed.DocumentTenantEdge(dA.ID, tA.ID),
 		authzseed.DocumentTenantEdge(dB.ID, tB.ID),
 		authzseed.TenantMember(tB.ID, explicit), // key B's explicit subject
+		// tenant B has an admin tenant_user, so its svc principal is a global
+		// admin (operator API-key admin gap fix).
+		authzseed.SystemAdmin(svcB),
 	}
 	for _, tp := range expect {
 		if !set2[tupleKey(tp)] {
@@ -142,6 +145,9 @@ func TestBackfill_IdempotentAndExpected(t *testing.T) {
 		authzseed.TenantMember(tA.ID, tuAdmin.ID.String()),
 		authzseed.TenantAdmin(tA.ID, tuAdmin.ID.String()),
 		authzseed.TenantMember(tA.ID, explicit),
+		// tenant A has only a member tenant_user, so its svc principal must NOT
+		// be a global admin.
+		authzseed.SystemAdmin(svcA),
 	}
 	for _, tp := range forbidden {
 		if set2[tupleKey(tp)] {
@@ -185,9 +191,16 @@ func TestBootstrapAdmins_SeedsConfiguredSkipsUnknown(t *testing.T) {
 	if !after[tu.ID.String()] {
 		t.Fatalf("expected system admin for %s (subject %s)", adminEmail, tu.ID)
 	}
-	// Exactly one new subject was added (ghost@x with no tenant_user was skipped).
-	if len(after) != len(before)+1 {
-		t.Fatalf("expected exactly 1 new system admin (ghost skipped), before=%d after=%d", len(before), len(after))
+	// The admin tenant's service principal was also granted system admin, so
+	// operator API keys (svc:<tenant>) keep the admin tool surface.
+	svc := authz.ServicePrincipalID(tid.String())
+	if !after[svc] {
+		t.Fatalf("expected system admin for admin tenant svc principal %s", svc)
+	}
+	// Two new subjects were added: the configured admin's tenant_user id and its
+	// tenant service principal. ghost@x (no tenant_user) was skipped.
+	if len(after) != len(before)+2 {
+		t.Fatalf("expected exactly 2 new system admins (human + svc; ghost skipped), before=%d after=%d", len(before), len(after))
 	}
 
 	// Idempotent: a second run adds nothing.
@@ -197,5 +210,60 @@ func TestBootstrapAdmins_SeedsConfiguredSkipsUnknown(t *testing.T) {
 	again := systemAdminSubjects(t, store)
 	if len(again) != len(after) {
 		t.Fatalf("second bootstrap not idempotent: %d -> %d", len(after), len(again))
+	}
+}
+
+// TestBootstrapAdmins_GrantsAdminTenantServicePrincipal reproduces the live
+// deploy state (0398d7a): a tenant with an admin tenant_user whose API key has
+// no subject_id resolves to the tenant service principal svc:<tenant>, which
+// the backfill only made a tenant member. BootstrapAdmins must promote that
+// svc principal to system admin so the operator's API-key session keeps the
+// admin tool surface — with no manual SQL. A non-admin tenant's svc principal
+// must NOT be promoted, and the grant must be idempotent.
+func TestBootstrapAdmins_GrantsAdminTenantServicePrincipal(t *testing.T) {
+	db := openPG(t)
+	ctx := context.Background()
+	store := authz.NewPostgresStore(db)
+
+	adminTenant := models.Tenant{ID: uuid.New(), Name: "adm-" + uuid.NewString()}
+	nonAdminTenant := models.Tenant{ID: uuid.New(), Name: "reg-" + uuid.NewString()}
+	mustCreate(t, db, &adminTenant)
+	mustCreate(t, db, &nonAdminTenant)
+
+	adminTU := models.TenantUser{ID: uuid.New(), Email: "adm-" + uuid.NewString() + "@x", TenantID: adminTenant.ID, Role: models.TenantUserRoleAdmin}
+	memberTU := models.TenantUser{ID: uuid.New(), Email: "mem-" + uuid.NewString() + "@x", TenantID: nonAdminTenant.ID, Role: models.TenantUserRoleMember}
+	mustCreate(t, db, &adminTU)
+	mustCreate(t, db, &memberTU)
+
+	svcAdmin := authz.ServicePrincipalID(adminTenant.ID.String())
+	svcNonAdmin := authz.ServicePrincipalID(nonAdminTenant.ID.String())
+
+	// Pre-state: the svc principal is only a tenant member (what the backfill
+	// left it as on the live cutover), not yet a system admin.
+	if err := store.Write(ctx, authzseed.TenantMember(adminTenant.ID, svcAdmin)); err != nil {
+		t.Fatalf("seed svc member: %v", err)
+	}
+
+	// Empty allowlist on purpose: the svc-principal grant is independent of
+	// ADMIN_ALLOWED_EMAILS — it is keyed on tenant_user role only.
+	if err := authzseed.BootstrapAdmins(ctx, store, db, nil, nil); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	admins := systemAdminSubjects(t, store)
+	if !admins[svcAdmin] {
+		t.Errorf("expected system:memory#admin@user:%s (admin tenant svc principal)", svcAdmin)
+	}
+	if admins[svcNonAdmin] {
+		t.Errorf("non-admin tenant svc principal %s must NOT be system admin", svcNonAdmin)
+	}
+
+	// Idempotent: re-running writes no duplicate svc admin tuple.
+	before := len(admins)
+	if err := authzseed.BootstrapAdmins(ctx, store, db, nil, nil); err != nil {
+		t.Fatalf("bootstrap re-run: %v", err)
+	}
+	if got := len(systemAdminSubjects(t, store)); got != before {
+		t.Fatalf("svc-principal grant not idempotent: %d -> %d", before, got)
 	}
 }
