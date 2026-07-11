@@ -15,9 +15,12 @@ type Config struct {
 	ServerAddr  string `env:"SERVER_ADDR" envDefault:":8080"`
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 
-	// Embedding provider: "ollama" or "gcp"
+	// Embedding provider: "ollama" or "gcp". The default dimension matches the
+	// default model (ollama nomic-embed-text = 768-dim) so a stock deploy embeds
+	// successfully out of the box (audit #12); override EMBEDDING_DIMENSIONS when
+	// pointing at a wider model.
 	EmbeddingProvider   string `env:"EMBEDDING_PROVIDER" envDefault:"ollama"`
-	EmbeddingDimensions int    `env:"EMBEDDING_DIMENSIONS" envDefault:"1024"`
+	EmbeddingDimensions int    `env:"EMBEDDING_DIMENSIONS" envDefault:"768"`
 
 	// Ollama
 	OllamaURL   string `env:"OLLAMA_URL" envDefault:"http://localhost:11434"`
@@ -194,6 +197,20 @@ func Load() (*Config, error) {
 // the legacy API-key-only path is the intended mode.
 func (c *Config) AuthletEnabled() bool {
 	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
+}
+
+// EmbeddingModel returns the model identifier for the active provider. Paired
+// with EmbeddingProvider it fingerprints the corpus's embedding identity for
+// the migration guard (audit #13/#16).
+func (c *Config) EmbeddingModel() string {
+	switch c.EmbeddingProvider {
+	case "gcp":
+		return c.GCPModel
+	case "ollama":
+		return c.OllamaModel
+	default:
+		return c.EmbeddingProvider
+	}
 }
 
 // EmbeddingCfg converts config fields into a service.EmbeddingConfig.

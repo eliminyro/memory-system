@@ -105,7 +105,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := database.Migrate(db, cfg.EmbeddingDimensions, database.TenantColumnDefaults{
+	if err := database.Migrate(db, cfg.EmbeddingProvider, cfg.EmbeddingModel(), cfg.EmbeddingDimensions, database.TenantColumnDefaults{
 		StalenessMode:      cfg.TenantDefaults.StalenessMode,
 		DuplicateGuard:     cfg.TenantDefaults.DuplicateGuard,
 		CleanupScanEnabled: cfg.TenantDefaults.CleanupScanEnabled,
