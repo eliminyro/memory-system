@@ -9,6 +9,10 @@ func NewEmbeddingProvider(provider string, cfg EmbeddingConfig) (EmbeddingProvid
 		return NewOllamaEmbedder(cfg.OllamaURL, cfg.OllamaModel, cfg.Dimensions), nil
 	case "gcp":
 		return NewGCPEmbedder(cfg.GCPProject, cfg.GCPLocation, cfg.GCPModel, cfg.Dimensions)
+	case "openai":
+		return NewOpenAIEmbedder(cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.Dimensions), nil
+	case "aws":
+		return NewAWSEmbedder(cfg.AWSRegion, cfg.AWSModel, cfg.Dimensions)
 	case "fake":
 		return NewFakeEmbedder(cfg.Dimensions), nil
 	default:
@@ -28,4 +32,13 @@ type EmbeddingConfig struct {
 	GCPProject  string
 	GCPLocation string
 	GCPModel    string
+
+	// OpenAI-compatible (/v1/embeddings)
+	OpenAIBaseURL string
+	OpenAIAPIKey  string
+	OpenAIModel   string
+
+	// AWS Bedrock
+	AWSRegion string
+	AWSModel  string
 }

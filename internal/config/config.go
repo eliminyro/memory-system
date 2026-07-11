@@ -16,10 +16,13 @@ type Config struct {
 	ServerAddr  string `env:"SERVER_ADDR" envDefault:":8080"`
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 
-	// Embedding provider: "ollama" or "gcp". The default dimension matches the
-	// default model (ollama nomic-embed-text = 768-dim) so a stock deploy embeds
-	// successfully out of the box (audit #12); override EMBEDDING_DIMENSIONS when
-	// pointing at a wider model.
+	// Embedding provider: "ollama", "gcp", "openai", "aws", or "fake". The
+	// default dimension matches the default model (ollama nomic-embed-text =
+	// 768-dim) so a stock deploy embeds successfully out of the box (audit
+	// #12); override EMBEDDING_DIMENSIONS when pointing at a wider model. For
+	// OpenAI models that support output-dimension truncation
+	// (text-embedding-3-*), EMBEDDING_DIMENSIONS is also sent as the requested
+	// output size.
 	EmbeddingProvider   string `env:"EMBEDDING_PROVIDER" envDefault:"ollama"`
 	EmbeddingDimensions int    `env:"EMBEDDING_DIMENSIONS" envDefault:"768"`
 
@@ -31,6 +34,19 @@ type Config struct {
 	GCPProject  string `env:"GCP_PROJECT"`
 	GCPLocation string `env:"GCP_LOCATION" envDefault:"us-central1"`
 	GCPModel    string `env:"GCP_EMBEDDING_MODEL" envDefault:"text-embedding-005"`
+
+	// OpenAI-compatible — any endpoint speaking the /v1/embeddings protocol
+	// (OpenAI, Azure OpenAI, vLLM, LM Studio, LocalAI, HuggingFace TEI).
+	// APIKey is optional (many self-hosted servers ignore it). BaseURL points
+	// at the API root that exposes /embeddings.
+	OpenAIBaseURL string `env:"OPENAI_BASE_URL" envDefault:"https://api.openai.com/v1"`
+	OpenAIAPIKey  string `env:"OPENAI_API_KEY"`
+	OpenAIModel   string `env:"OPENAI_EMBEDDING_MODEL"`
+
+	// AWS Bedrock. Credentials resolve from the standard AWS chain (env vars,
+	// shared config, IAM role) — never from these fields. Region + model only.
+	AWSRegion string `env:"AWS_REGION"`
+	AWSModel  string `env:"AWS_EMBEDDING_MODEL"`
 
 	// Admin
 	AdminAllowedEmails string `env:"ADMIN_ALLOWED_EMAILS"`
@@ -193,6 +209,19 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// Provider-specific required fields — fail fast at boot rather than at the
+	// first embed (openai would 400; aws construction errors either way).
+	switch cfg.EmbeddingProvider {
+	case "openai":
+		if cfg.OpenAIModel == "" {
+			return nil, fmt.Errorf("OPENAI_EMBEDDING_MODEL is required when EMBEDDING_PROVIDER=openai")
+		}
+	case "aws":
+		if cfg.AWSRegion == "" || cfg.AWSModel == "" {
+			return nil, fmt.Errorf("AWS_REGION and AWS_EMBEDDING_MODEL are required when EMBEDDING_PROVIDER=aws")
+		}
+	}
+
 	// Retention lower bounds — fail fast on values that would mass-delete
 	// live data instead of silently running a destructive sweep (audit #4).
 	if cfg.RetentionMultiplier < 1 {
@@ -253,6 +282,10 @@ func (c *Config) EmbeddingModel() string {
 		return c.GCPModel
 	case "ollama":
 		return c.OllamaModel
+	case "openai":
+		return c.OpenAIModel
+	case "aws":
+		return c.AWSModel
 	default:
 		return c.EmbeddingProvider
 	}
@@ -261,11 +294,16 @@ func (c *Config) EmbeddingModel() string {
 // EmbeddingCfg converts config fields into a service.EmbeddingConfig.
 func (c *Config) EmbeddingCfg() service.EmbeddingConfig {
 	return service.EmbeddingConfig{
-		Dimensions:  c.EmbeddingDimensions,
-		OllamaURL:   c.OllamaURL,
-		OllamaModel: c.OllamaModel,
-		GCPProject:  c.GCPProject,
-		GCPLocation: c.GCPLocation,
-		GCPModel:    c.GCPModel,
+		Dimensions:    c.EmbeddingDimensions,
+		OllamaURL:     c.OllamaURL,
+		OllamaModel:   c.OllamaModel,
+		GCPProject:    c.GCPProject,
+		GCPLocation:   c.GCPLocation,
+		GCPModel:      c.GCPModel,
+		OpenAIBaseURL: c.OpenAIBaseURL,
+		OpenAIAPIKey:  c.OpenAIAPIKey,
+		OpenAIModel:   c.OpenAIModel,
+		AWSRegion:     c.AWSRegion,
+		AWSModel:      c.AWSModel,
 	}
 }
