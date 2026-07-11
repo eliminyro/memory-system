@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -116,6 +117,25 @@ func (s *MemoryService) seedTuple(ctx context.Context, t authz.Tuple) {
 	}
 }
 
+// unseedTuple removes a relation tuple for a lifecycle event (user revoke, role
+// downgrade). Like seedTuple it is nil-safe and best-effort: the primary DB
+// operation is the source of truth; a delete miss is logged, not fatal.
+func (s *MemoryService) unseedTuple(ctx context.Context, t authz.Tuple) {
+	if s.authz == nil {
+		return
+	}
+	if err := s.authz.Delete(ctx, t); err != nil {
+		slog.Default().Warn("authz tuple unseed failed",
+			"object_type", t.ObjectType,
+			"object_id", t.ObjectID,
+			"relation", t.Relation,
+			"subject_type", t.SubjectType,
+			"subject_id", t.SubjectID,
+			"error", err,
+		)
+	}
+}
+
 // authorize reports whether the request's subject holds relation on
 // objType:objID, per the tuple Check evaluator. It fails closed on every
 // uncertainty: a nil engine (unwired), a subjectless request, or a Check error
@@ -167,6 +187,12 @@ func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID
 // (system:memory#admin), resolved through the tuple Check — the mutable
 // tenant.Email column has no bearing on this decision.
 func (s *MemoryService) isAdmin(ctx context.Context) bool {
+	// The offline memory-admin CLI is inherently privileged (direct DB access)
+	// and carries no authenticated subject; it marks its context local-admin so
+	// it can reuse these lifecycle methods. Network paths never set this.
+	if auth.IsLocalAdmin(ctx) {
+		return true
+	}
 	return s.authorize(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin)
 }
 
@@ -647,6 +673,72 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 	return tu, nil
 }
 
+// ListTenantUsers returns the email->tenant mappings for a tenant. Admin-gated.
+func (s *MemoryService) ListTenantUsers(ctx context.Context, tenantID uuid.UUID) ([]models.TenantUser, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	var users []models.TenantUser
+	if err := s.db.WithContext(ctx).
+		Where("tenant_id = ?", tenantID).
+		Order("email ASC").
+		Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("list tenant_users: %w", err)
+	}
+	return users, nil
+}
+
+// UpdateTenantUserRole changes a user's role and syncs the admin tuple: granting
+// admin writes tenant:<T>#admin; downgrading to member deletes it (the member
+// tuple is untouched — admin is a superset). Admin-gated. Email is the key
+// (globally unique).
+func (s *MemoryService) UpdateTenantUserRole(ctx context.Context, email, role string) (*models.TenantUser, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if _, ok := models.ValidTenantUserRoles[role]; !ok {
+		return nil, fmt.Errorf("%w: role must be member or admin", apperr.ErrInvalidInput)
+	}
+	var tu models.TenantUser
+	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&tu).Error; err != nil {
+		return nil, fmt.Errorf("%w: no user mapping for %s", apperr.ErrNotFound, email)
+	}
+	if tu.Role == role {
+		return &tu, nil // idempotent
+	}
+	if err := s.db.WithContext(ctx).Model(&tu).Update("role", role).Error; err != nil {
+		return nil, fmt.Errorf("update tenant_user role: %w", err)
+	}
+	adminTuple := authzseed.TenantAdmin(tu.TenantID, tu.ID.String())
+	if role == models.TenantUserRoleAdmin {
+		s.seedTuple(ctx, adminTuple)
+	} else {
+		s.unseedTuple(ctx, adminTuple)
+	}
+	tu.Role = role
+	return &tu, nil
+}
+
+// RevokeTenantUser removes a user's email->tenant mapping and its membership
+// tuples (member, and admin when applicable). Admin-gated. Email is the key.
+func (s *MemoryService) RevokeTenantUser(ctx context.Context, email string) error {
+	if err := s.requireAdmin(ctx); err != nil {
+		return err
+	}
+	var tu models.TenantUser
+	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&tu).Error; err != nil {
+		return fmt.Errorf("%w: no user mapping for %s", apperr.ErrNotFound, email)
+	}
+	if err := s.db.WithContext(ctx).Delete(&tu).Error; err != nil {
+		return fmt.Errorf("delete tenant_user: %w", err)
+	}
+	s.unseedTuple(ctx, authzseed.TenantMember(tu.TenantID, tu.ID.String()))
+	if tu.Role == models.TenantUserRoleAdmin {
+		s.unseedTuple(ctx, authzseed.TenantAdmin(tu.TenantID, tu.ID.String()))
+	}
+	return nil
+}
+
 // UpdateTenantFields bundles the optional patches admin/self tools may apply.
 // Any nil pointer leaves the corresponding column unchanged.
 type UpdateTenantFields struct {
@@ -763,7 +855,7 @@ func (s *MemoryService) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 // principal ("svc:<tenant_id>"). Either way the key's subject is granted
 // membership on the tenant (idempotent — svc membership is already seeded at
 // tenant create).
-func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string, subjectID *string) (string, *models.APIKey, error) {
+func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string, subjectID *string, expiresAt *time.Time) (string, *models.APIKey, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return "", nil, err
 	}
@@ -783,6 +875,7 @@ func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, la
 		Label:     label,
 		Prefix:    auth.KeyPrefix(plaintext),
 		SubjectID: subjectID,
+		ExpiresAt: expiresAt,
 	}
 	if err := s.keys.Create(ctx, key); err != nil {
 		return "", nil, fmt.Errorf("create key: %w", err)
@@ -790,6 +883,34 @@ func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, la
 	// Lifecycle seeding: ensure the key's subject is a member of the tenant.
 	s.seedTuple(ctx, authzseed.TenantMember(tenantID, authzseed.APIKeySubjectID(*key)))
 	return plaintext, key, nil
+}
+
+// RotateAPIKey issues a replacement key for the same tenant/label/subject as an
+// existing key and retires the predecessor. With grace == 0 the old key is
+// revoked immediately; with grace > 0 the old key's expiry is set to now+grace
+// so a client can swap without downtime. Returns the new plaintext exactly once.
+func (s *MemoryService) RotateAPIKey(ctx context.Context, keyID uuid.UUID, grace time.Duration) (string, *models.APIKey, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return "", nil, err
+	}
+	old, err := s.keys.GetByID(ctx, keyID)
+	if err != nil {
+		return "", nil, err
+	}
+	// Issue the replacement first so a failure leaves the old key intact.
+	plaintext, newKey, err := s.CreateAPIKey(ctx, old.TenantID, old.Label, old.SubjectID, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	if grace > 0 {
+		expiry := time.Now().Add(grace)
+		if err := s.keys.SetExpiry(ctx, old.ID, &expiry); err != nil {
+			return "", nil, fmt.Errorf("set grace expiry on old key: %w", err)
+		}
+	} else if err := s.keys.Revoke(ctx, old.ID); err != nil {
+		return "", nil, fmt.Errorf("revoke old key: %w", err)
+	}
+	return plaintext, newKey, nil
 }
 
 func (s *MemoryService) ListAPIKeys(ctx context.Context, tenantID uuid.UUID) ([]models.APIKey, error) {

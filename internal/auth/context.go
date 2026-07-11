@@ -68,6 +68,28 @@ func SubjectFromContext(ctx context.Context) (Subject, bool) {
 	return s, ok
 }
 
+type localAdminContextKey struct{}
+
+// WithLocalAdmin marks a context as an offline, inherently-privileged local
+// administrator. It exists solely for the memory-admin CLI, which operates
+// directly against the database (holding DATABASE_URL is already full control)
+// and therefore has no authenticated Subject to resolve. The service's admin
+// gate honors this flag so the CLI can reuse the exact same tuple-seeding
+// lifecycle methods as the network paths, with no duplicated orchestration.
+//
+// SECURITY: only the in-process CLI ever sets this. Network entry points
+// (MCP, HTTP) construct their context from a real authenticated Subject and
+// never call this — so no request can escalate by setting it.
+func WithLocalAdmin(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localAdminContextKey{}, true)
+}
+
+// IsLocalAdmin reports whether the context was marked as a local admin.
+func IsLocalAdmin(ctx context.Context) bool {
+	v, _ := ctx.Value(localAdminContextKey{}).(bool)
+	return v
+}
+
 // BearerToken extracts the Bearer token from an Authorization header.
 // Returns an error if the header is missing or malformed.
 func BearerToken(r *http.Request) (string, error) {
