@@ -8,19 +8,15 @@ import (
 	"testing"
 )
 
-// TestCORS_AssembledMux is the integration counterpart to the unit-level
-// CORS tests in this package. It verifies the CORS middleware composes
-// correctly with an http.ServeMux that has the same route shape as
-// cmd/server/main.go's assembly: OAuth endpoints under /oauth/*, /mcp,
-// and the standalone /.well-known/* metadata routes. Stub handlers stand
-// in for authlet's AS so the test runs offline; the point is the
-// composition (CORS wraps the mux, OPTIONS short-circuits before the
-// inner handler, Vary headers propagate through to the actual response).
+// TestCORS_AssembledMux verifies CORS composes with a mux shaped like
+// cmd/server/main.go (/oauth/*, /mcp, /.well-known/*). Stub handlers keep it
+// offline; the point is composition: OPTIONS short-circuits before the inner
+// handler and Vary headers propagate to the actual response.
 func TestCORS_AssembledMux(t *testing.T) {
 	mux := http.NewServeMux()
 
-	// Stand-ins shaped like the real handlers. The integration concern is
-	// route resolution + CORS header propagation, not the response bodies.
+	// Stand-ins for the real handlers; the concern is route resolution + CORS
+	// header propagation, not the response bodies.
 	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)

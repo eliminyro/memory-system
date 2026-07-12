@@ -25,9 +25,8 @@ type Tenant struct {
 	Name  string    `gorm:"size:200;not null;uniqueIndex" json:"name"`
 	Email string    `gorm:"size:200" json:"email,omitempty"`
 
-	// Per-tenant feature toggles. All default to the safest, least-surprising
-	// behavior so a tenant upgrading from pre-tightening infrastructure sees
-	// no behavior change unless it opts in.
+	// Per-tenant feature toggles. All default to the safest behavior so a tenant
+	// upgrading from pre-tightening infra sees no change unless it opts in.
 	StalenessMode      string `gorm:"size:16;not null;default:'off'" json:"staleness_mode"`
 	DuplicateGuard     bool   `gorm:"not null;default:false" json:"duplicate_guard"`
 	CleanupScanEnabled bool   `gorm:"not null;default:false" json:"cleanup_scan_enabled"`

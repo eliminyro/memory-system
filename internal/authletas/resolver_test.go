@@ -14,8 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// captureLogger returns a resolver-wired slog.Logger and the buffer the
-// JSON handler writes into. Each line is one JSON record.
+// captureLogger returns a JSON slog.Logger and the buffer it writes to (one
+// JSON record per line).
 func captureLogger(t *testing.T) (*slog.Logger, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
@@ -45,10 +45,9 @@ func requireRejectEvent(t *testing.T, buf *bytes.Buffer, reason, wantLevel strin
 	return nil
 }
 
-// openTestDB returns a fresh in-memory sqlite DB migrated with just the
-// tenant_users projection the resolver reads. Sqlite is fine for the
-// resolver because the only query it runs is a simple `WHERE email = ?`
-// lookup — no postgres-specific features in play.
+// openTestDB returns an in-memory sqlite DB with just the tenant_users
+// projection the resolver reads. Sqlite suffices — the only query is a simple
+// `WHERE email = ?` lookup.
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -61,9 +60,8 @@ func openTestDB(t *testing.T) *gorm.DB {
 	}
 	// Sqlite :memory: connections do not share state across connections.
 	sqlDB.SetMaxOpenConns(1)
-	// AutoMigrate against a private struct that mirrors the subset of
-	// tenant_users the resolver reads + the email/role columns tests need
-	// to populate.
+	// Private struct mirrors the tenant_users subset the resolver reads plus
+	// the email/role columns tests populate.
 	type testTenantUserRow struct {
 		ID       int64  `gorm:"primaryKey;autoIncrement"`
 		Email    string `gorm:"column:email"`
@@ -118,10 +116,9 @@ func TestMemoryUserResolver_UnknownEmailReturnsUnauthorized(t *testing.T) {
 	}
 }
 
-// TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized seeds the email
-// in tenant_users, but the claim has EmailVerified=false. The resolver must
-// short-circuit before hitting the DB — otherwise an attacker could claim
-// any email on an account they don't own.
+// TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized: email is seeded
+// but EmailVerified=false must be rejected before the DB lookup, else an
+// attacker could claim any email.
 func TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized(t *testing.T) {
 	db := openTestDB(t)
 	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
@@ -136,13 +133,11 @@ func TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized(t *testing.T) {
 	}
 }
 
-// TestMemoryUserResolver_EmptyEmailReturnsUnauthorized verifies the empty-
-// email guard short-circuits before the DB lookup even when EmailVerified
-// is somehow true.
+// TestMemoryUserResolver_EmptyEmailReturnsUnauthorized: the empty-email guard
+// short-circuits before the DB lookup even when EmailVerified is true.
 func TestMemoryUserResolver_EmptyEmailReturnsUnauthorized(t *testing.T) {
 	db := openTestDB(t)
-	// Seed a row to prove the empty-email guard short-circuits before the
-	// DB is consulted.
+	// Seed a row to prove the guard short-circuits before the DB is consulted.
 	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
@@ -155,9 +150,8 @@ func TestMemoryUserResolver_EmptyEmailReturnsUnauthorized(t *testing.T) {
 	}
 }
 
-// Each rejection path must emit a single structured log record with the
-// stable event key and the per-reason label so operators can build an
-// aggregation/alert without further code changes.
+// Each rejection path emits one structured log record with the stable event
+// key + per-reason label, so operators can aggregate without code changes.
 func TestMemoryUserResolver_EmitsRejectEvent(t *testing.T) {
 	t.Run("email_empty logs at INFO with no email field", func(t *testing.T) {
 		logger, buf := captureLogger(t)
@@ -206,9 +200,8 @@ func TestMemoryUserResolver_EmitsRejectEvent(t *testing.T) {
 	})
 }
 
-// TestMemoryUserResolver_NilLoggerFallsBackToDefault asserts the resolver
-// does not panic when constructed without a Logger — callers in setup.go
-// always wire one, but the zero value must remain usable.
+// TestMemoryUserResolver_NilLoggerFallsBackToDefault: no Logger must not panic
+// (zero value stays usable).
 func TestMemoryUserResolver_NilLoggerFallsBackToDefault(t *testing.T) {
 	db := openTestDB(t)
 	r := &MemoryUserResolver{DB: db}

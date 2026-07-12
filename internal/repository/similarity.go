@@ -10,9 +10,8 @@ import (
 )
 
 // SimilarityCandidate is an existing document that may collide with a new save.
-// MaxSimilarity is the cosine similarity (0..1) of the best-matching section
-// across any of the new section embeddings compared to any of the candidate's
-// existing section embeddings.
+// MaxSimilarity is the cosine (0..1) of the best-matching section pair between
+// the new embeddings and the candidate's existing sections.
 type SimilarityCandidate struct {
 	DocumentID    uuid.UUID `json:"document_id"`
 	Category      string    `json:"category"`
@@ -30,15 +29,11 @@ func (c SimilarityCandidate) Path() string {
 	return c.Category + "/" + c.Slug
 }
 
-// FindSimilarDocuments scans existing sections in the tenant and returns
-// documents whose best section match against any of `newEmbeddings` meets
-// the threshold. Pass excludeCategory/Subcategory/Slug to avoid matching
-// the same path (so updating an existing doc doesn't flag as duplicate).
-//
-// Returns up to `limit` candidates, ordered by similarity descending.
-//
-// Implementation: builds a single-parameter Postgres vector array literal and
-// CROSS JOINs it with sections so the whole check runs in one query.
+// FindSimilarDocuments scans the tenant's existing sections and returns documents
+// whose best section match against any of newEmbeddings meets the threshold. Pass
+// excludeCategory/Subcategory/Slug so updating an existing doc doesn't self-flag.
+// Returns up to `limit`, ordered by similarity desc. Runs as one query via a
+// CROSS JOIN over a Postgres vector array literal.
 func (r *SectionRepository) FindSimilarDocuments(
 	ctx context.Context,
 	tenantID uuid.UUID,
@@ -84,10 +79,9 @@ func (r *SectionRepository) FindSimilarDocuments(
 	return results, nil
 }
 
-// buildVectorArrayLiteral renders []pgvector.Vector as a Postgres array literal
-// compatible with `?::vector[]`. Output shape: `{"[1,2,3]","[4,5,6]"}`. Each
-// element is the vector's own text representation wrapped in double quotes so
-// the comma inside the vector isn't parsed as an array separator.
+// buildVectorArrayLiteral renders []pgvector.Vector as a Postgres array literal for
+// `?::vector[]`: `{"[1,2,3]","[4,5,6]"}`. Each element is quoted so its internal
+// commas aren't parsed as array separators.
 func buildVectorArrayLiteral(vectors []pgvector.Vector) string {
 	parts := make([]string, len(vectors))
 	for i, v := range vectors {

@@ -13,8 +13,7 @@ type EmbeddingProvider interface {
 	Dimensions() int
 }
 
-// ErrEmbeddingUnavailable is the generic, tenant-safe error returned when an
-// upstream embedding provider responds with a non-2xx status. The full upstream
-// status and body are logged server-side (audit #18) and never propagated to
-// callers, which would otherwise leak provider internals into MCP responses.
+// ErrEmbeddingUnavailable is the tenant-safe error for a non-2xx upstream embedding
+// response. Full status/body is logged server-side (audit #18), never propagated
+// to callers (which would leak provider internals into MCP responses).
 var ErrEmbeddingUnavailable = errors.New("embedding provider unavailable")

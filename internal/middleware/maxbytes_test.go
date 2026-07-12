@@ -9,8 +9,7 @@ import (
 	"testing"
 )
 
-// An oversized body must be rejected during the read — the reader returns
-// *http.MaxBytesError and never buffers the full payload.
+// Oversized body is rejected during the read (*http.MaxBytesError), never fully buffered.
 func TestMaxBytes_RejectsOversized(t *testing.T) {
 	var readErr error
 	var readN int

@@ -7,16 +7,13 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// PostgresStore is the GORM-backed Store used in production. It persists tuples
-// into the relation_tuples table (see model.go). All writes are idempotent via
-// ON CONFLICT DO NOTHING against the composite-primary-key uniqueness
-// constraint.
+// PostgresStore is the production GORM-backed Store, persisting to relation_tuples
+// (model.go). Writes are idempotent via ON CONFLICT DO NOTHING on the composite-PK.
 type PostgresStore struct {
 	db *gorm.DB
 }
 
-// NewPostgresStore returns a Store backed by the given *gorm.DB. Callers are
-// responsible for having run Migrate on the same database.
+// NewPostgresStore returns a Store over db; caller must have run Migrate on it.
 func NewPostgresStore(db *gorm.DB) *PostgresStore {
 	return &PostgresStore{db: db}
 }
@@ -31,8 +28,8 @@ func (s *PostgresStore) Write(ctx context.Context, t Tuple) error {
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, t Tuple) error {
-	// Explicit column predicates (not a struct-based Where) so an empty
-	// SubjectRelation is matched literally rather than dropped as a zero value.
+	// Explicit column predicates (not struct-based Where) so an empty
+	// SubjectRelation matches literally instead of being dropped as a zero value.
 	return s.db.WithContext(ctx).
 		Where(`object_type = ? AND object_id = ? AND relation = ? AND
 		       subject_type = ? AND subject_id = ? AND subject_relation = ?`,

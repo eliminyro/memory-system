@@ -9,9 +9,8 @@ import (
 	"github.com/eliminyro/memory-system/internal/authzseed"
 )
 
-// TestAdminSplitByCheck proves the admin/regular tool-surface split is decided
-// by a system:memory#admin Check on the request subject — not by an email
-// allowlist. Uses the in-memory tuple store so no database is needed.
+// TestAdminSplitByCheck proves the admin/regular surface split is decided by a
+// system:memory#admin Check on the subject, not an email allowlist. In-memory store.
 func TestAdminSplitByCheck(t *testing.T) {
 	store := authz.NewMemoryStore()
 	ctx := context.Background()
@@ -22,8 +21,7 @@ func TestAdminSplitByCheck(t *testing.T) {
 	}
 	engine := authz.NewEngine(store)
 
-	// memory service is nil: registration never invokes the handlers, and the
-	// admin split only consults the checker.
+	// nil memory service is fine: the admin split only consults the checker.
 	srv := NewServer(nil, engine)
 
 	cases := []struct {

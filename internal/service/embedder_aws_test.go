@@ -71,9 +71,8 @@ func TestAWSEmbedder_UnknownModelFamily(t *testing.T) {
 	assert.Contains(t, err.Error(), "openai.text-embedding-3-small")
 }
 
-// TestAWSEmbedder_MissingCredentials forces credential resolution to fail via
-// the loadAWSConfig seam, so the test is deterministic regardless of whether
-// the host has real AWS credentials configured.
+// TestAWSEmbedder_MissingCredentials forces credential resolution to fail via the
+// loadAWSConfig seam, so the test is deterministic regardless of host credentials.
 func TestAWSEmbedder_MissingCredentials(t *testing.T) {
 	orig := loadAWSConfig
 	t.Cleanup(func() { loadAWSConfig = orig })

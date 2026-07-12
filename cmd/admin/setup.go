@@ -9,8 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// mcpServerEntry is one entry under "mcpServers" for an HTTP-transport MCP
-// server: the client POSTs JSON-RPC to url and sends the headers verbatim.
+// mcpServerEntry is one "mcpServers" entry for an HTTP-transport MCP server.
 type mcpServerEntry struct {
 	Type    string            `json:"type"`
 	URL     string            `json:"url"`
@@ -21,10 +20,8 @@ type mcpConfig struct {
 	MCPServers map[string]mcpServerEntry `json:"mcpServers"`
 }
 
-// newSetupCmd emits a client-agnostic MCP configuration for a running instance.
-// It performs no database or network I/O and never persists the token — it just
-// prints the JSON any MCP-capable client can consume. Inputs come from flags or
-// the MEMORY_URL / MEMORY_TOKEN environment variables.
+// newSetupCmd prints a client-agnostic MCP config for a running instance. No DB
+// or network I/O, never persists the token. Inputs: flags or MEMORY_URL/MEMORY_TOKEN.
 func newSetupCmd() *cobra.Command {
 	var url, token, name string
 	cmd := &cobra.Command{
@@ -57,8 +54,7 @@ func newSetupCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("marshal config: %w", err)
 			}
-			// The token is a secret; warn on stderr so piping stdout to a file
-			// stays clean but the operator still sees the caution.
+			// Token is secret: warn on stderr so piping stdout to a file stays clean.
 			fmt.Fprintln(os.Stderr, "warning: the output below contains a bearer token — treat it as a secret and do not commit it.")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), string(out))
 			return nil

@@ -47,8 +47,8 @@ func openAPIPG(t *testing.T) *gorm.DB {
 }
 
 // apiFixture is a real apiHandler (backed by a real MemoryService) plus the ids
-// of a tenant and a document seeded into it — enough to assert the handlers pass
-// the context tenant + query params through and marshal the returned data.
+// of a seeded tenant + document, enough to assert handlers pass context tenant +
+// params through and marshal results.
 type apiFixture struct {
 	h       *apiHandler
 	tenant  uuid.UUID
@@ -110,16 +110,15 @@ func newAPIFixture(t *testing.T) *apiFixture {
 	}
 }
 
-// reqAs builds a request whose context carries the given tenant, exactly as the
-// bearer middleware + UserContextBridge would in production.
+// reqAs builds a request whose context carries the given tenant, as the bearer
+// middleware + UserContextBridge would in production.
 func reqAs(method, target string, tenant uuid.UUID) *http.Request {
 	req := httptest.NewRequest(method, target, nil)
 	return req.WithContext(auth.WithTenantID(context.Background(), tenant))
 }
 
-// TestAPIListDocuments_ReturnsSeededDoc replaces the old nil-panic wiring check:
-// it proves listDocuments passes the context tenant + category filter to the
-// service and marshals the returned documents.
+// TestAPIListDocuments_ReturnsSeededDoc proves listDocuments passes the context
+// tenant + category filter to the service and marshals the returned documents.
 func TestAPIListDocuments_ReturnsSeededDoc(t *testing.T) {
 	f := newAPIFixture(t)
 
@@ -137,8 +136,7 @@ func TestAPIListDocuments_ReturnsSeededDoc(t *testing.T) {
 		t.Fatalf("listDocuments did not return seeded doc %s; got %d docs", f.docID, len(docs))
 	}
 
-	// A different category must not return the learnings doc — proves the query
-	// param actually reaches the service.
+	// A different category must not return the learnings doc — proves the query param reaches the service.
 	rec2 := httptest.NewRecorder()
 	f.h.mux().ServeHTTP(rec2, reqAs(http.MethodGet, "/documents?category=preferences", f.tenant))
 	var other []models.Document
@@ -161,8 +159,8 @@ func TestAPIListDocuments_ReturnsSeededDoc(t *testing.T) {
 	}
 }
 
-// TestAPIGetIndex_ReturnsSeededCategory replaces the old nil-panic wiring check:
-// getIndex must call the service with the context tenant and marshal the index.
+// TestAPIGetIndex_ReturnsSeededCategory proves getIndex calls the service with
+// the context tenant and marshals the index.
 func TestAPIGetIndex_ReturnsSeededCategory(t *testing.T) {
 	f := newAPIFixture(t)
 
@@ -238,9 +236,8 @@ func TestAPIGetDocument_ReturnsSeededDoc(t *testing.T) {
 	}
 }
 
-// TestAPISearch_CallsService proves getSearch forwards the q param to the
-// service and marshals a results array (as opposed to panicking on a nil
-// service, which the old wiring test relied on).
+// TestAPISearch_CallsService proves getSearch forwards the q param to the service
+// and marshals a results array.
 func TestAPISearch_CallsService(t *testing.T) {
 	f := newAPIFixture(t)
 

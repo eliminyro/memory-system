@@ -15,8 +15,7 @@ func okHandler() http.Handler {
 	})
 }
 
-// With burst=2 the third request from the same client within the window is
-// throttled with 429.
+// With burst=2 the third request from the same client is throttled with 429.
 func TestRateLimit_OverLimitReturns429(t *testing.T) {
 	h := RateLimit(1, 2)(okHandler())
 	call := func() int {
@@ -67,8 +66,7 @@ func TestRateLimit_KeyedPerClient(t *testing.T) {
 	}
 }
 
-// The principal (subject) key takes precedence over IP: two requests from the
-// same IP but different subjects get independent buckets.
+// Principal key takes precedence over IP: same IP, different subjects -> independent buckets.
 func TestRateLimit_KeyedByPrincipal(t *testing.T) {
 	h := RateLimit(1, 1)(okHandler())
 	hit := func(subjID string) int {

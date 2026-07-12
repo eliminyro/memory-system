@@ -102,8 +102,7 @@ func TestOpenAIEmbedder_Non2xxReturnsSentinel(t *testing.T) {
 
 	e := NewOpenAIEmbedder(srv.URL, "", "m", 0)
 	_, err := e.Embed(context.Background(), "x")
-	// Audit #18: upstream body is NOT surfaced to the caller; a generic
-	// sentinel is returned (and the detail is logged server-side).
+	// Audit #18: upstream body NOT surfaced; caller gets a generic sentinel.
 	if !errors.Is(err, ErrEmbeddingUnavailable) {
 		t.Fatalf("want ErrEmbeddingUnavailable, got %v", err)
 	}

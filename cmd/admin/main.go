@@ -1,9 +1,7 @@
-// Command memory-admin is a privileged, offline administration CLI for the
-// memory system. It talks directly to the database (holding DATABASE_URL is
-// already full control) and reuses the exact service methods the network paths
-// use, so tenant/user/key lifecycle — including authz tuple seeding — stays in
-// one place. The context is marked local-admin (auth.WithLocalAdmin) so the
-// service's admin gate honors it without an authenticated Subject.
+// Command memory-admin is a privileged offline admin CLI. It talks directly to
+// the DB and reuses the network paths' service methods, so tenant/user/key
+// lifecycle (incl. authz tuple seeding) stays in one place. Context is local-admin
+// (auth.WithLocalAdmin) — admin gate honored without an authenticated Subject.
 package main
 
 import (
@@ -22,11 +20,9 @@ import (
 
 const defaultDatabaseURL = "postgres://memory:memory@localhost:5432/memory?sslmode=disable"
 
-// buildService wires a MemoryService against the database and returns a
-// local-admin context. Only the repositories the admin operations touch are
-// constructed; the rest are nil. It intentionally does NOT call config.Load —
-// that validates PUBLIC_BASE_URL for the authlet path, which the CLI must not
-// require.
+// buildService wires a MemoryService and returns a local-admin context. Only the
+// repos admin ops touch are constructed; rest nil. It deliberately skips
+// config.Load (which requires PUBLIC_BASE_URL for authlet) — the CLI must not need it.
 func buildService() (*service.MemoryService, context.Context, error) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

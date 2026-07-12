@@ -6,9 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestParseTenantOverride covers the tenant_id override parser used by every
-// tool that accepts an (admin-only) tenant_id: nil/empty means "no override",
-// a valid UUID parses, and garbage is rejected before it can reach the service.
+// TestParseTenantOverride covers the tenant_id override parser: nil/empty means
+// no override, a valid UUID parses, garbage is rejected before reaching the service.
 func TestParseTenantOverride(t *testing.T) {
 	empty := ""
 	bad := "not-a-uuid"

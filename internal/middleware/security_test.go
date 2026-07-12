@@ -27,8 +27,7 @@ func TestSecurityHeaders_SetOnResponse(t *testing.T) {
 	}
 }
 
-// The CSP must be strict: self-only scripts, and the anti-clickjacking /
-// base-uri / plugin lockdowns present.
+// The CSP must be strict: self-only scripts plus the clickjacking/base-uri/plugin lockdowns.
 func TestSecurityHeaders_CSPIsStrict(t *testing.T) {
 	for _, frag := range []string{
 		"default-src 'self'",

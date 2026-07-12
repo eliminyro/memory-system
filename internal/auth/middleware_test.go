@@ -20,9 +20,8 @@ func (s stubValidator) ValidateKey(ctx context.Context, key string) (KeyInfo, er
 	return s.info, s.err
 }
 
-// 401 responses from APIKeyMiddleware must be RFC 6750-shaped JSON, not
-// text/plain. Inspector tolerated text/plain but stricter clients require
-// application/json with error/error_description fields.
+// 401s from APIKeyMiddleware must be RFC 6750-shaped JSON (error/
+// error_description), which stricter clients require.
 func TestAPIKeyMiddleware401IsJSON(t *testing.T) {
 	cases := []struct {
 		name      string

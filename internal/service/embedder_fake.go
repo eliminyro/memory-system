@@ -9,13 +9,9 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-// FakeEmbedder produces deterministic vectors derived from a sha256 digest
-// of the input text. Vectors are reproducible across runs and machines, but
-// semantically meaningless — tests that need similarity-based behavior must
-// seed sections by id, not rely on ranking.
-//
-// Wired via EMBEDDING_PROVIDER=fake or injected directly by integration tests.
-// Never wired in production code paths.
+// FakeEmbedder produces deterministic sha256-derived vectors: reproducible but
+// semantically meaningless (tests needing similarity must seed by id, not ranking).
+// Wired via EMBEDDING_PROVIDER=fake or injected by integration tests; never in production.
 type FakeEmbedder struct {
 	dim int
 }

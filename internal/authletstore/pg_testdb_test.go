@@ -12,8 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// authletTables lists every model backing the store, in the order used by
-// both AutoMigrate and teardown.
+// authletTables lists every model backing the store, in AutoMigrate/teardown order.
 func authletTables() []any {
 	return []any{
 		&OAuthClient{},
@@ -24,13 +23,12 @@ func authletTables() []any {
 	}
 }
 
-// openTestPG returns a Postgres-backed *gorm.DB with the authlet tables
-// migrated fresh. Unlike openTestDB (sqlite :memory: capped at one
-// connection, which serializes every transaction), Postgres runs the
-// goroutines under real READ COMMITTED concurrency — the only way to
-// exercise the check-then-act races in ConsumeOnce / MarkUsed.
+// openTestPG returns a Postgres-backed *gorm.DB with the authlet tables migrated
+// fresh. Unlike openTestDB (sqlite :memory:, one connection, serializes every
+// txn), Postgres gives real READ COMMITTED concurrency — the only way to exercise
+// the check-then-act races in ConsumeOnce / MarkUsed.
 //
-// It reads TEST_DATABASE_URL and skips the test if it is unset, e.g.:
+// Reads TEST_DATABASE_URL and skips if unset, e.g.:
 //
 //	docker run -d --name memsys-authlet-pg \
 //	  -e POSTGRES_USER=memory -e POSTGRES_PASSWORD=memory -e POSTGRES_DB=memory \
@@ -38,9 +36,8 @@ func authletTables() []any {
 //	TEST_DATABASE_URL='postgres://memory:memory@localhost:5433/memory?sslmode=disable' \
 //	  go test -tags=integration ./internal/authletstore/...
 //
-// Tables live in the default (public) schema; each test drops and re-creates
-// them so runs are isolated. Go runs tests in a package sequentially unless
-// t.Parallel is called, so the shared schema is safe here.
+// Each test drops and re-creates the tables (public schema) for isolation; the
+// package runs tests sequentially, so the shared schema is safe.
 func openTestPG(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -68,13 +65,10 @@ func openTestPG(t *testing.T) *gorm.DB {
 	return db
 }
 
-// warmPool caps the pool at n and pre-opens n idle connections. Establishing
-// a connection to a remote Postgres costs a full round-trip; a cold pool
-// staggers goroutine startup so much that the first redemption's transaction
-// commits before the others even begin, hiding the race. Pre-warming lets all
-// n workers grab a live connection instantly and begin their transactions
-// together, so their (unlocked) reads overlap and the check-then-act window is
-// actually exercised.
+// warmPool caps the pool at n and pre-opens n idle connections. A cold pool
+// staggers goroutine startup (each remote connection costs a round-trip), so the
+// first txn commits before others begin and the race hides. Pre-warming lets all
+// n workers start their txns together so their unlocked reads overlap.
 func warmPool(t *testing.T, db *gorm.DB, n int) {
 	t.Helper()
 	sqlDB, err := db.DB()

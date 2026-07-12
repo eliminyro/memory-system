@@ -6,10 +6,9 @@ import (
 	"sync"
 )
 
-// Store is the tuple persistence contract the Check evaluator depends on. It is
-// deliberately small: Check only needs the two read paths, while Write/Delete
-// exist for the out-of-band tuple writers wired later. Writes are idempotent —
-// writing an already-present tuple is a no-op, never an error.
+// Store is the tuple persistence contract Check depends on. Small by design:
+// Check needs only the two reads; Write/Delete serve out-of-band writers.
+// Writes are idempotent — re-writing an existing tuple is a no-op, never an error.
 type Store interface {
 	// Write persists t. If an identical tuple already exists it is a no-op.
 	Write(ctx context.Context, t Tuple) error
@@ -23,9 +22,8 @@ type Store interface {
 	ReadBySubject(ctx context.Context, subjType, subjID string) ([]Tuple, error)
 }
 
-// tupleKey returns a collision-free canonical key for a tuple. The NUL byte is
-// used as the field separator because it cannot appear in the textual object /
-// subject identifiers used by the model.
+// tupleKey returns a collision-free canonical key. NUL separates fields since it
+// cannot appear in the model's textual identifiers.
 func tupleKey(t Tuple) string {
 	return strings.Join([]string{
 		t.ObjectType, t.ObjectID, t.Relation,
@@ -33,8 +31,7 @@ func tupleKey(t Tuple) string {
 	}, "\x00")
 }
 
-// MemoryStore is an in-process, goroutine-safe Store used for fast pure-Check
-// unit tests with no database. It is not intended for production use.
+// MemoryStore is an in-process, goroutine-safe Store for fast unit tests; not for production.
 type MemoryStore struct {
 	mu     sync.RWMutex
 	tuples map[string]Tuple

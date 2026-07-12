@@ -20,11 +20,9 @@ import (
 	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
-// authzFixture wires a fully-populated MemoryService (backed by the shared
-// tuple store the service also runs its Check engine over) plus a small cast of
-// tenants, subjects, and documents. Every authorization decision under test
-// flows through the service's internal *authz.Engine — the same code path
-// production uses — so these tests exercise the real stack end to end.
+// authzFixture wires a fully-populated MemoryService over the shared tuple store
+// (the same *authz.Engine path production uses) plus test tenants, subjects, and
+// docs — so authorization decisions are exercised end to end.
 type authzFixture struct {
 	db    *gorm.DB
 	store authz.Store
@@ -289,10 +287,9 @@ func TestAuthzSubjectlessDenied(t *testing.T) {
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "subjectless override denied")
 }
 
-// TestAuthzEscalationRegression is the crux: setting a tenant's Email to an
-// admin-allowlisted value via update_tenant must grant that tenant's subject NO
-// admin, because admin is decided by the tuple Check, not the mutable email.
-// It also proves update_tenant writes ZERO authorization tuples (task 5.2).
+// TestAuthzEscalationRegression is the crux: an admin-allowlisted Email set via
+// update_tenant must grant NO admin (admin is decided by the tuple Check, not the
+// mutable email). Also proves update_tenant writes ZERO authorization tuples (task 5.2).
 func TestAuthzEscalationRegression(t *testing.T) {
 	f := newAuthzFixture(t)
 	admin := ctxFor(f.tenantA, f.admin)

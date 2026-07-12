@@ -12,12 +12,10 @@ type KeyValidator interface {
 	ValidateKey(ctx context.Context, key string) (KeyInfo, error)
 }
 
-// APIKeyMiddleware extracts a Bearer token from the Authorization header,
-// validates it, and injects the tenant ID into the request context.
-//
-// On rejection, the response is RFC 6750 §3 shaped: status 401, body
-// application/json with error/error_description fields. The WWW-Authenticate
-// challenge is added by an outer middleware.
+// APIKeyMiddleware validates the Bearer token and injects the tenant ID into
+// the request context. On rejection it writes an RFC 6750 §3 response (401,
+// JSON error/error_description); the WWW-Authenticate challenge is added by an
+// outer middleware.
 func APIKeyMiddleware(validator KeyValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

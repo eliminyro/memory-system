@@ -11,8 +11,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// openTestPG returns a Postgres-backed *gorm.DB with the relation_tuples table
-// migrated fresh. It reads TEST_DATABASE_URL and skips when unset, e.g.:
+// openTestPG returns a fresh-migrated Postgres *gorm.DB. Reads TEST_DATABASE_URL,
+// skips when unset, e.g.:
 //
 //	docker run -d --name authz-pg \
 //	  -e POSTGRES_USER=memory -e POSTGRES_PASSWORD=memory -e POSTGRES_DB=memory \
@@ -20,8 +20,7 @@ import (
 //	TEST_DATABASE_URL='postgres://memory:memory@localhost:5434/memory?sslmode=disable' \
 //	  go test -tags=integration ./internal/authz/...
 //
-// The table is dropped and recreated per test so runs are isolated (Go runs a
-// package's tests sequentially unless t.Parallel is called).
+// The table is dropped/recreated per test for isolation (package tests run sequentially).
 func openTestPG(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -110,9 +109,9 @@ func TestPostgresStore_UsersetSubjectRoundTrip(t *testing.T) {
 	}
 }
 
-// TestPostgresStore_EndToEndCheck runs the full recursive Check through the
-// Postgres store: a global admin must reach editor on a document in an
-// arbitrary tenant via admin-from-system -> member -> member-from-tenant.
+// TestPostgresStore_EndToEndCheck runs full recursive Check through Postgres: a
+// global admin reaches doc editor in any tenant via admin-from-system -> member
+// -> member-from-tenant.
 func TestPostgresStore_EndToEndCheck(t *testing.T) {
 	ctx := context.Background()
 	db := openTestPG(t)

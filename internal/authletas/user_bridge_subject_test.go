@@ -14,9 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// openBridgeTestDB returns a sqlite tenant_users table whose id column is a
-// string (matching the production uuid text id the bridge reads as the
-// subject).
+// openBridgeTestDB returns a sqlite tenant_users table with a string id column
+// (matching the production uuid text id the bridge reads as the subject).
 func openBridgeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

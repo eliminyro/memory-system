@@ -4,15 +4,14 @@ package authz
 type RewriteKind int
 
 const (
-	// RewriteThis is the set of direct tuples stored on (object, relation),
-	// including a user:* wildcard tuple.
+	// RewriteThis: direct tuples on (object, relation), including a user:* wildcard.
 	RewriteThis RewriteKind = iota
-	// RewriteComputedUserset is the set of subjects that have Relation on the
-	// SAME object (a sibling relation, e.g. "member" includes "admin").
+	// RewriteComputedUserset: subjects with Relation on the SAME object (sibling
+	// relation, e.g. "member" includes "admin").
 	RewriteComputedUserset
-	// RewriteTupleToUserset follows a parent edge: read (object, Tupleset)
-	// tuples to find parent objects, then evaluate ComputedRelation on each
-	// parent (e.g. document editor == "member from tenant").
+	// RewriteTupleToUserset: follow a parent edge — read (object, Tupleset) tuples
+	// for parent objects, then eval ComputedRelation on each (e.g. doc editor ==
+	// "member from tenant").
 	RewriteTupleToUserset
 )
 
@@ -23,17 +22,15 @@ type Rewrite struct {
 	// Relation is the sibling relation to evaluate (RewriteComputedUserset).
 	Relation string
 
-	// Tupleset is the parent-edge relation read on the object, and
-	// ComputedRelation is the relation evaluated on each referenced parent
-	// object (RewriteTupleToUserset).
+	// Tupleset is the parent-edge relation read on the object; ComputedRelation
+	// is evaluated on each referenced parent (RewriteTupleToUserset).
 	Tupleset         string
 	ComputedRelation string
 }
 
-// RelationDef is the definition of one relation within a type: the set of
-// direct subject specs allowed by its `this` clause (documentation only; Check
-// does not enforce subject typing) and the union of rewrite rules that define
-// its membership.
+// RelationDef defines one relation within a type: the direct subject specs its
+// `this` clause allows (documentation only — Check does not enforce subject
+// typing) and the union of rewrite rules defining membership.
 type RelationDef struct {
 	Name           string
 	DirectSubjects []string
@@ -46,14 +43,13 @@ type TypeDef struct {
 	Relations map[string]RelationDef
 }
 
-// Namespace is the fixed, in-process authorization model. It is not
-// user-editable; DefaultNamespace returns the single canonical instance.
+// Namespace is the fixed, non-user-editable authorization model; DefaultNamespace
+// returns the single canonical instance.
 type Namespace struct {
 	Types map[string]TypeDef
 }
 
-// Relation returns the definition of objType#relation, or ok=false if the type
-// or relation is not part of the namespace.
+// Relation returns the definition of objType#relation, or ok=false if absent.
 func (n Namespace) Relation(objType, relation string) (RelationDef, bool) {
 	t, ok := n.Types[objType]
 	if !ok {
@@ -73,8 +69,7 @@ func from(tupleset, computedRelation string) Rewrite {
 	return Rewrite{Kind: RewriteTupleToUserset, Tupleset: tupleset, ComputedRelation: computedRelation}
 }
 
-// DefaultNamespace returns the fixed memory-system authorization model,
-// mirroring design D1:
+// DefaultNamespace returns the fixed memory-system authorization model (design D1):
 //
 //	type user
 //	type system

@@ -27,9 +27,8 @@ type OverrideEvent struct {
 	APIKeyID     *uuid.UUID
 }
 
-// Log records a single override event. Best-effort — caller decides whether
-// to fail the operation on logging errors (usually no, the override already
-// succeeded; a dropped audit row beats a dropped user request).
+// Log records a single override event. Best-effort — caller decides whether to
+// fail on logging errors (usually not; a dropped audit row beats a dropped request).
 func (r *OverrideLogRepository) Log(ctx context.Context, ev OverrideEvent) error {
 	entry := &models.OverrideLog{
 		TenantID:     ev.TenantID,

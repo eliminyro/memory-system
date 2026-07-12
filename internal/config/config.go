@@ -16,13 +16,9 @@ type Config struct {
 	ServerAddr  string `env:"SERVER_ADDR" envDefault:":8080"`
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 
-	// Embedding provider: "ollama", "gcp", "openai", "aws", or "fake". The
-	// default dimension matches the default model (ollama nomic-embed-text =
-	// 768-dim) so a stock deploy embeds successfully out of the box (audit
-	// #12); override EMBEDDING_DIMENSIONS when pointing at a wider model. For
-	// OpenAI models that support output-dimension truncation
-	// (text-embedding-3-*), EMBEDDING_DIMENSIONS is also sent as the requested
-	// output size.
+	// Embedding provider: "ollama", "gcp", "openai", "aws", or "fake". Default
+	// dimension matches the default model (ollama nomic-embed-text=768) so a stock
+	// deploy works (audit #12). For OpenAI text-embedding-3-*, also the output size.
 	EmbeddingProvider   string `env:"EMBEDDING_PROVIDER" envDefault:"ollama"`
 	EmbeddingDimensions int    `env:"EMBEDDING_DIMENSIONS" envDefault:"768"`
 
@@ -35,10 +31,8 @@ type Config struct {
 	GCPLocation string `env:"GCP_LOCATION" envDefault:"us-central1"`
 	GCPModel    string `env:"GCP_EMBEDDING_MODEL" envDefault:"text-embedding-005"`
 
-	// OpenAI-compatible — any endpoint speaking the /v1/embeddings protocol
-	// (OpenAI, Azure OpenAI, vLLM, LM Studio, LocalAI, HuggingFace TEI).
-	// APIKey is optional (many self-hosted servers ignore it). BaseURL points
-	// at the API root that exposes /embeddings.
+	// OpenAI-compatible — any /v1/embeddings endpoint (OpenAI, Azure, vLLM, TEI,
+	// etc). APIKey optional (self-hosted often ignores it); BaseURL is the API root.
 	OpenAIBaseURL string `env:"OPENAI_BASE_URL" envDefault:"https://api.openai.com/v1"`
 	OpenAIAPIKey  string `env:"OPENAI_API_KEY"`
 	OpenAIModel   string `env:"OPENAI_EMBEDDING_MODEL"`
@@ -52,68 +46,53 @@ type Config struct {
 	AdminAllowedEmails string `env:"ADMIN_ALLOWED_EMAILS"`
 
 	// Cleanup pipeline — nightly lint scan populates cleanup_queue with
-	// near-duplicate candidates. When TELEGRAM_* are set, a summary is posted
-	// after each scan. All cleanup knobs are optional: leaving them empty
-	// disables the respective feature gracefully.
+	// near-duplicate candidates; TELEGRAM_* posts a per-scan summary. All knobs
+	// optional (empty disables the feature).
 	CleanupIntervalHours int    `env:"CLEANUP_INTERVAL_HOURS" envDefault:"24"`
 	CleanupEnabled       bool   `env:"CLEANUP_ENABLED" envDefault:"true"`
 	TelegramBotToken     string `env:"TELEGRAM_BOT_TOKEN"`
 	TelegramChatID       string `env:"TELEGRAM_CHAT_ID"`
 
-	// Retention sweep — archives docs unverified past retentionMultiplier ×
-	// the doc_type staleness threshold, then hard-deletes them deleteGraceDays
-	// after archiving. Only runs for tenants with staleness_mode=hard.
-	//
-	// Both must be >= 1. A value below 1 collapses the archive/delete cutoffs
-	// to "now" (or the future), which would mass hard-delete live documents —
-	// Load rejects it, and retention.retainTenant refuses to run defensively.
+	// Retention sweep — archives docs unverified past multiplier × the doc_type
+	// staleness threshold, then hard-deletes deleteGraceDays after archiving. Only
+	// for staleness_mode=hard tenants. Both must be >= 1: below 1 collapses the
+	// cutoffs and would mass hard-delete live data (Load rejects; retainTenant also guards).
 	RetentionMultiplier int `env:"RETENTION_MULTIPLIER" envDefault:"3"`
 	DeleteGraceDays     int `env:"RETENTION_DELETE_GRACE_DAYS" envDefault:"30"`
 
-	// HTTP hardening. MaxRequestBytes caps every request body (0 disables the
-	// cap). RateLimit* configure the token-bucket throttle applied over the
-	// auth + write surface (RateLimitRPS <= 0 disables throttling).
+	// HTTP hardening. MaxRequestBytes caps request bodies (0 disables). RateLimit*
+	// is a token-bucket throttle over the auth+write surface (RPS <= 0 disables).
 	MaxRequestBytes int64   `env:"MAX_REQUEST_BYTES" envDefault:"1048576"`
 	RateLimitRPS    float64 `env:"RATE_LIMIT_RPS" envDefault:"20"`
 	RateLimitBurst  int     `env:"RATE_LIMIT_BURST" envDefault:"40"`
 
-	// Tenant-toggle defaults. The raw spec comes in via env; cmd/server can
-	// override via --opts before validation. ParseTenantDefaults turns the spec
-	// into the typed TenantDefaults applied at AutoMigrate and tenant-create time.
+	// Tenant-toggle defaults. Raw spec from env, overridable via --opts;
+	// ParseTenantDefaults yields the typed TenantDefaults applied at AutoMigrate
+	// and tenant-create time.
 	TenantDefaultsSpec string `env:"MEMORY_DEFAULT_OPTS"`
 	TenantDefaults     TenantDefaults
 
-	// authlet — OAuth 2.1 / OIDC authorization server for the /mcp endpoint.
-	// AuthletMasterKey is a 32-byte hex-encoded key used to encrypt the
-	// AS signing-key material at rest. GoogleClientID/Secret identify
-	// memory-mcp as an OAuth client to Google (the upstream IdP); these are
-	// distinct from any other deployment's Google client.
-	//
-	// When both Google client envs are set the operator has opted into the
-	// authlet path and authletas.Setup must succeed at boot — any error
-	// (including a malformed master key) is fatal. When the Google envs
-	// are unset, /mcp serves API-key auth only and authlet is skipped.
+	// authlet — OAuth 2.1 / OIDC AS for /mcp. AuthletMasterKey is a 32-byte hex
+	// key encrypting AS signing material at rest. GoogleClient* identify memory-mcp
+	// to Google (upstream IdP). Both Google envs set = opt into authlet: Setup must
+	// succeed at boot (any error fatal). Unset = /mcp is API-key-only, authlet skipped.
 	AuthletMasterKey   string `env:"AUTHLET_MASTER_KEY"`
 	GoogleClientID     string `env:"MEMORY_MCP_GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `env:"MEMORY_MCP_GOOGLE_CLIENT_SECRET"`
 
-	// UIClientID is the pre-registered public PKCE OAuth client the web UI
-	// uses (redirect_uri = PublicBaseURL + "/ui"). Non-secret; served to the page.
+	// UIClientID is the pre-registered public PKCE OAuth client the web UI uses
+	// (redirect_uri = PublicBaseURL + "/ui"). Non-secret; served to the page.
 	UIClientID string `env:"MEMORY_UI_CLIENT_ID"`
 
-	// PublicBaseURL is the external origin this server is reachable at
-	// (scheme + host, no path, no trailing slash) — e.g.
-	// "https://mem.example.org". It anchors the authlet issuer, audience,
-	// PRM, and upstream-callback URLs, and the web UI's OAuth config. It is
-	// REQUIRED when the authlet path is enabled (both Google client envs set)
-	// and must be an absolute http(s) URL; startup fails fast otherwise. The
-	// API-key-only path does not use it.
+	// PublicBaseURL is the external origin (scheme+host, no path/trailing slash),
+	// e.g. "https://mem.example.org". Anchors the authlet issuer/audience/PRM/
+	// callback URLs and the UI OAuth config. REQUIRED (absolute http(s)) when the
+	// authlet path is enabled; unused by the API-key-only path.
 	PublicBaseURL string `env:"PUBLIC_BASE_URL"`
 }
 
-// TenantDefaults is the operator-chosen baseline for the three per-tenant
-// feature toggles. Applied as the Postgres column DEFAULT after AutoMigrate
-// and as the zero-value fill in service.CreateTenant.
+// TenantDefaults is the operator baseline for the three per-tenant toggles,
+// applied as the Postgres column DEFAULT (AutoMigrate) and in service.CreateTenant.
 type TenantDefaults struct {
 	StalenessMode      string
 	DuplicateGuard     bool
@@ -121,14 +100,13 @@ type TenantDefaults struct {
 }
 
 // DefaultTenantDefaults returns the safe baseline: every toggle off.
-// A fresh deploy with no operator config picks this up.
 func DefaultTenantDefaults() TenantDefaults {
 	return TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
 }
 
-// ParseTenantDefaults turns "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
-// into a TenantDefaults. Empty input yields the safe baseline. Whitespace is
-// tolerated, values are case-insensitive. Unknown keys or invalid values fail.
+// ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
+// into a TenantDefaults. Empty = safe baseline; whitespace-tolerant, case-insensitive;
+// unknown keys or invalid values error.
 func ParseTenantDefaults(spec string) (TenantDefaults, error) {
 	out := DefaultTenantDefaults()
 	spec = strings.TrimSpace(spec)
@@ -173,8 +151,7 @@ func ParseTenantDefaults(spec string) (TenantDefaults, error) {
 	return out, nil
 }
 
-// parseBool accepts strconv.ParseBool inputs (true/false/1/0/etc) plus enforces
-// case-insensitivity via lower-casing upstream.
+// parseBool accepts strconv.ParseBool inputs (true/false/1/0); callers lower-case first.
 func parseBool(s string) (bool, error) {
 	return strconv.ParseBool(s)
 }
@@ -190,18 +167,15 @@ func Load() (*Config, error) {
 	}
 	cfg.TenantDefaults = td
 
-	// MEMORY_MCP_GOOGLE_CLIENT_ID and MEMORY_MCP_GOOGLE_CLIENT_SECRET are
-	// the OAuth opt-in signal. One without the other is a deployment bug:
-	// authlet's OIDC discovery against Google needs both to succeed.
+	// Both Google client envs are the OAuth opt-in signal; one without the other
+	// is a deployment bug (OIDC discovery needs both).
 	if (cfg.GoogleClientID == "") != (cfg.GoogleClientSecret == "") {
 		return nil, fmt.Errorf("MEMORY_MCP_GOOGLE_CLIENT_ID and MEMORY_MCP_GOOGLE_CLIENT_SECRET must be set together")
 	}
 
-	// PUBLIC_BASE_URL anchors every authlet URL and the UI OAuth config.
-	// Normalize away a trailing slash so derived URLs (base+"/mcp" etc.) are
-	// well-formed. It is mandatory when the authlet path is enabled — without
-	// it the issuer/redirect_uri would be empty and the OAuth flow silently
-	// broken (the old code hardcoded a single operator's host here).
+	// Normalize away a trailing slash so derived URLs (base+"/mcp") are well-formed.
+	// Mandatory when authlet is enabled — empty issuer/redirect_uri would silently
+	// break OAuth.
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
 	if cfg.AuthletEnabled() {
 		if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
@@ -209,8 +183,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Provider-specific required fields — fail fast at boot rather than at the
-	// first embed (openai would 400; aws construction errors either way).
+	// Provider-specific required fields — fail fast at boot, not at first embed.
 	switch cfg.EmbeddingProvider {
 	case "openai":
 		if cfg.OpenAIModel == "" {
@@ -222,8 +195,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Retention lower bounds — fail fast on values that would mass-delete
-	// live data instead of silently running a destructive sweep (audit #4).
+	// Retention lower bounds — reject values that would mass-delete live data (audit #4).
 	if cfg.RetentionMultiplier < 1 {
 		return nil, fmt.Errorf("RETENTION_MULTIPLIER must be >= 1, got %d", cfg.RetentionMultiplier)
 	}
@@ -242,17 +214,14 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// AuthletEnabled reports whether the operator has opted into the authlet
-// OAuth path by setting both Google client envs. When true, the caller must
-// require authletas.Setup to succeed (fail-fast on misconfig). When false,
-// the legacy API-key-only path is the intended mode.
+// AuthletEnabled reports whether both Google client envs are set (opt-in to the
+// authlet OAuth path). When true, callers must require authletas.Setup to succeed.
 func (c *Config) AuthletEnabled() bool {
 	return c.GoogleClientID != "" && c.GoogleClientSecret != ""
 }
 
-// validatePublicBaseURL enforces that PUBLIC_BASE_URL is an absolute http(s)
-// origin with a host and no path — the shape the authlet issuer/audience/PRM
-// derivations assume.
+// validatePublicBaseURL enforces an absolute http(s) origin with a host and no
+// path — the shape authlet issuer/audience/PRM derivations assume.
 func validatePublicBaseURL(raw string) error {
 	if raw == "" {
 		return fmt.Errorf("PUBLIC_BASE_URL is required when the authlet OAuth path is enabled (MEMORY_MCP_GOOGLE_CLIENT_ID/SECRET set)")
@@ -273,9 +242,8 @@ func validatePublicBaseURL(raw string) error {
 	return nil
 }
 
-// EmbeddingModel returns the model identifier for the active provider. Paired
-// with EmbeddingProvider it fingerprints the corpus's embedding identity for
-// the migration guard (audit #13/#16).
+// EmbeddingModel returns the active provider's model id. With EmbeddingProvider
+// it fingerprints the corpus's embedding identity for the migration guard (audit #13/#16).
 func (c *Config) EmbeddingModel() string {
 	switch c.EmbeddingProvider {
 	case "gcp":

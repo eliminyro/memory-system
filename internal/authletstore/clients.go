@@ -14,10 +14,9 @@ import (
 // clientStore implements storage.ClientStore against GORM.
 type clientStore struct{ db *gorm.DB }
 
-// Create persists c. SecretHash and TokenEndpointAuthMethod are stored as
-// top-level columns so confidential clients seeded directly by SQL can be
-// queried without unmarshalling metadata. An empty
-// TokenEndpointAuthMethod defaults to "none" (public, PKCE-only).
+// Create persists c. SecretHash and TokenEndpointAuthMethod go in top-level
+// columns so SQL-seeded confidential clients need no metadata unmarshalling.
+// Empty TokenEndpointAuthMethod defaults to "none" (public, PKCE-only).
 func (s *clientStore) Create(ctx context.Context, c storage.Client) error {
 	meta, _ := json.Marshal(c.Metadata)
 	method := c.TokenEndpointAuthMethod
@@ -67,8 +66,7 @@ func (s *clientStore) Get(ctx context.Context, id string) (*storage.Client, erro
 	}, nil
 }
 
-// Touch updates last_used_at to now. Returns storage.ErrNotFound when no
-// row matches the client_id.
+// Touch sets last_used_at to now, or storage.ErrNotFound if no row matches.
 func (s *clientStore) Touch(ctx context.Context, id string) error {
 	res := s.db.WithContext(ctx).Model(&OAuthClient{}).
 		Where("client_id = ?", id).
@@ -82,8 +80,7 @@ func (s *clientStore) Touch(ctx context.Context, id string) error {
 	return nil
 }
 
-// DeleteExpired removes clients whose last_used_at is older than olderThan.
-// Returns the number of rows deleted.
+// DeleteExpired removes clients with last_used_at older than olderThan; returns the count deleted.
 func (s *clientStore) DeleteExpired(ctx context.Context, olderThan time.Time) (int, error) {
 	res := s.db.WithContext(ctx).
 		Where("last_used_at < ?", olderThan).

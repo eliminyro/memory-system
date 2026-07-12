@@ -25,9 +25,8 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
 
-	// PostgreSQL is mandatory (audit #8.2): the near-duplicate self-joins,
-	// pgvector operators, and tsvector columns are Postgres-only, and the sqlite
-	// gorm driver (retained solely for unit tests that open sqlite directly)
+	// PostgreSQL is mandatory (audit #8.2): near-duplicate self-joins, pgvector,
+	// and tsvector are Postgres-only; the sqlite gorm driver (unit tests only)
 	// silently degrades them. Fail fast rather than serve a half-broken corpus.
 	if name := db.Name(); name != "postgres" {
 		return nil, fmt.Errorf("unsupported database dialect %q: memory-system requires PostgreSQL", name)
@@ -51,9 +50,8 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 }
 
 // TenantColumnDefaults are the operator-chosen DB-level defaults for the three
-// per-tenant feature toggles. Migrate applies them via ALTER COLUMN SET DEFAULT
-// after AutoMigrate, so any future raw INSERT into tenants picks up the
-// operator's deploy-time choice.
+// per-tenant toggles. Migrate applies them via ALTER COLUMN SET DEFAULT after
+// AutoMigrate, so raw INSERTs into tenants pick up the deploy-time choice.
 type TenantColumnDefaults struct {
 	StalenessMode      string
 	DuplicateGuard     bool
@@ -62,7 +60,6 @@ type TenantColumnDefaults struct {
 
 func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColumnDefaults) error {
 	// Check existing vector dimensions BEFORE AutoMigrate (which may reset atttypmod).
-	// If sections table exists with data, verify dimensions match.
 	var existingDim int
 	dimErr := db.Raw(`
 		SELECT vector_dims(embedding) FROM sections WHERE embedding IS NOT NULL LIMIT 1
@@ -72,9 +69,8 @@ func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColum
 		return fmt.Errorf("embedding dimension mismatch: existing vectors are %d-dim, config wants %d — re-embed all data to fix", existingDim, dimensions)
 	}
 
-	// All schema changes, backfills, and seed data in a single transaction so a
-	// crash mid-migration rolls back cleanly. Postgres supports DDL in
-	// transactions, so this covers CREATE / ALTER / UPDATE / INSERT uniformly.
+	// All DDL, backfills, and seeds in one transaction so a crash rolls back
+	// cleanly. Postgres allows DDL in transactions: CREATE/ALTER/UPDATE/INSERT.
 	return db.Transaction(func(tx *gorm.DB) error {
 		return migrateInTx(tx, provider, model, dimensions, corpusPopulated, td)
 	})
@@ -105,10 +101,9 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
 
-	// Embedding-identity guard (audit #13/#16): freeze the (provider, model,
-	// dimension) that produced the corpus and refuse a swap that would silently
-	// corrupt similarity/dedup/retention. Runs after AutoMigrate so the
-	// embedding_metadata table exists.
+	// Embedding-identity guard (audit #13/#16): freeze the (provider, model, dim)
+	// that built the corpus and refuse a swap that would corrupt
+	// similarity/dedup/retention. After AutoMigrate so the table exists.
 	if err := guardEmbeddingIdentity(tx, provider, model, dimensions, corpusPopulated); err != nil {
 		return err
 	}
@@ -146,9 +141,8 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		// Backfill verified_at for existing sections — treat first-time as verified at creation.
 		// Only sets NULL values, so re-runs are no-ops.
 		`UPDATE sections SET verified_at = created_at WHERE verified_at IS NULL`,
-		// Backfill doc_type based on category/subcategory patterns for legacy docs.
-		// Order matters: most specific first. Uses WHERE doc_type = 'reference' so re-runs
-		// preserve any explicit classifications set after migration.
+		// Backfill doc_type from category/subcategory for legacy docs. Most specific
+		// first; WHERE doc_type = 'reference' so re-runs preserve explicit classifications.
 		`UPDATE documents SET doc_type = 'project_state' WHERE doc_type = 'reference' AND category = 'projects' AND slug = 'state'`,
 		`UPDATE documents SET doc_type = 'audit' WHERE doc_type = 'reference' AND category = 'projects' AND (slug LIKE '%audit%' OR slug LIKE '%plan%' OR slug LIKE '%design%' OR slug LIKE '%backlog%')`,
 		`UPDATE documents SET doc_type = 'learning' WHERE doc_type = 'reference' AND category = 'learnings'`,
@@ -162,9 +156,9 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		}
 	}
 
-	// Apply operator-chosen DB-level defaults for the three tenant toggles.
-	// Values are pre-validated by config.ParseTenantDefaults to a fixed enum,
-	// so direct interpolation is safe (Postgres DDL doesn't accept bind params).
+	// Apply operator-chosen DB defaults for the three tenant toggles. Values are
+	// pre-validated by config.ParseTenantDefaults, so interpolation is safe (DDL
+	// rejects bind params).
 	tenantDefaultMigrations := []string{
 		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN staleness_mode SET DEFAULT '%s'`, td.StalenessMode),
 		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN duplicate_guard SET DEFAULT %t`, td.DuplicateGuard),
@@ -187,10 +181,9 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		}
 	}
 
-	// Backfill authorization relation tuples from existing domain rows. Runs in
-	// the same transaction (writes go through the tx-backed store) and is
-	// idempotent, so it is safe on every migrate. Pass 1: tuples are populated
-	// but do not yet drive any authorization decision.
+	// Backfill authz relation tuples from existing domain rows. Same transaction,
+	// idempotent, safe on every migrate. Pass 1: tuples populated but not yet
+	// driving any authorization decision.
 	if err := authzseed.Backfill(context.Background(), authz.NewPostgresStore(tx), tx); err != nil {
 		return fmt.Errorf("authz backfill: %w", err)
 	}
@@ -198,17 +191,12 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	return nil
 }
 
-// guardEmbeddingIdentity enforces that the embedding (provider, model,
-// dimension) of a populated corpus never changes silently (audit #13/#16).
-//
-//   - Empty corpus OR no metadata row yet (fresh install, or the first deploy
-//     of this guard against an existing corpus): adopt the current identity and
-//     proceed. Nothing is corrupted by recording it.
-//   - Populated corpus with a recorded identity: a differing provider OR model
-//     is refused — even at the same dimension — because cosine similarity, the
-//     duplicate guard, and retention scoring are only comparable within one
-//     embedding space. The dimension itself is already validated by the
-//     pre-transaction guard in Migrate.
+// guardEmbeddingIdentity enforces that a populated corpus's embedding (provider,
+// model, dimension) never changes silently (audit #13/#16).
+//   - Empty corpus or no metadata row: adopt the current identity and proceed.
+//   - Populated + recorded: refuse a differing provider OR model even at the same
+//     dimension — cosine similarity, dedup, and retention are only comparable
+//     within one embedding space. Dimension is validated earlier in Migrate.
 func guardEmbeddingIdentity(tx *gorm.DB, provider, model string, dimensions int, corpusPopulated bool) error {
 	var meta models.EmbeddingMetadata
 	err := tx.Where("id = ?", models.EmbeddingMetadataSingletonID).First(&meta).Error
@@ -241,8 +229,7 @@ func guardEmbeddingIdentity(tx *gorm.DB, provider, model string, dimensions int,
 		)
 	}
 
-	// Same provider+model. Keep the recorded dimension in sync (the value is
-	// already validated by the pre-transaction dimension guard).
+	// Same provider+model: sync the recorded dimension (already validated upstream).
 	if meta.Dimensions != dimensions {
 		if err := tx.Model(&models.EmbeddingMetadata{}).
 			Where("id = ?", models.EmbeddingMetadataSingletonID).

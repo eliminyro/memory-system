@@ -6,10 +6,9 @@ import (
 	"testing"
 )
 
-// TestNewEmbeddingProvider_TypeMapping asserts each provider name maps to the
-// right concrete type and that an unknown provider is rejected. Providers whose
-// construction needs ambient cloud credentials (gcp, aws) are covered by their
-// own tests / the error path below rather than constructed here.
+// TestNewEmbeddingProvider_TypeMapping asserts each provider name maps to the right
+// concrete type. Providers needing ambient cloud credentials (gcp, aws) are covered
+// by their own tests, not constructed here.
 func TestNewEmbeddingProvider_TypeMapping(t *testing.T) {
 	cfg := EmbeddingConfig{
 		Dimensions:    8,

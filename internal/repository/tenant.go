@@ -50,7 +50,7 @@ func (r *TenantRepository) Update(ctx context.Context, tenant *models.Tenant) er
 // Delete removes a tenant and cascades to API keys and documents (with their sections).
 func (r *TenantRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Delete sections belonging to tenant's documents
+		// Delete sections of the tenant's documents (raw subquery).
 		if err := tx.Exec(`
 			DELETE FROM sections WHERE document_id IN (
 				SELECT id FROM documents WHERE tenant_id = ?
@@ -59,17 +59,14 @@ func (r *TenantRepository) Delete(ctx context.Context, id uuid.UUID) error {
 			return fmt.Errorf("delete tenant sections: %w", err)
 		}
 
-		// Delete tenant's documents
 		if err := tx.Where("tenant_id = ?", id).Delete(&models.Document{}).Error; err != nil {
 			return fmt.Errorf("delete tenant documents: %w", err)
 		}
 
-		// Delete tenant's API keys
 		if err := tx.Where("tenant_id = ?", id).Delete(&models.APIKey{}).Error; err != nil {
 			return fmt.Errorf("delete tenant api keys: %w", err)
 		}
 
-		// Delete tenant
 		result := tx.Delete(&models.Tenant{}, id)
 		if result.Error != nil {
 			return fmt.Errorf("delete tenant: %w", result.Error)

@@ -17,9 +17,8 @@ import (
 	"github.com/eliminyro/memory-system/internal/repository"
 )
 
-// retDim matches the dimension the other Postgres integration tests migrate
-// with, so a shared test database migrated by one suite doesn't trip the
-// dimension guard in another.
+// retDim matches the dimension the other Postgres integration tests migrate with,
+// so a shared test DB migrated by one suite doesn't trip another's dimension guard.
 const retDim = 768
 
 func openRetentionPG(t *testing.T) *gorm.DB {
@@ -70,9 +69,8 @@ func retDoc(t *testing.T, db *gorm.DB, tenantID uuid.UUID, docType, slug string,
 	return doc.ID
 }
 
-// retSection inserts a section under docID and force-stamps its timestamps via
-// raw SQL (gorm auto-fills created_at/updated_at on insert, so we overwrite
-// them afterwards to get deterministic "freshest section" values).
+// retSection inserts a section under docID and force-stamps its timestamps via raw
+// SQL (gorm auto-fills created/updated on insert) for deterministic freshness values.
 func retSection(t *testing.T, db *gorm.DB, docID uuid.UUID, created, updated time.Time, verified *time.Time) {
 	t.Helper()
 	sec := models.Section{
@@ -112,9 +110,8 @@ func docArchived(t *testing.T, db *gorm.DB, id uuid.UUID) bool {
 }
 
 // TestRetentionDeleteArchived proves DeleteArchived hard-deletes only the target
-// tenant's documents whose archived_at is past the grace cutoff, writes exactly
-// one audit row per victim, purges cleanup_queue rows referencing a victim, and
-// leaves within-grace docs, unarchived docs, and other tenants untouched.
+// tenant's docs past the grace cutoff, writes one audit row per victim, purges
+// cleanup_queue rows referencing a victim, and leaves within-grace/live/other tenants untouched.
 func TestRetentionDeleteArchived(t *testing.T) {
 	db := openRetentionPG(t)
 	ctx := context.Background()
@@ -202,11 +199,10 @@ func TestRetentionDeleteArchived(t *testing.T) {
 	}
 }
 
-// TestRetentionArchiveExpired proves ArchiveExpired sets archived_at only on the
-// target tenant's documents whose freshest section is older than the per-doc_type
-// cutoff, leaves recently-touched docs alive (an edit bumping updated_at keeps a
-// doc alive, not just mark_verified), and ignores doc_types absent from the
-// cutoff map and other tenants.
+// TestRetentionArchiveExpired proves ArchiveExpired archives only the target tenant's
+// docs whose freshest section predates the per-doc_type cutoff, keeps recently-touched
+// docs alive (an edit bumping updated_at counts, not just mark_verified), and ignores
+// absent doc_types and other tenants.
 func TestRetentionArchiveExpired(t *testing.T) {
 	db := openRetentionPG(t)
 	ctx := context.Background()

@@ -6,9 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestNormalizePair — Upsert relies on NormalizePair to ensure that (a,b) and
-// (b,a) map to the same row. If this breaks, the cleanup queue grows two rows
-// per pair and the nightly scanner never dedups.
+// TestNormalizePair — Upsert relies on NormalizePair so (a,b) and (b,a) map to the
+// same row. If it breaks, the queue grows two rows per pair and never dedups.
 func TestNormalizePair(t *testing.T) {
 	a := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	b := uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff")
@@ -27,9 +26,8 @@ func TestNormalizePair(t *testing.T) {
 	}
 }
 
-// TestNormalizePair_Equal — defensive: if both UUIDs are equal (should never
-// happen in practice), NormalizePair returns them unchanged rather than
-// panicking.
+// TestNormalizePair_Equal — defensive: equal UUIDs (never in practice) are
+// returned unchanged rather than panicking.
 func TestNormalizePair_Equal(t *testing.T) {
 	a := uuid.New()
 	lo, hi := NormalizePair(a, a)

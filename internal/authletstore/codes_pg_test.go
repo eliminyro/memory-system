@@ -12,16 +12,10 @@ import (
 	"github.com/eliminyro/authlet/pkg/storage"
 )
 
-// TestCodeStore_ConsumeOnceAtomic_Postgres redeems the same authorization
-// code from many goroutines at once against a real Postgres backend. An
-// auth code must yield exactly one token grant: exactly one ConsumeOnce may
-// succeed, every other caller must see storage.ErrNotFound. The non-atomic
-// check-then-act version (read row, then unconditional Delete) lets two
-// concurrent transactions both read the row before either deletes, so both
-// return a valid *storage.AuthCode -> the code is redeemed twice.
-//
-// This race cannot be reproduced on the sqlite harness (single connection
-// serializes transactions); it requires Postgres READ COMMITTED.
+// TestCodeStore_ConsumeOnceAtomic_Postgres redeems one auth code from many
+// goroutines against real Postgres: exactly one ConsumeOnce may win, the rest
+// see storage.ErrNotFound. Non-atomic read-then-Delete would let two txns both
+// read and redeem twice. Needs Postgres READ COMMITTED (sqlite serializes txns).
 func TestCodeStore_ConsumeOnceAtomic_Postgres(t *testing.T) {
 	db := openTestPG(t)
 	s := New(db)

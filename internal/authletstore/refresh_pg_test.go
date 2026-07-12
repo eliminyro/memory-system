@@ -12,17 +12,11 @@ import (
 	"github.com/eliminyro/authlet/pkg/storage"
 )
 
-// TestRefreshStore_MarkUsedAtomic_Postgres rotates the same refresh token
-// from many goroutines at once against a real Postgres backend. Rotation
-// must transition the token from active to replaced exactly once: exactly
-// one MarkUsed may succeed, every other caller must see
-// storage.ErrAlreadyConsumed so the caller triggers the reuse-detection
-// revoke path. The non-atomic check-then-act version (read row, check
-// ReplacedBy=="" in Go, then Update) lets two concurrent transactions both
-// pass the check before either writes, so reuse escapes detection.
-//
-// This race cannot be reproduced on the sqlite harness (single connection
-// serializes transactions); it requires Postgres READ COMMITTED.
+// TestRefreshStore_MarkUsedAtomic_Postgres rotates one refresh token from many
+// goroutines against real Postgres: exactly one MarkUsed may win, the rest must
+// see storage.ErrAlreadyConsumed (triggering reuse-detection revoke). Non-atomic
+// read-check-Update would let two txns both pass the check, so reuse escapes
+// detection. Needs Postgres READ COMMITTED (sqlite serializes txns).
 func TestRefreshStore_MarkUsedAtomic_Postgres(t *testing.T) {
 	db := openTestPG(t)
 	s := New(db)

@@ -13,11 +13,8 @@ import (
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 )
 
-// The behavioral counterparts to the former nil-panic "wiring check" tests
-// (TestAPIGetIndex_RequiresServiceCall / TestAPIListDocuments_RequiresServiceCall)
-// now live in api_integration_test.go: they inject a real MemoryService and
-// assert each handler forwards the context tenant + query params and marshals
-// the returned data.
+// Behavioral counterparts (handlers forwarding context tenant + params, marshaling
+// results) live in api_integration_test.go with a real MemoryService.
 
 func TestAPISearch_RequiresQuery(t *testing.T) {
 	h := &apiHandler{}
@@ -61,8 +58,7 @@ func TestWriteErr_Mapping(t *testing.T) {
 	}
 }
 
-// An unmapped (internal) error must not leak its string to the client; the
-// body is a fixed generic message.
+// An unmapped (internal) error must not leak its string; the body is generic.
 func TestWriteErr_UnmappedDoesNotLeak(t *testing.T) {
 	secret := "pq: password authentication failed for user \"memory\""
 	rec := httptest.NewRecorder()
@@ -107,8 +103,7 @@ func TestUIConfigServed(t *testing.T) {
 	if body["client_id"] != "test-client-123" {
 		t.Errorf("client_id = %q", body["client_id"])
 	}
-	// OAuth config must be derived from the configured base URL, never
-	// hardcoded — this is the deployment-portability guarantee.
+	// OAuth config derived from base URL, never hardcoded — the portability guarantee.
 	if body["issuer"] != base {
 		t.Errorf("issuer = %q, want %q", body["issuer"], base)
 	}

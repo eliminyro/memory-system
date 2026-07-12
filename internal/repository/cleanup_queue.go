@@ -52,10 +52,8 @@ func (r *CleanupQueueRepository) ListAll(ctx context.Context, tenantID uuid.UUID
 	return rows, nil
 }
 
-// NormalizePair returns (lo, hi) such that lo.String() <= hi.String(). Exposed
-// so callers and tests can reason about the invariant that cleanup_queue rows
-// always store the smaller UUID in doc_a_id and the larger in doc_b_id,
-// preventing two rows for the same unordered pair.
+// NormalizePair returns (lo, hi) with lo.String() <= hi.String(), so cleanup_queue
+// always stores the smaller UUID in doc_a_id — preventing two rows per unordered pair.
 func NormalizePair(a, b uuid.UUID) (uuid.UUID, uuid.UUID) {
 	if b.String() < a.String() {
 		return b, a
@@ -63,9 +61,8 @@ func NormalizePair(a, b uuid.UUID) (uuid.UUID, uuid.UUID) {
 	return a, b
 }
 
-// Upsert inserts a new queue entry for a (tenant, doc_a, doc_b) pair only if
-// there isn't already an unresolved row for the same unordered pair. Returns
-// true if a row was inserted, false if a matching pending entry already exists.
+// Upsert inserts a queue entry for the (tenant, doc_a, doc_b) pair only if no
+// unresolved row exists for the same unordered pair. Returns true if inserted.
 func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.CleanupQueue) (bool, error) {
 	lo, hi := NormalizePair(entry.DocAID, entry.DocBID)
 	entry.DocAID, entry.DocBID = lo, hi
@@ -89,10 +86,9 @@ func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.Clean
 		return false, fmt.Errorf("check existing: %w", err)
 	}
 
-	// Suppress re-enqueue when the operator already dismissed this pair as a
-	// false positive or chose to ignore it (audit #19). Without this, every
-	// nightly scan re-adds a pair the operator explicitly rejected. A "merged"
-	// resolution is not suppressed — that pair can't re-form once one doc is gone.
+	// Suppress re-enqueue of a pair the operator already dismissed as false_positive
+	// or ignored (audit #19) — else every nightly scan re-adds it. "merged" isn't
+	// suppressed: that pair can't re-form once one doc is gone.
 	var dismissed int64
 	if err := r.db.WithContext(ctx).
 		Model(&models.CleanupQueue{}).
@@ -112,9 +108,8 @@ func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.Clean
 	return true, nil
 }
 
-// GetByID returns a single queue entry addressed by id, scoped to the caller's
-// accessible tenants (own tenant + common pool). Returns ErrNotFound when the
-// entry does not exist in scope. Used by the service to resolve the entry's
+// GetByID returns a queue entry by id, scoped to the caller's tenants (own +
+// common pool). ErrNotFound when out of scope. Used to resolve the entry's
 // referenced document before an authorization Check.
 func (r *CleanupQueueRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*models.CleanupQueue, error) {
 	var row models.CleanupQueue

@@ -20,10 +20,8 @@ import (
 	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
-// logOverride attempts to persist an audit row. If the write fails, it logs a
-// warning and continues — the user's primary operation already succeeded, and
-// dropping an audit row beats failing their request. The warning makes the
-// drop visible so operators can alert on it.
+// logOverride best-effort writes an audit row; on failure it warns and continues
+// (the primary op already succeeded — dropping an audit row beats failing it).
 func (s *MemoryService) logOverride(ctx context.Context, ev repository.OverrideEvent) {
 	if s.overrides == nil {
 		return
@@ -48,22 +46,17 @@ type MemoryService struct {
 	thresholds *staleness.ThresholdStore
 	overrides  *repository.OverrideLogRepository
 	cleanup    *repository.CleanupQueueRepository
-	// authz is the relationship-tuple store. Lifecycle operations seed tuples
-	// into it out-of-band. Nil disables seeding (e.g. tests that don't
-	// exercise tuples).
+	// authz is the relationship-tuple store; lifecycle ops seed it out-of-band.
+	// Nil disables seeding.
 	authz authz.Store
-	// authzEngine evaluates authorization decisions over the tuple store: it is
-	// now the single authoritative gate for admin, tenant_id override, and
-	// cross-tenant/common-pool point access. Nil (when authzStore is nil) makes
-	// every Check fail closed.
+	// authzEngine is the single authoritative gate for admin, tenant_id override,
+	// and cross-tenant/common-pool access. Nil (no authzStore) fails every Check closed.
 	authzEngine *authz.Engine
 }
 
-// NewMemoryService constructs the service. Optional deps (tenants, keys, lint,
-// thresholds, overrides, authzStore) may be nil when the service is used
-// outside the MCP server (e.g. the import CLI) — nil deps disable the features
-// that need them. A nil authzStore disables tuple seeding AND makes every
-// authorization Check fail closed.
+// NewMemoryService constructs the service. Optional deps may be nil outside the
+// MCP server (e.g. import CLI), disabling their features; a nil authzStore also
+// disables tuple seeding and fails every authorization Check closed.
 func NewMemoryService(
 	db *gorm.DB,
 	docs *repository.DocumentRepository,
@@ -97,10 +90,8 @@ func NewMemoryService(
 	}
 }
 
-// seedTuple writes a relation tuple out-of-band for a lifecycle event. Writes
-// are idempotent. A nil store or a write error is non-fatal: the user's
-// primary operation already succeeded, and in Pass 1 no decision depends on the
-// tuple. The warning makes a drop visible so operators can alert on it.
+// seedTuple idempotently writes a relation tuple for a lifecycle event. Nil-safe
+// and best-effort: the primary op is source of truth; a write miss is logged.
 func (s *MemoryService) seedTuple(ctx context.Context, t authz.Tuple) {
 	if s.authz == nil {
 		return
@@ -117,9 +108,8 @@ func (s *MemoryService) seedTuple(ctx context.Context, t authz.Tuple) {
 	}
 }
 
-// unseedTuple removes a relation tuple for a lifecycle event (user revoke, role
-// downgrade). Like seedTuple it is nil-safe and best-effort: the primary DB
-// operation is the source of truth; a delete miss is logged, not fatal.
+// unseedTuple removes a relation tuple for a lifecycle event (revoke, downgrade).
+// Nil-safe and best-effort like seedTuple; a delete miss is logged, not fatal.
 func (s *MemoryService) unseedTuple(ctx context.Context, t authz.Tuple) {
 	if s.authz == nil {
 		return
@@ -136,11 +126,9 @@ func (s *MemoryService) unseedTuple(ctx context.Context, t authz.Tuple) {
 	}
 }
 
-// authorize reports whether the request's subject holds relation on
-// objType:objID, per the tuple Check evaluator. It fails closed on every
-// uncertainty: a nil engine (unwired), a subjectless request, or a Check error
-// all deny. This is the single choke point every authorization decision in the
-// service flows through.
+// authorize reports whether the request's subject holds relation on objType:objID.
+// The single authorization choke point; fails closed on any uncertainty (nil
+// engine, subjectless request, or Check error all deny).
 func (s *MemoryService) authorize(ctx context.Context, objType, objID, relation string) bool {
 	if s.authzEngine == nil {
 		return false
@@ -164,8 +152,7 @@ func (s *MemoryService) authorize(ctx context.Context, objType, objID, relation 
 }
 
 // resolveTenant resolves the effective tenant ID. A tenant_id override is
-// admin-gated: only a global admin (system:memory#admin) may target another
-// tenant.
+// admin-gated (only system:memory#admin may target another tenant).
 func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID) (uuid.UUID, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
@@ -183,28 +170,22 @@ func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID
 	return *overrideID, nil
 }
 
-// isAdmin reports whether the request's subject is a global admin
-// (system:memory#admin), resolved through the tuple Check — the mutable
-// tenant.Email column has no bearing on this decision.
-// IsAdmin exposes the internal admin gate for the admin HTTP middleware, which
-// must answer 403-vs-proceed before dispatching (the service methods re-check,
-// so this is not the sole enforcement point).
+// IsAdmin exposes the admin gate for the admin HTTP middleware (which decides
+// 403-vs-proceed before dispatch; service methods re-check, so not the sole
+// enforcement point). Admin = system:memory#admin via tuple Check, not tenant.Email.
 func (s *MemoryService) IsAdmin(ctx context.Context) bool { return s.isAdmin(ctx) }
 
 func (s *MemoryService) isAdmin(ctx context.Context) bool {
-	// The offline memory-admin CLI is inherently privileged (direct DB access)
-	// and carries no authenticated subject; it marks its context local-admin so
-	// it can reuse these lifecycle methods. Network paths never set this.
+	// The offline memory-admin CLI (direct DB, no authenticated subject) marks its
+	// context local-admin to reuse these lifecycle methods. Network paths never set it.
 	if auth.IsLocalAdmin(ctx) {
 		return true
 	}
 	return s.authorize(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin)
 }
 
-// tenantSettings loads the per-tenant feature toggles. When the tenants repo
-// is not wired (e.g. import CLI) it returns safe defaults: staleness off,
-// duplicate guard off. The common/bootstrap pool is treated as the fetching
-// tenant's own, so settings are always the requester's.
+// tenantSettings holds per-tenant feature toggles. When the tenants repo is
+// unwired (e.g. import CLI), safe defaults apply: staleness off, guard off.
 type tenantSettings struct {
 	StalenessMode  string
 	DuplicateGuard bool
@@ -216,15 +197,12 @@ func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenan
 	}
 	t, err := s.tenants.GetByID(ctx, tid)
 	if err != nil {
-		// Fail safe: if we can't read tenant config, act as if staleness is off
-		// so we never accidentally refuse content due to an infra glitch.
+		// Fail safe: unreadable config -> staleness off; never refuse content on a glitch.
 		return tenantSettings{StalenessMode: models.StalenessModeOff}
 	}
 	mode := t.StalenessMode
 	if _, ok := models.ValidStalenessModes[mode]; !ok {
-		// Fail safe: an unrecognised value (data corruption, bad migration) flips
-		// to "off" rather than "advisory" — same rationale as the surrounding
-		// branches: never refuse content because of an infra glitch.
+		// Fail safe: unrecognised value -> "off" (not "advisory"); never refuse content.
 		mode = models.StalenessModeOff
 	}
 	return tenantSettings{StalenessMode: mode, DuplicateGuard: t.DuplicateGuard}
@@ -273,9 +251,8 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	return results, nil
 }
 
-// GetDocument fetches a document with all sections by path, applying staleness
-// filter to each section. forceRead + reason override the filter and log to
-// override_log.
+// GetDocument fetches a document with all sections by path, applying the
+// staleness filter. forceRead + reason override it and audit to override_log.
 func (s *MemoryService) GetDocument(ctx context.Context, category string, subcategory *string, slug string, forceRead bool, reason string, overrideID *uuid.UUID) (*DocumentView, error) {
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
@@ -306,12 +283,9 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	return &view, nil
 }
 
-// GetDocumentByID fetches a document by its UUID. Mirrors GetDocument's
-// behaviour (staleness filter + force_read audit) but addresses by ID
-// instead of path. Needed when a caller has a document UUID (e.g. a row
-// from cleanup_queue referencing doc_a_id / doc_b_id) and must access the
-// shadow doc at a path where another doc also lives — path-keyed
-// GetDocument can only return one of them.
+// GetDocumentByID mirrors GetDocument (staleness filter + force_read audit) but
+// addresses by UUID. Needed to reach a shadow doc that shares a path with another
+// (e.g. cleanup_queue doc_a_id/doc_b_id), which path-keyed GetDocument can't disambiguate.
 func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, forceRead bool, reason string, overrideID *uuid.UUID) (*DocumentView, error) {
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
@@ -342,10 +316,9 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	return &view, nil
 }
 
-// MarkVerified stamps verified_at = NOW() on a section. Agents call this after
-// confirming a claim against current source. Routed through an editor Check on
-// the section's parent document (finding #8): without it, any caller could
-// stamp verified_at on a shared common-pool section it has no write right to.
+// MarkVerified stamps verified_at=NOW() on a section (after an agent confirms a
+// claim). Editor Check on the parent doc (finding #8): else any caller could
+// verify a shared common-pool section it has no write right to.
 func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, overrideID *uuid.UUID) error {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
@@ -361,9 +334,8 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	return s.sections.MarkVerified(ctx, tid, sectionID)
 }
 
-// StoreResult is the outcome of StoreDocument. When Status is "similar_exists"
-// the candidates list describes existing docs that collided; Document is nil
-// and the save did not happen. On success Status is "ok".
+// StoreResult is the outcome of StoreDocument. Status "similar_exists" means the
+// save was skipped and Candidates lists the colliders (Document nil); "ok" on success.
 type StoreResult struct {
 	Status     string                           `json:"status"`
 	Document   *models.Document                 `json:"document,omitempty"`
@@ -372,11 +344,9 @@ type StoreResult struct {
 	Candidates []repository.SimilarityCandidate `json:"candidates,omitempty"`
 }
 
-// StoreDocument parses markdown content into sections, embeds them, runs a
-// duplicate-guard check against existing docs in the same tenant, and stores.
-// Embeddings are generated before any DB mutations to avoid partial state on
-// failure. When the guard trips and force is false, no write happens and the
-// result carries candidates instead.
+// StoreDocument parses markdown into sections, embeds them (before any DB write,
+// to avoid partial state), runs the duplicate guard, and stores. When the guard
+// trips and force is false, no write happens and the result carries candidates.
 func (s *MemoryService) StoreDocument(
 	ctx context.Context,
 	category string, subcategory *string, slug, content string,
@@ -396,7 +366,7 @@ func (s *MemoryService) StoreDocument(
 		title = slug
 	}
 
-	// Generate all embeddings BEFORE touching the database
+	// Embed everything before touching the DB (no partial state on failure)
 	sectionModels := make([]models.Section, len(sections))
 	embeddings := make([]pgvector.Vector, len(sections))
 	for i, sec := range sections {
@@ -413,9 +383,8 @@ func (s *MemoryService) StoreDocument(
 		}
 	}
 
-	// Duplicate-guard: compare new section embeddings against existing docs
-	// in the same tenant (excluding the target path so re-saves of the same
-	// doc never trip the guard). Only runs when enabled per-tenant AND not forcing.
+	// Duplicate guard: compare new embeddings against same-tenant docs, excluding
+	// the target path so re-saves don't trip. Only when enabled per-tenant and not forcing.
 	settings := s.tenantSettings(ctx, tid)
 	if settings.DuplicateGuard && !force && len(embeddings) > 0 {
 		candidates, err := s.sections.FindSimilarDocuments(
@@ -449,9 +418,8 @@ func (s *MemoryService) StoreDocument(
 		// Check for existing document (only in this tenant, not common pool)
 		existing, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
 		if err == nil && existing.TenantID == tid {
-			// Update existing: delete sections first, then update document.
-			// Preserve the existing doc_type — admin may have changed it from
-			// the inferred default, and an update shouldn't silently revert.
+			// Update existing: delete sections first, then the doc. Preserve doc_type —
+			// admin may have overridden the inferred default; don't silently revert.
 			doc.ID = existing.ID
 			doc.CreatedAt = existing.CreatedAt
 			doc.DocType = existing.DocType
@@ -468,7 +436,7 @@ func (s *MemoryService) StoreDocument(
 			}
 		}
 
-		// Set document ID on all sections and batch insert
+		// Batch insert sections under the doc ID
 		for i := range sectionModels {
 			sectionModels[i].DocumentID = doc.ID
 		}
@@ -506,10 +474,8 @@ func (s *MemoryService) StoreDocument(
 	}, nil
 }
 
-// UpdateSection partially updates a section: re-embeds and sets content when
-// content != nil; sets the heading when heading != nil (blank/whitespace ->
-// NULL). At least one of content/heading should be non-nil; both nil is a
-// no-op that returns the section unchanged.
+// UpdateSection partially updates a section: content!=nil re-embeds and sets
+// content; heading!=nil sets heading (blank -> NULL). Both nil is a no-op.
 func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content *string, heading *string, overrideID *uuid.UUID) (*models.Section, error) {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
@@ -650,10 +616,9 @@ func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*
 	return tenant, nil
 }
 
-// GrantTenantUser maps a verified email to a tenant with a role, creating the
-// tenant_users row and seeding its membership tuples (+ admin when role ==
-// admin). Admin-gated, matching the other tenant-lifecycle operations. This is
-// the lifecycle seam for user grants; no in-band tool writes tuples.
+// GrantTenantUser maps a verified email to a tenant+role, creating the
+// tenant_users row and seeding membership tuples (+ admin when role==admin).
+// Admin-gated; the lifecycle seam for user grants (no in-band tool writes tuples).
 func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenantID uuid.UUID, role string) (*models.TenantUser, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
@@ -693,10 +658,9 @@ func (s *MemoryService) ListTenantUsers(ctx context.Context, tenantID uuid.UUID)
 	return users, nil
 }
 
-// UpdateTenantUserRole changes a user's role and syncs the admin tuple: granting
-// admin writes tenant:<T>#admin; downgrading to member deletes it (the member
-// tuple is untouched — admin is a superset). Admin-gated. Email is the key
-// (globally unique).
+// UpdateTenantUserRole changes a role and syncs the admin tuple: grant writes
+// tenant:<T>#admin, downgrade deletes it (member tuple untouched — admin is a
+// superset). Admin-gated; email is the unique key.
 func (s *MemoryService) UpdateTenantUserRole(ctx context.Context, email, role string) (*models.TenantUser, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
@@ -762,19 +726,16 @@ func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields U
 	return s.applyTenantPatch(ctx, id, fields)
 }
 
-// UpdateMyTenantSettings lets any authenticated caller adjust the feature
-// toggles on their own tenant (staleness mode, duplicate guard, cleanup scan).
-// Name/email stay off limits to non-admins. Every call is audited to
-// override_log so a compromised API key silencing enforcement leaves a trail.
+// UpdateMyTenantSettings lets any authenticated caller adjust their own tenant's
+// toggles (staleness, duplicate guard, cleanup scan); name/email stay admin-only.
+// Every call is audited to override_log (compromised-key trail).
 func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
 		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
 	}
-	// Treat a call with no fields as a status read: return the current row
-	// without touching the DB or the audit log. Callers (including UI / CLI
-	// probes) use this shape to inspect current settings without leaving a
-	// "noop" override_log entry or bumping updated_at.
+	// No fields = status read: return the current row without touching the DB or
+	// audit log (avoids a "noop" override_log entry and an updated_at bump).
 	if stalenessMode == nil && duplicateGuard == nil && cleanupScanEnabled == nil {
 		return s.tenants.GetByID(ctx, tid)
 	}
@@ -797,8 +758,7 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 	return tenant, nil
 }
 
-// formatSettingsChange renders the requested patch as a compact string for
-// the override_log.reason column.
+// formatSettingsChange renders the patch as a compact override_log.reason string.
 func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) string {
 	parts := make([]string, 0, 3)
 	if stalenessMode != nil {
@@ -855,11 +815,9 @@ func (s *MemoryService) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 	return s.tenants.Delete(ctx, id)
 }
 
-// CreateAPIKey mints a key for a tenant. subjectID pins the key to a specific
-// unified authorization subject; nil/empty makes it the tenant service
-// principal ("svc:<tenant_id>"). Either way the key's subject is granted
-// membership on the tenant (idempotent — svc membership is already seeded at
-// tenant create).
+// CreateAPIKey mints a key for a tenant. subjectID pins the key to an authorization
+// subject; nil/empty defaults to the tenant service principal ("svc:<tenant_id>").
+// The subject is granted tenant membership (idempotent).
 func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string, subjectID *string, expiresAt *time.Time) (string, *models.APIKey, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return "", nil, err
@@ -890,10 +848,9 @@ func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, la
 	return plaintext, key, nil
 }
 
-// RotateAPIKey issues a replacement key for the same tenant/label/subject as an
-// existing key and retires the predecessor. With grace == 0 the old key is
-// revoked immediately; with grace > 0 the old key's expiry is set to now+grace
-// so a client can swap without downtime. Returns the new plaintext exactly once.
+// RotateAPIKey issues a replacement for an existing key's tenant/label/subject and
+// retires the predecessor: grace==0 revokes it now, grace>0 sets expiry to now+grace
+// for a zero-downtime swap. Returns the new plaintext exactly once.
 func (s *MemoryService) RotateAPIKey(ctx context.Context, keyID uuid.UUID, grace time.Duration) (string, *models.APIKey, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return "", nil, err
@@ -940,12 +897,10 @@ func (s *MemoryService) GenerateIndex(ctx context.Context, depth string, categor
 	return s.docs.GenerateIndex(ctx, tid, repository.IndexDepth(depth), category)
 }
 
-// GetRelated returns documents semantically related to the target. Routed
-// through a viewer Check on the caller-supplied target document (finding #9,
-// IDOR): without it, a caller could probe another tenant's documents for
-// related content. Read-level (viewer) is deliberate — it still denies
-// cross-tenant private targets but allows relating over world-readable
-// common-pool documents.
+// GetRelated returns documents semantically related to the target. Viewer Check
+// on the caller-supplied target (finding #9, IDOR) blocks probing another tenant's
+// docs; viewer-level is deliberate — denies private cross-tenant targets but
+// allows relating over world-readable common-pool docs.
 func (s *MemoryService) GetRelated(ctx context.Context, documentID uuid.UUID, limit int, overrideID *uuid.UUID) ([]repository.RelatedResult, error) {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
@@ -1007,8 +962,8 @@ type parsedSection struct {
 	content string
 }
 
-// parseMarkdown splits markdown by ## headings into sections.
-// Returns the title (from # heading) and sections.
+// parseMarkdown splits markdown by ## headings into sections, returning the
+// title (from the # heading) and the sections.
 func parseMarkdown(content string) (string, []parsedSection) {
 	lines := strings.Split(content, "\n")
 	var title string
@@ -1049,7 +1004,7 @@ func parseMarkdown(content string) (string, []parsedSection) {
 
 	flush()
 
-	// If no sections were created (no ## headings), put everything in one section
+	// No ## headings: put everything in one section
 	if len(sections) == 0 && strings.TrimSpace(content) != "" {
 		sections = append(sections, parsedSection{
 			heading: nil,

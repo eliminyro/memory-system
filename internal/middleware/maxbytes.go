@@ -2,14 +2,9 @@ package middleware
 
 import "net/http"
 
-// MaxBytes caps the size of every request body by wrapping r.Body in an
-// http.MaxBytesReader before the downstream handler reads it. Reads past the
-// ceiling fail with *http.MaxBytesError, so an oversized body is never fully
-// buffered (and, on the API path, never embedded) — the read stops at the
-// limit. A ceiling <= 0 disables the cap (the wrapper is skipped).
-//
-// This covers every body-reading path it wraps: the /api JSON Decode calls and
-// the /mcp streamable handler.
+// MaxBytes wraps r.Body in an http.MaxBytesReader so an oversized body fails at
+// the ceiling instead of being fully buffered (or embedded on the /api path).
+// Covers the /api JSON decode and /mcp streamable paths. n <= 0 disables the cap.
 func MaxBytes(n int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

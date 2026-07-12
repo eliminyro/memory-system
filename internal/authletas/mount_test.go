@@ -13,12 +13,9 @@ import (
 	"github.com/eliminyro/authlet/pkg/storage/memstore"
 )
 
-// newTestWiring constructs a Wiring with a real *as.AS backed by an
-// in-memory authlet storage and a stand-in upstream OIDC provider. This
-// avoids requiring live Google discovery (Setup performs network I/O) but
-// still produces an AS whose Handler() and well-known handlers route real
-// HTTP requests. BearerMW, PRMHandler, and RunCleanup get cheap stubs —
-// Mount does not exercise them.
+// newTestWiring builds a Wiring with a real *as.AS over in-memory storage and
+// a stand-in upstream (no live Google discovery), so Handler() and well-known
+// handlers route real requests. BearerMW/PRMHandler/RunCleanup are stubs.
 func newTestWiring(t *testing.T) *Wiring {
 	t.Helper()
 	mk := make([]byte, 32)
@@ -49,10 +46,8 @@ func newTestWiring(t *testing.T) *Wiring {
 	}
 }
 
-// TestMount_RegistersAllExpectedRoutes covers the route table Mount
-// installs on a stdlib ServeMux. Each path should resolve to its
-// registered handler (not 404). We do not assert on response bodies — a
-// 200, 400, or 405 is fine as long as the path is recognised.
+// TestMount_RegistersAllExpectedRoutes checks every path Mount installs
+// resolves to a handler (not 404); response status is irrelevant.
 func TestMount_RegistersAllExpectedRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	w := newTestWiring(t)
@@ -83,9 +78,8 @@ func TestMount_RegistersAllExpectedRoutes(t *testing.T) {
 	}
 }
 
-// TestMount_PRMHandlerInvoked verifies the PRMHandler stub on Wiring
-// actually fires for the well-known PRM URL — confirming Mount wires
-// w.PRMHandler (not w.AS.JWKSHandler or another field) to the PRM path.
+// TestMount_PRMHandlerInvoked verifies Mount wires w.PRMHandler (not another
+// field) to the well-known PRM path.
 func TestMount_PRMHandlerInvoked(t *testing.T) {
 	mux := http.NewServeMux()
 	called := false
@@ -109,9 +103,8 @@ func TestMount_PRMHandlerInvoked(t *testing.T) {
 	}
 }
 
-// TestMount_NonGETWellKnownReturns405 confirms the method restriction in
-// "GET /path" patterns rejects non-GET requests on every well-known path
-// (Go 1.22+ behaviour).
+// TestMount_NonGETWellKnownReturns405 confirms the "GET /path" patterns reject
+// non-GET on every well-known path (Go 1.22+).
 func TestMount_NonGETWellKnownReturns405(t *testing.T) {
 	mux := http.NewServeMux()
 	w := newTestWiring(t)
@@ -135,13 +128,9 @@ func TestMount_NonGETWellKnownReturns405(t *testing.T) {
 	}
 }
 
-// TestMount_OAuthWithoutTrailingSlashRedirects locks in stdlib ServeMux's
-// behaviour for /oauth (no trailing slash): when only /oauth/ is
-// registered, ServeMux issues a method-preserving 308 (or 307 on older Go
-// versions) redirect to /oauth/. Documented here so a future refactor
-// doesn't silently change this semantics — OAuth clients append paths
-// like /oauth/authorize directly, so the bare /oauth GET is mostly a
-// human-typed URL.
+// TestMount_OAuthWithoutTrailingSlashRedirects locks in ServeMux behaviour: a
+// GET /oauth (no trailing slash) redirects to /oauth/ (307/308). Clients append
+// full paths like /oauth/authorize, so bare /oauth is mostly human-typed.
 func TestMount_OAuthWithoutTrailingSlashRedirects(t *testing.T) {
 	mux := http.NewServeMux()
 	w := newTestWiring(t)

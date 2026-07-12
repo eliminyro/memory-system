@@ -31,13 +31,10 @@ import (
 	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
-// selfCheckBootstrapAdmins verifies that every configured bootstrap admin that
-// resolves to a tenant_users row actually passes an admin Check after seeding.
-// A resolvable admin that fails the Check means the authz wiring is broken and
-// the deploy would lock everyone out of admin — that is fatal (returns an
-// error). Emails with no tenant_users row are skipped with a warning (there was
-// nothing to seed; the grant happens once the user exists). An empty allowlist
-// warns and returns nil.
+// selfCheckBootstrapAdmins verifies every configured bootstrap admin with a
+// tenant_users row passes an admin Check after seeding. A resolvable admin that
+// fails means broken authz wiring / an admin lockout — fatal (error). Emails with
+// no row are skipped (warn); an empty allowlist warns and returns nil.
 func selfCheckBootstrapAdmins(ctx context.Context, engine *authz.Engine, db *gorm.DB, emails []string, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
@@ -94,7 +91,6 @@ func main() {
 		cfg.TenantDefaults = td
 	}
 
-	// Wire log level
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
@@ -134,9 +130,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Admin email allowlist — bootstrap-only now. It is read at startup to seed
-	// system:memory#admin tuples (below) and is never consulted per request:
-	// every authorization decision flows through the tuple Check.
+	// Admin email allowlist — bootstrap-only: read at startup to seed
+	// system:memory#admin tuples, never consulted per request (all decisions go through tuple Check).
 	var allowedEmails []string
 	if cfg.AdminAllowedEmails != "" {
 		allowedEmails = strings.Split(cfg.AdminAllowedEmails, ",")
@@ -145,26 +140,20 @@ func main() {
 		allowedEmails[i] = strings.TrimSpace(allowedEmails[i])
 	}
 
-	// Authorization: relation-tuple store + Check engine. The engine is the
-	// single authoritative gate — admin split, tenant_id override, and all
-	// cross-tenant/common-pool point access resolve through it.
+	// Authorization: relation-tuple store + Check engine — the single gate for
+	// admin split, tenant_id override, and cross-tenant/common-pool access.
 	authzStore := authz.NewPostgresStore(db)
 	authzEngine := authz.NewEngine(authzStore)
 
-	// Bootstrap the global-admin allowlist into system:memory#admin tuples.
-	// Read ADMIN_ALLOWED_EMAILS at startup only; idempotent, skips emails with
-	// no tenant_user row.
+	// Bootstrap the admin allowlist into system:memory#admin tuples. Startup-only,
+	// idempotent, skips emails with no tenant_user row.
 	if err := authzseed.BootstrapAdmins(context.Background(), authzStore, db, allowedEmails, slog.Default()); err != nil {
 		slog.Error("failed to bootstrap admin tuples", "error", err)
 		os.Exit(1)
 	}
 
-	// Startup self-check (task 6.3): every configured bootstrap admin that has a
-	// tenant_user row MUST pass an admin Check. If one was seeded but does not
-	// resolve to admin, the authorization wiring is broken and continuing would
-	// silently ship a lockout — refuse to serve. Emails with no tenant_user row
-	// (nothing to seed yet) log a warning and are skipped, mirroring
-	// BootstrapAdmins. No admin configured at all: warn and continue.
+	// Startup self-check (task 6.3): a seeded admin that fails an admin Check means
+	// broken authz wiring / a lockout — refuse to serve. See selfCheckBootstrapAdmins.
 	if err := selfCheckBootstrapAdmins(context.Background(), authzEngine, db, allowedEmails, slog.Default()); err != nil {
 		slog.Error("admin authorization self-check failed; refusing to serve", "error", err)
 		os.Exit(1)
@@ -178,9 +167,8 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Cleanup pipeline — nightly near-duplicate scan + Telegram summary.
-	// Notifier is nil when Telegram creds aren't set, in which case the scanner
-	// runs silently.
+	// Cleanup pipeline — nightly near-duplicate scan + Telegram summary. Notifier
+	// is nil (silent) when Telegram creds are unset.
 	cleanupNotifier := cleanup.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
 	cleanupScanner := cleanup.NewScanner(
 		lintRepo, tenantRepo, cleanupRepo, retentionRepo, thresholdStore,
@@ -197,11 +185,9 @@ func main() {
 	// Auth
 	keyValidator := auth.NewAPIKeyValidator(db)
 
-	// authlet OAuth 2.1 / OIDC AS. When both Google client envs are set,
-	// the operator has opted into OAuth and any Setup error (malformed
-	// master key, OIDC discovery failure, etc) is fatal — the legacy
-	// silent-downgrade behavior masked deployment bugs. When the Google
-	// envs are unset, /mcp serves API-key auth only and Setup is skipped.
+	// authlet OAuth 2.1 / OIDC AS. Both Google envs set = opt-in: any Setup error
+	// is fatal (silent downgrade masked deploy bugs). Unset = /mcp is API-key-only,
+	// Setup skipped.
 	var authletWiring *authletas.Wiring
 	if cfg.AuthletEnabled() {
 		authletWiring, err = authletas.Setup(
@@ -217,10 +203,9 @@ func main() {
 			slog.Error("authlet setup failed", "error", err)
 			os.Exit(1)
 		}
-		// Start the AS cleanup goroutine (expires codes / refresh tokens /
-		// DCR clients and rotates signing keys). Returns a channel that
-		// closes on rootCtx cancellation; we don't wait on it here — the
-		// http.Server shutdown is the bound for our exit.
+		// AS cleanup goroutine: expires codes/tokens/DCR clients, rotates signing
+		// keys. Returns a channel closed on ctx cancel; we don't wait on it
+		// (http.Server shutdown bounds our exit).
 		_ = authletWiring.RunCleanup(rootCtx)
 	}
 

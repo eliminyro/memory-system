@@ -20,9 +20,8 @@ import (
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
-// newAdminHarness builds a real apiHandler (whose mux includes the /admin
-// subtree + the adminOnly gate) plus an admin context (a subject holding
-// system:memory#admin) and a non-admin context.
+// newAdminHarness builds a real apiHandler (mux includes /admin + the adminOnly
+// gate) plus an admin context (subject holding system:memory#admin) and a non-admin one.
 func newAdminHarness(t *testing.T) (*apiHandler, context.Context, context.Context) {
 	t.Helper()
 	db := openAPIPG(t)

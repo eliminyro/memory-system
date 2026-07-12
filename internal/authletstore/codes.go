@@ -12,8 +12,7 @@ import (
 // codeStore implements storage.CodeStore against GORM.
 type codeStore struct{ db *gorm.DB }
 
-// Save persists the authorization code. Returns storage.ErrAlreadyExists
-// if a row with the same code_hash already exists.
+// Save persists the authorization code, or storage.ErrAlreadyExists on a duplicate code_hash.
 func (s *codeStore) Save(ctx context.Context, c storage.AuthCode) error {
 	row := OAuthCode{
 		CodeHash:      c.CodeHash,
@@ -36,12 +35,11 @@ func (s *codeStore) Save(ctx context.Context, c storage.AuthCode) error {
 	return nil
 }
 
-// ConsumeOnce atomically selects and deletes by code_hash inside a tx.
-// Matches memstore semantics:
-//   - (*AuthCode, nil) — code existed, not expired; entry now deleted.
+// ConsumeOnce atomically selects and deletes by code_hash in a tx, matching
+// memstore semantics:
+//   - (*AuthCode, nil) — code existed, not expired; now deleted.
 //   - (nil, ErrNotFound) — code did not exist.
-//   - (nil, ErrAlreadyConsumed) — code existed but had expired; the row
-//     is deleted as a side-effect.
+//   - (nil, ErrAlreadyConsumed) — code existed but expired; row deleted anyway.
 func (s *codeStore) ConsumeOnce(ctx context.Context, hash string) (*storage.AuthCode, error) {
 	var out *storage.AuthCode
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -52,11 +50,9 @@ func (s *codeStore) ConsumeOnce(ctx context.Context, hash string) (*storage.Auth
 			}
 			return err
 		}
-		// The DELETE is the atomic guard. The read above is only for the
-		// payload: under Postgres READ COMMITTED two concurrent redemptions
-		// both read the row, but the row lock serializes the DELETEs so only
-		// one affects a row. The loser sees RowsAffected == 0 and is treated
-		// as not-found, so a code yields exactly one grant.
+		// The DELETE is the atomic guard (read only fetches the payload): under
+		// Postgres READ COMMITTED both concurrent redemptions read the row, but the
+		// row lock serializes DELETEs so only one wins — a code yields exactly one grant.
 		res := tx.Where("code_hash = ?", hash).Delete(&OAuthCode{})
 		if res.Error != nil {
 			return res.Error
@@ -87,8 +83,7 @@ func (s *codeStore) ConsumeOnce(ctx context.Context, hash string) (*storage.Auth
 	return out, nil
 }
 
-// DeleteExpired removes codes whose expires_at is before the supplied
-// instant. Returns the number of rows deleted.
+// DeleteExpired removes codes with expires_at before the given instant; returns the count deleted.
 func (s *codeStore) DeleteExpired(ctx context.Context, before time.Time) (int, error) {
 	res := s.db.WithContext(ctx).
 		Where("expires_at < ?", before).

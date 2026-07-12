@@ -27,9 +27,8 @@ type Server struct {
 }
 
 // NewServer builds the regular + admin MCP tool surfaces. checker drives the
-// per-request admin split: a request is served the admin surface iff its
-// subject holds system:memory#admin. A nil checker collapses every request to
-// the regular surface (fail closed).
+// per-request admin split (admin surface iff subject holds system:memory#admin);
+// a nil checker fails closed to the regular surface.
 func NewServer(memory *service.MemoryService, checker Checker) *Server {
 	s := &Server{
 		memory:  memory,
@@ -74,10 +73,8 @@ Admin tools: list_tenants, create_tenant, update_tenant, delete_tenant, create_a
 	return s
 }
 
-// isAdmin reports whether the request context's subject is a global admin
-// (system:memory#admin), resolved through the tuple Check. Fails closed on a
-// nil checker, a subjectless request, or a Check error — the request then gets
-// the regular (non-admin) surface.
+// isAdmin reports whether the context subject is a global admin
+// (system:memory#admin). Fails closed on nil checker, no subject, or Check error.
 func (s *Server) isAdmin(ctx context.Context) bool {
 	if s.checker == nil {
 		return false

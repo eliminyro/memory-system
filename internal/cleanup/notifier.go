@@ -11,16 +11,15 @@ import (
 )
 
 // Notifier posts cleanup summaries to a Telegram chat. Both token and chat ID
-// must be set; if either is empty, use NoopNotifier (or just pass nil).
+// must be set; if either is empty, pass nil (Scanner treats nil as silent).
 type Notifier struct {
 	botToken string
 	chatID   string
 	client   *http.Client
 }
 
-// NewNotifier returns a Notifier, or nil if either credential is empty.
-// Callers that want "notifications off" should pass the nil back into
-// Scanner unchanged — Scanner treats a nil notifier as silent mode.
+// NewNotifier returns a Notifier, or nil if either credential is empty (pass the
+// nil to Scanner unchanged — it treats nil as silent mode).
 func NewNotifier(botToken, chatID string) *Notifier {
 	if botToken == "" || chatID == "" {
 		return nil

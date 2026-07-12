@@ -103,9 +103,8 @@ func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, 
 }
 
 // applyStalenessToSearchResults overlays staleness metadata on search results.
-// In "hard" mode, guarded sections have Content replaced with Preview + hints.
-// In "advisory" mode, metadata is set but Content is preserved.
-// In "off" mode (or with nil store), this is a no-op.
+// Hard mode replaces guarded Content with Preview + hints; advisory sets metadata
+// but keeps Content; off (or nil store) is a no-op.
 func applyStalenessToSearchResults(ctx context.Context, store *staleness.ThresholdStore, results []repository.SearchResult, mode string, forceRead bool) ([]repository.SearchResult, error) {
 	if store == nil || mode == models.StalenessModeOff {
 		return results, nil
