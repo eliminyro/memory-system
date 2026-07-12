@@ -101,8 +101,7 @@ func (e *GCPEmbedder) Embed(ctx context.Context, text string) (pgvector.Vector, 
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		// Log the full upstream detail server-side; never surface it to the
-		// caller (audit #18) — it can carry provider internals.
+		// Log full detail server-side; never surface to caller (audit #18).
 		slog.Error("vertex ai embedding request failed", "status", resp.StatusCode, "body", string(respBody))
 		return pgvector.Vector{}, ErrEmbeddingUnavailable
 	}

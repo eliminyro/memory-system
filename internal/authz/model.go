@@ -2,17 +2,14 @@ package authz
 
 import "gorm.io/gorm"
 
-// RelationTuple is the GORM row backing the Postgres tuple store. The full
-// six-column tuple is the composite primary key, which doubles as the
-// uniqueness constraint required by the design (a tuple is either present or
-// absent; there are no duplicates). Two secondary indexes support the two hot
-// read paths used by Check:
+// RelationTuple is the GORM row backing the Postgres tuple store. The six-column
+// tuple is the composite PK, doubling as the uniqueness constraint (a tuple is
+// present or absent; no duplicates). Two secondary indexes serve Check's hot reads:
 //
 //   - idx_relation_tuples_object   (object_type, object_id, relation)  -> forward expansion / this + tuple_to_userset
 //   - idx_relation_tuples_subject  (subject_type, subject_id)          -> reverse lookup / ReadBySubject
 //
-// SubjectRelation is stored as "" for direct (user / wildcard) subjects and set
-// to the relation name for userset subjects.
+// SubjectRelation is "" for direct (user/wildcard) subjects, the relation name for usersets.
 type RelationTuple struct {
 	ObjectType      string `gorm:"primaryKey;column:object_type;type:text;not null;index:idx_relation_tuples_object,priority:1"`
 	ObjectID        string `gorm:"primaryKey;column:object_id;type:text;not null;index:idx_relation_tuples_object,priority:2"`
@@ -22,12 +19,11 @@ type RelationTuple struct {
 	SubjectRelation string `gorm:"primaryKey;column:subject_relation;type:text;not null;default:''"`
 }
 
-// TableName returns the Postgres table name for RelationTuple.
+// TableName returns the Postgres table name.
 func (RelationTuple) TableName() string { return "relation_tuples" }
 
-// toTuple converts a persistence row into the store-facing value type. The two
-// structs share identical field sequences (they differ only in GORM tags), so
-// a direct conversion is equivalent to a field-by-field copy.
+// toTuple converts a persistence row to the store value type. Identical field
+// order (only GORM tags differ) makes the conversion a field-by-field copy.
 func (r RelationTuple) toTuple() Tuple {
 	return Tuple(r)
 }
@@ -37,9 +33,7 @@ func fromTuple(t Tuple) RelationTuple {
 	return RelationTuple(t)
 }
 
-// Migrate creates or updates the relation_tuples table and its indexes. It is
-// safe to call repeatedly. Wiring code (migrations, bootstrap) and integration
-// tests call this to bring the schema up.
+// Migrate creates/updates the relation_tuples table and indexes; safe to call repeatedly.
 func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(&RelationTuple{})
 }

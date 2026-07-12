@@ -6,8 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Tenant user role constants. Memory MCP currently distinguishes only two
-// roles at the email -> tenant mapping layer: regular member vs admin.
+// Tenant user role constants — member vs admin at the email->tenant mapping layer.
 const (
 	TenantUserRoleMember = "member"
 	TenantUserRoleAdmin  = "admin"
@@ -19,11 +18,9 @@ var ValidTenantUserRoles = map[string]struct{}{
 	TenantUserRoleAdmin:  {},
 }
 
-// TenantUser maps a verified upstream Google email address to a memory-system
-// tenant. The authlet AS consults this table during sign-in to translate an
-// upstream OIDC identity into a tenant_id for the issued access token. Rows
-// are populated manually (admin SQL backfill); we never auto-provision from
-// federated claims.
+// TenantUser maps a verified upstream Google email to a tenant. The authlet AS
+// consults it at sign-in to translate an OIDC identity into a tenant_id. Rows are
+// populated manually (admin SQL); never auto-provisioned from federated claims.
 type TenantUser struct {
 	ID uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	// Email is globally unique — a single email maps to exactly one tenant.
@@ -34,8 +31,7 @@ type TenantUser struct {
 
 	CreatedAt time.Time `json:"created_at"`
 
-	// Tenant belongsTo relationship — drives the FK on tenant_id with
-	// ON DELETE CASCADE so removing a tenant cleans up its email mappings.
+	// Tenant belongsTo — FK on tenant_id with ON DELETE CASCADE.
 	Tenant *Tenant `gorm:"foreignKey:TenantID;constraint:OnDelete:CASCADE" json:"-"`
 }
 

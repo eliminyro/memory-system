@@ -1,8 +1,6 @@
-// Package cleanup hosts the server-side duplicate-detection scanner and its
-// Telegram notifier. The scanner runs on a fixed interval, walks every tenant,
-// runs the near-duplicate query, and upserts pending queue entries. Actual
-// merging happens client-side in a scheduled agent — this package does not
-// call LLMs.
+// Package cleanup runs the server-side near-duplicate scanner and its Telegram
+// notifier: on a fixed interval, walk every tenant, upsert pending queue entries.
+// Merging happens client-side in a scheduled agent — this package calls no LLMs.
 package cleanup
 
 import (
@@ -43,14 +41,12 @@ type Scanner struct {
 	notifier   *Notifier
 	logger     *slog.Logger
 
-	// runMu serialises RunOnce so a ticker fire that lands while the previous
-	// sweep is still draining won't produce concurrent upserts (which, absent
-	// a partial unique index, could insert duplicate pending rows).
+	// runMu serialises RunOnce so an overlapping ticker fire can't cause
+	// concurrent upserts (which, absent a partial unique index, duplicate rows).
 	runMu sync.Mutex
 }
 
-// NewScanner constructs the scanner. notifier may be nil — in that case the
-// scan runs silently.
+// NewScanner constructs the scanner. A nil notifier means silent scans.
 func NewScanner(
 	lint *repository.LintRepository,
 	tenants *repository.TenantRepository,
@@ -75,9 +71,8 @@ func NewScanner(
 	}
 }
 
-// RunOnce performs a single sweep. Returns stats even on partial failure so
-// the caller can log them; individual per-tenant errors are counted but do not
-// abort the run.
+// RunOnce performs a single sweep. Returns stats even on partial failure;
+// per-tenant errors are counted, not fatal.
 func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
@@ -141,16 +136,14 @@ func (s *Scanner) scanTenant(ctx context.Context, tenantID uuid.UUID, stats *Sca
 	return nil
 }
 
-// Start launches a goroutine that calls RunOnce every `interval` until ctx is
-// cancelled. The first sweep fires immediately (minus a small jitter for
-// process-restart scenarios).
+// Start launches a goroutine calling RunOnce every `interval` until ctx is
+// cancelled. The first sweep fires immediately.
 func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 24 * time.Hour
 	}
 	go func() {
-		// Migrations already ran synchronously before we got here, so no
-		// startup delay is needed before the first sweep.
+		// Migrations already ran synchronously, so no startup delay is needed.
 		s.runAndLog(ctx)
 
 		t := time.NewTicker(interval)
@@ -166,18 +159,16 @@ func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-// retentionEligible reports whether the retention sweep should run for a
-// tenant: opted into hard staleness enforcement, and never the shared
-// bootstrap pool (its seed docs are curated, never auto-retired).
+// retentionEligible reports whether retention runs for a tenant: staleness_mode
+// hard, and never the bootstrap pool (curated seed docs, never auto-retired).
 func retentionEligible(t models.Tenant) bool {
 	return t.StalenessMode == models.StalenessModeHard && t.ID != models.BootstrapTenantID
 }
 
 func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *ScanStats) error {
-	// Defensive guard (audit #4): refuse to run a destructive sweep when the
-	// window parameters would collapse the cutoffs and mass hard-delete live
-	// data. config.Load already rejects sub-1 values at startup; this backstops
-	// any path that constructs a Scanner directly.
+	// Defensive guard (audit #4): refuse a destructive sweep when window params
+	// collapse the cutoffs and would mass hard-delete live data. config.Load
+	// rejects sub-1 values at startup; this backstops direct Scanner construction.
 	if !retention.WindowSafe(s.multiplier, s.graceDays) {
 		return fmt.Errorf("refusing retention sweep: unsafe window (multiplier=%d, graceDays=%d)", s.multiplier, s.graceDays)
 	}

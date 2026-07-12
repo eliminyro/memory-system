@@ -60,10 +60,9 @@ func boundaryTenant(t *testing.T, db *gorm.DB, store authz.Store) uuid.UUID {
 	return ten.ID
 }
 
-// TestMCPBoundaryAdminGating drives the MCP tool handlers with a real
-// MemoryService + authz engine and asserts the admin-only surface is enforced
-// through the tuple Check: a non-admin subject cannot use the tenant_id
-// override or an admin tool, while a global admin can.
+// TestMCPBoundaryAdminGating drives the tool handlers with a real MemoryService +
+// authz engine, asserting the admin-only surface is enforced via the tuple Check:
+// a non-admin can't use the tenant_id override or an admin tool, a global admin can.
 func TestMCPBoundaryAdminGating(t *testing.T) {
 	db := openBoundaryPG(t)
 	ctx := context.Background()

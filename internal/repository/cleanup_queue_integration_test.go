@@ -11,8 +11,7 @@ import (
 )
 
 // TestCleanupQueue_DismissedPairNotReEnqueued guards audit #19: once a pair is
-// resolved as false_positive/ignored, a later scan that surfaces the same pair
-// must not re-add it to the pending queue.
+// resolved false_positive/ignored, a later scan must not re-add it to pending.
 func TestCleanupQueue_DismissedPairNotReEnqueued(t *testing.T) {
 	db := openLintPG(t)
 	tenantID := seedTenant(t, db)

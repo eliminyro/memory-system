@@ -6,9 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// DeletionEvent is an append-only audit row written when a document is hard-
-// deleted (currently only by the retention sweep). Kept forever — cheap rows,
-// and the provenance is needed to answer "what was removed and when".
+// DeletionEvent is an append-only audit row written on hard-delete (currently
+// only the retention sweep). Kept forever — records what was removed and when.
 type DeletionEvent struct {
 	ID           uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
 	TenantID     uuid.UUID  `gorm:"type:uuid;not null;index" json:"tenant_id"`

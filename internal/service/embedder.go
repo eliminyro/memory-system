@@ -65,8 +65,7 @@ func (e *OllamaEmbedder) Embed(ctx context.Context, text string) (pgvector.Vecto
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		// Log the full upstream detail server-side; never surface it to the
-		// caller (audit #18) — it can carry provider internals.
+		// Log full detail server-side; never surface to caller (audit #18).
 		slog.Error("ollama embedding request failed", "status", resp.StatusCode, "body", string(body))
 		return pgvector.Vector{}, ErrEmbeddingUnavailable
 	}

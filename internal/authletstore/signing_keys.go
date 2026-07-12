@@ -24,8 +24,7 @@ func toStorageKey(r AuthletSigningKey) storage.SigningKey {
 	}
 }
 
-// ListActive returns every key that has not yet retired (retires_at is
-// NULL or in the future).
+// ListActive returns every key that has not yet retired (retires_at NULL or future).
 func (s *signingKeyStore) ListActive(ctx context.Context) ([]storage.SigningKey, error) {
 	var rows []AuthletSigningKey
 	q := s.db.WithContext(ctx).Where("retires_at IS NULL OR retires_at > ?", time.Now().UTC())
@@ -39,8 +38,7 @@ func (s *signingKeyStore) ListActive(ctx context.Context) ([]storage.SigningKey,
 	return out, nil
 }
 
-// GetSigner returns the most recently created active key, or
-// storage.ErrNotFound if none is active.
+// GetSigner returns the most recently created active key, or storage.ErrNotFound if none.
 func (s *signingKeyStore) GetSigner(ctx context.Context) (storage.SigningKey, error) {
 	var row AuthletSigningKey
 	if err := s.db.WithContext(ctx).
@@ -55,9 +53,8 @@ func (s *signingKeyStore) GetSigner(ctx context.Context) (storage.SigningKey, er
 	return toStorageKey(row), nil
 }
 
-// Insert persists k. When k.IsActive is true, all prior active rows are
-// deactivated in the same transaction so exactly one row is active at a
-// time.
+// Insert persists k. If k.IsActive, all prior active rows are deactivated in
+// the same tx so exactly one row is active at a time.
 func (s *signingKeyStore) Insert(ctx context.Context, k storage.SigningKey) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if k.IsActive {
@@ -80,8 +77,7 @@ func (s *signingKeyStore) Insert(ctx context.Context, k storage.SigningKey) erro
 	})
 }
 
-// Retire marks the key inactive and sets retires_at. Returns
-// storage.ErrNotFound when no row matches id.
+// Retire marks the key inactive and sets retires_at, or storage.ErrNotFound if no row matches id.
 func (s *signingKeyStore) Retire(ctx context.Context, id string, at time.Time) error {
 	res := s.db.WithContext(ctx).Model(&AuthletSigningKey{}).
 		Where("id = ?", id).

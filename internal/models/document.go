@@ -59,8 +59,7 @@ func BuildPath(category string, subcategory *string, slug string) string {
 }
 
 // ParsePath splits a hierarchical path into category, subcategory, and slug.
-// Handles 3-part ("learnings/go/gorm"), 2-part ("preferences/style"),
-// and 1-part ("slug") paths. Single-part paths default to category "misc".
+// Handles 3-part / 2-part / 1-part; single-part defaults to category "misc".
 func ParsePath(path string) (category string, subcategory *string, slug string) {
 	path = strings.Trim(path, "/")
 	if path == "" {

@@ -60,11 +60,10 @@ func seedSwapVector(t *testing.T, db *gorm.DB) func() {
 	}
 }
 
-// TestMigrateEmbeddingIdentityGuard exercises audit #13/#16: the migration
-// records the embedding (provider, model, dim) for an empty/unrecorded corpus,
-// accepts an unchanged identity, and refuses a provider OR model swap on a
-// populated corpus even at the same dimension — while the existing dimension
-// guard still refuses a dimension change.
+// TestMigrateEmbeddingIdentityGuard exercises audit #13/#16: migration records
+// the embedding identity for an empty corpus, accepts an unchanged identity, and
+// refuses a provider/model swap on a populated corpus (even at the same dim),
+// while the dimension guard still refuses a dim change.
 func TestMigrateEmbeddingIdentityGuard(t *testing.T) {
 	db := openSwapPG(t)
 	td := database.TenantColumnDefaults{StalenessMode: "off"}
@@ -72,9 +71,8 @@ func TestMigrateEmbeddingIdentityGuard(t *testing.T) {
 	// Ensure the schema exists before we manipulate the metadata row.
 	require.NoError(t, database.Migrate(db, "fake", "fake", swapDim, td))
 
-	// Clean slate: no metadata row, so the next migrate adopts. Restore the
-	// shared invariant on teardown by removing the row (subsequent packages that
-	// share this DB then re-adopt their own identity).
+	// Clean slate: no metadata row so the next migrate adopts. Remove the row on
+	// teardown so packages sharing this DB re-adopt their own identity.
 	require.NoError(t, db.Exec("DELETE FROM embedding_metadata").Error)
 	t.Cleanup(func() { db.Exec("DELETE FROM embedding_metadata") })
 

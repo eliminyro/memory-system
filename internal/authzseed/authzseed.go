@@ -1,15 +1,6 @@
-// Package authzseed populates the relationship-based authorization engine's
-// relation tuples out-of-band: lifecycle constructors used by the service on
-// resource creation, a one-shot Backfill run from the migration path, and a
-// startup BootstrapAdmins seeder for the global-admin allowlist.
-//
-// It is deliberately a thin, side-effect-free-by-default helper: the tuple
-// constructors are pure functions (the single source of truth for which tuple
-// shape each domain event produces), and the Backfill/BootstrapAdmins writers
-// are idempotent — re-running them writes the same tuple set (the underlying
-// authz.Store dedupes writes). Nothing here reads tuples to make a decision;
-// it only writes them. Wiring the tuples into authorization DECISIONS happens
-// separately (Pass 2).
+// Package authzseed populates the RBAC engine's relation tuples out-of-band:
+// pure constructors (single source of truth) + idempotent Backfill/BootstrapAdmins
+// writers. Write-only; wiring tuples into decisions is Pass 2.
 package authzseed
 
 import (
@@ -25,9 +16,9 @@ import (
 
 // --- Pure tuple constructors (single source of truth) ---
 
-// TenantSystemEdge returns the parent edge tenant:<T>#system@system:memory,
-// seeded at tenant create. It lets global admins (system:memory#admin) reach
-// admin on every tenant via the namespace's "admin from system" rewrite.
+// TenantSystemEdge returns tenant:<T>#system@system:memory, seeded at tenant
+// create; lets global admins reach admin on every tenant via the
+// "admin from system" rewrite.
 func TenantSystemEdge(tenantID uuid.UUID) authz.Tuple {
 	return authz.Tuple{
 		ObjectType:  authz.TypeTenant,
@@ -60,9 +51,8 @@ func TenantAdmin(tenantID uuid.UUID, subjectID string) authz.Tuple {
 	}
 }
 
-// DocumentTenantEdge returns the parent edge document:<D>#tenant@tenant:<T>,
-// set at document create. It routes document viewer/editor through the owning
-// tenant's membership.
+// DocumentTenantEdge returns document:<D>#tenant@tenant:<T>, set at document
+// create; routes document viewer/editor through the owning tenant's membership.
 func DocumentTenantEdge(docID, tenantID uuid.UUID) authz.Tuple {
 	return authz.Tuple{
 		ObjectType:  authz.TypeDocument,
@@ -97,10 +87,9 @@ func CommonPoolViewerWildcard() authz.Tuple {
 	}
 }
 
-// APIKeySubjectID resolves an API key row's authorization subject id: its
-// explicit subject_id when set, else the tenant service principal. It mirrors
-// the auth layer's resolution so backfill membership matches request-time
-// subjects.
+// APIKeySubjectID resolves an API key's authz subject: explicit subject_id when
+// set, else the tenant service principal. Mirrors the auth layer so backfill
+// membership matches request-time subjects.
 func APIKeySubjectID(k models.APIKey) string {
 	if k.SubjectID != nil && *k.SubjectID != "" {
 		return *k.SubjectID
@@ -110,10 +99,9 @@ func APIKeySubjectID(k models.APIKey) string {
 
 // --- Idempotent writers ---
 
-// Backfill derives the full tuple set from existing domain rows and writes it
-// via store. It is idempotent: re-running produces the same tuple set. Reads
-// use db, writes use store, so callers can run it inside the migration
-// transaction by passing an authz.PostgresStore(tx) and tx.
+// Backfill derives the full tuple set from existing rows and writes it via
+// store. Idempotent: re-running produces the same set. Reads use db, writes use
+// store, so it can run inside the migration tx (pass authz.PostgresStore(tx), tx).
 //
 //   - each tenant           -> system parent edge + svc:<tenant> membership
 //   - each tenant_user      -> membership (+ admin when role == admin)
@@ -155,9 +143,9 @@ func Backfill(ctx context.Context, store authz.Store, db *gorm.DB) error {
 		}
 	}
 
-	// Admin tenant_users also make their tenant's service principal a global
-	// admin, so operator API keys (which resolve to svc:<tenant>) keep the admin
-	// tool surface — see seedAdminServicePrincipals.
+	// Admin tenant_users also make their tenant's svc principal a global admin so
+	// operator API keys (svc:<tenant>) keep the admin tool surface — see
+	// seedAdminServicePrincipals.
 	if err := seedAdminServicePrincipals(ctx, store, db); err != nil {
 		return err
 	}
@@ -184,15 +172,11 @@ func Backfill(ctx context.Context, store authz.Store, db *gorm.DB) error {
 	}).Error
 }
 
-// BootstrapAdmins seeds system:memory#admin for every email in emails that has
-// a tenant_users row, resolving the verified email to its tenant_users.id
-// subject. Emails without a row are skipped with a log line (never invented).
-// It additionally grants system:memory#admin to the service principal
-// (svc:<tenant_id>) of every tenant that has an admin tenant_user, closing the
-// operator API-key admin gap (see seedAdminServicePrincipals) — this runs on
-// every startup, independent of the allowlist. Idempotent: a second run writes
-// no duplicates. Read ADMIN_ALLOWED_EMAILS at startup only and pass the parsed
-// list here.
+// BootstrapAdmins seeds system:memory#admin for each email with a tenant_users
+// row (verified email -> tenant_users.id); unknown emails are skipped, never
+// invented. Also grants system#admin to every admin tenant's svc principal
+// (operator API-key admin gap; see seedAdminServicePrincipals), independent of
+// the allowlist. Idempotent. Pass the parsed ADMIN_ALLOWED_EMAILS list here.
 func BootstrapAdmins(ctx context.Context, store authz.Store, db *gorm.DB, emails []string, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
@@ -215,28 +199,21 @@ func BootstrapAdmins(ctx context.Context, store authz.Store, db *gorm.DB, emails
 		}
 		logger.Info("authzseed: bootstrap admin seeded", "email", email, "subject_id", tu.ID.String())
 	}
-	// Also grant system#admin to the service principal of every tenant that has
-	// an admin tenant_user, so operator API keys (svc:<tenant>) get the admin
-	// tool surface without manual SQL. Independent of the email allowlist and
-	// idempotent.
+	// Grant system#admin to every admin tenant's svc principal (operator API-key
+	// gap), independent of the allowlist and idempotent.
 	return seedAdminServicePrincipals(ctx, store, db)
 }
 
-// seedAdminServicePrincipals grants system:memory#admin to the service
-// principal (svc:<tenant_id>) of every tenant that has at least one admin
-// tenant_user (role == admin).
+// seedAdminServicePrincipals grants system:memory#admin to the svc principal
+// (svc:<tenant_id>) of every tenant with at least one admin tenant_user.
 //
-// This closes the operator API-key admin gap: an API key with no explicit
-// subject_id resolves to its tenant's service principal svc:<tenant_id> (see
-// APIKeySubjectID / authz.ServicePrincipalID), which the tenant backfill only
-// makes a tenant *member*. Bootstrap already grants system#admin to the human
-// JWT identity (system:memory#admin@user:<tenant_users.id>), so without this an
-// operator whose only session is an API key would lose the admin tool surface.
-// Granting the service principal system#admin makes a fresh install give the
-// operator tenant's API keys admin with no manual SQL.
+// Closes the operator API-key admin gap: a key with no subject_id resolves to
+// svc:<tenant_id> (see APIKeySubjectID), which backfill only makes a tenant
+// member — so an API-key-only operator would otherwise lose the admin surface
+// that bootstrap grants the human JWT identity.
 //
-// Idempotent: store.Write is ON CONFLICT DO NOTHING, and multiple admin
-// tenant_users for one tenant collapse to a single svc grant via DISTINCT.
+// Idempotent: store.Write is ON CONFLICT DO NOTHING; DISTINCT collapses
+// multiple admin tenant_users per tenant to one svc grant.
 func seedAdminServicePrincipals(ctx context.Context, store authz.Store, db *gorm.DB) error {
 	var adminTenantIDs []uuid.UUID
 	if err := db.WithContext(ctx).

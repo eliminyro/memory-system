@@ -16,11 +16,10 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
-// openPG brings up the full memory-system schema (idempotently) against the
-// shared TEST_DATABASE_URL. It never drops tables — tests isolate on fresh
-// random UUIDs and scope their assertions accordingly, so the suite is safe to
-// re-run against a persistent container. Run integration tests with -p 1 so
-// packages don't write concurrently to the shared DB.
+// openPG migrates the full schema (idempotently) against the shared
+// TEST_DATABASE_URL. Never drops tables — tests isolate on fresh random UUIDs,
+// so the suite is safe to re-run. Run with -p 1 so packages don't write the
+// shared DB concurrently.
 func openPG(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -214,12 +213,10 @@ func TestBootstrapAdmins_SeedsConfiguredSkipsUnknown(t *testing.T) {
 }
 
 // TestBootstrapAdmins_GrantsAdminTenantServicePrincipal reproduces the live
-// deploy state (0398d7a): a tenant with an admin tenant_user whose API key has
-// no subject_id resolves to the tenant service principal svc:<tenant>, which
-// the backfill only made a tenant member. BootstrapAdmins must promote that
-// svc principal to system admin so the operator's API-key session keeps the
-// admin tool surface — with no manual SQL. A non-admin tenant's svc principal
-// must NOT be promoted, and the grant must be idempotent.
+// deploy state (0398d7a): an admin tenant's API key with no subject_id resolves
+// to svc:<tenant>, which backfill only made a member. BootstrapAdmins must
+// promote that svc principal to system admin (operator API-key gap); a
+// non-admin tenant's svc principal must NOT be promoted; grant is idempotent.
 func TestBootstrapAdmins_GrantsAdminTenantServicePrincipal(t *testing.T) {
 	db := openPG(t)
 	ctx := context.Background()
@@ -238,14 +235,14 @@ func TestBootstrapAdmins_GrantsAdminTenantServicePrincipal(t *testing.T) {
 	svcAdmin := authz.ServicePrincipalID(adminTenant.ID.String())
 	svcNonAdmin := authz.ServicePrincipalID(nonAdminTenant.ID.String())
 
-	// Pre-state: the svc principal is only a tenant member (what the backfill
-	// left it as on the live cutover), not yet a system admin.
+	// Pre-state: svc principal is only a tenant member (as backfill left it on
+	// the live cutover), not yet a system admin.
 	if err := store.Write(ctx, authzseed.TenantMember(adminTenant.ID, svcAdmin)); err != nil {
 		t.Fatalf("seed svc member: %v", err)
 	}
 
 	// Empty allowlist on purpose: the svc-principal grant is independent of
-	// ADMIN_ALLOWED_EMAILS — it is keyed on tenant_user role only.
+	// ADMIN_ALLOWED_EMAILS — keyed on tenant_user role only.
 	if err := authzseed.BootstrapAdmins(ctx, store, db, nil, nil); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

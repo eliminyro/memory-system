@@ -12,9 +12,8 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
-// TestValidateKeyExpiry proves the expiry gate: a key past its expires_at is
-// rejected exactly like an invalid key, a future expiry still authenticates,
-// and a NULL expiry never expires.
+// TestValidateKeyExpiry proves the expiry gate: past expires_at is rejected,
+// future expiry authenticates, NULL never expires.
 func TestValidateKeyExpiry(t *testing.T) {
 	db := openAuthPG(t)
 	ctx := context.Background()

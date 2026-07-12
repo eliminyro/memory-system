@@ -1,6 +1,5 @@
-// Package authletas wires authlet into memory-system: UserResolver and
-// (in later phases) AS construction, JWKS/PRM handlers, and dual-auth
-// middleware.
+// Package authletas wires authlet into memory-system: UserResolver, AS
+// construction, JWKS/PRM handlers, and dual-auth middleware.
 package authletas
 
 import (
@@ -12,21 +11,17 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrUnauthorized is returned when an upstream Google identity has no
-// matching memory-system tenant. Memory MCP never auto-provisions tenants
-// from federated claims — a row in tenant_users must already exist before
-// MCP access is granted.
+// ErrUnauthorized is returned when an upstream Google identity has no matching
+// tenant. We never auto-provision from federated claims — a tenant_users row
+// must already exist.
 var ErrUnauthorized = errors.New("authletas: no tenant for google email")
 
-// ResolverRejectEvent is the stable structured-log key emitted on every
-// resolver rejection. Operators alert/aggregate on this value and read
-// `reason` for the breakdown. Keeping it as a constant makes downstream
-// log queries grep-stable across refactors.
+// ResolverRejectEvent is the stable structured-log event key emitted on every
+// resolver rejection; operators aggregate on it and read `reason`.
 const ResolverRejectEvent = "authletas.resolver.reject"
 
-// Rejection reasons. These are the labels paired with the
-// ResolverRejectEvent log entry and the values are the contract — do not
-// rename without coordinating with whoever is aggregating on them.
+// Rejection reason labels paired with ResolverRejectEvent. The values are a
+// contract — don't rename without coordinating with log aggregators.
 const (
 	rejectReasonEmailEmpty      = "email_empty"
 	rejectReasonEmailUnverified = "email_unverified"
@@ -34,38 +29,28 @@ const (
 	rejectReasonDBError         = "db_error"
 )
 
-// MemoryUserResolver maps upstream Google OIDC claims to a memory-system
-// tenant UUID by looking up the verified email address in the tenant_users
-// table. Email is the trust anchor — we refuse to issue tokens for empty or
-// unverified emails regardless of any DB state.
+// MemoryUserResolver maps upstream Google OIDC claims to a tenant UUID via the
+// verified email in tenant_users. Email is the trust anchor — empty or
+// unverified emails are refused regardless of DB state.
 type MemoryUserResolver struct {
 	DB *gorm.DB
-	// Logger receives the structured rejection events. Nil falls back to
-	// slog.Default so callers that wire one explicitly opt into a custom
-	// destination (test capture buffers, distinct logger names, etc.).
+	// Logger receives the rejection events; nil falls back to slog.Default.
 	Logger *slog.Logger
 }
 
-// identityRow is the minimal projection the resolver needs. We deliberately
-// avoid importing internal/models so authletas remains a leaf wiring package
-// (stdlib + authlet + gorm only).
+// identityRow is the resolver's minimal projection. Avoids importing
+// internal/models so authletas stays a leaf wiring package.
 type identityRow struct {
 	TenantID string `gorm:"column:tenant_id"`
 }
 
 func (identityRow) TableName() string { return "tenant_users" }
 
-// Resolve looks up the memory-system tenant_id linked to the upstream Google
-// email. It returns ErrUnauthorized for empty emails, for unverified emails
-// (we never trust unverified claims — anyone with a Google account could
-// otherwise claim any email), and for any DB miss or error (we don't leak
-// DB internals as auth decisions). Callers (the authlet AS) treat all of
-// these the same way: 403 at the /idp/callback redirect.
-//
-// Every rejection emits a single slog entry keyed event=ResolverRejectEvent
-// with a `reason` label so operators can build a counter without changing
-// the resolver. DB errors log at Warn (they may indicate infra trouble);
-// the other three log at Info (expected hostile traffic).
+// Resolve returns the tenant_id for the upstream Google email. It returns
+// ErrUnauthorized for empty/unverified emails (never trust unverified claims)
+// and for any DB miss or error (don't leak DB state as auth decisions); the AS
+// maps all to a 403 at /idp/callback. Every rejection emits one slog entry
+// (event=ResolverRejectEvent + `reason`): DB errors at Warn, the rest at Info.
 func (r *MemoryUserResolver) Resolve(ctx context.Context, c idp.Claims) (string, error) {
 	logger := r.Logger
 	if logger == nil {

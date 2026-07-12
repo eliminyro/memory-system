@@ -84,10 +84,9 @@ func TestCodeStore_ExpiredRejected(t *testing.T) {
 	}
 }
 
-// TestCodeStore_NonceRoundTrip guards the authlet v1.0.3 client-nonce
-// replay defense: the nonce set at /authorize must survive Save→ConsumeOnce
-// so it can be minted into the id_token. A dropped nonce silently no-ops
-// the defense on this Postgres-backed store.
+// TestCodeStore_NonceRoundTrip guards the authlet v1.0.3 client-nonce replay
+// defense: the nonce set at /authorize must survive Save→ConsumeOnce to be
+// minted into the id_token; a dropped nonce silently no-ops the defense.
 func TestCodeStore_NonceRoundTrip(t *testing.T) {
 	s := New(openTestDB(t))
 	ctx := context.Background()

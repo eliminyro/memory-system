@@ -5,18 +5,10 @@ import (
 	"strings"
 )
 
-// CORS allows cross-origin requests from browser-based OAuth public clients
-// (MCP Inspector on localhost, Claude.ai's custom-connector backend, etc.)
-// to the public OAuth surface: /oauth/*, /.well-known/*, and /mcp.
-//
-// memory-mcp has no same-product browser UI on its own origin, so unlike
-// hilo's CORS this does not maintain an allowlist of credentialed origins.
-// All OAuth/MCP requests get the request Origin reflected; credentials
-// (cookies) are never allowed — clients on these endpoints use Bearer JWT
-// auth and PKCE binds the code to the registered client_id.
-//
-// Anything else gets no CORS headers and the browser blocks the cross-origin
-// response by default.
+// CORS reflects the request Origin on the public OAuth/MCP surface (/oauth/*,
+// /.well-known/*, /mcp) for browser-based public clients. Credentials are never
+// allowed — Bearer JWT + PKCE secures these endpoints, so no credentialed-origin
+// allowlist is kept (unlike hilo). Other paths get no CORS headers.
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")

@@ -56,10 +56,8 @@ type SearchParams struct {
 	Limit       int
 }
 
-// Hybrid retrieval fusion constants. Weights and floor follow the
-// production-tested values from the "RAG to memory systems" guidance: lexical
-// signal is weighted higher than vector because a row that matches BOTH is
-// genuinely relevant, while the long tail of weak vector-only matches is noise.
+// Hybrid retrieval fusion constants. Lexical is weighted higher than vector: a row
+// matching BOTH is genuinely relevant, while weak vector-only matches are noise.
 const (
 	fuseVecWeight = 0.4 // weight of vector similarity when both signals fire
 	fuseLexWeight = 0.6 // weight of lexical rank when both signals fire
@@ -68,10 +66,8 @@ const (
 	tierStdMin    = 0.5 // >= this is "standard"; below is "low"
 )
 
-// hybridRow is the raw candidate scanned from the FULL OUTER JOIN: a section
-// that matched the vector search, the lexical search, or both. Fusion happens
-// in Go (fuseHybrid) so normalization, weighting, the floor, and tiering are
-// pure and unit-testable.
+// hybridRow is a raw candidate from the FULL OUTER JOIN (vector, lexical, or both).
+// Fusion happens in Go (fuseHybrid) so it stays pure and unit-testable.
 type hybridRow struct {
 	SectionID      uuid.UUID  `gorm:"column:section_id"`
 	DocumentID     uuid.UUID  `gorm:"column:document_id"`
@@ -90,8 +86,7 @@ type hybridRow struct {
 	SectionCreated time.Time  `gorm:"column:section_created"`
 }
 
-// relevanceTier calibrates a fused score into a label the model can act on
-// directly, instead of asking it to interpret a raw float.
+// relevanceTier calibrates a fused score into a label the model can act on.
 func relevanceTier(score float64) string {
 	switch {
 	case score >= tierHighMin:
@@ -103,11 +98,10 @@ func relevanceTier(score float64) string {
 	}
 }
 
-// fuseHybrid normalizes lexical ranks against the batch max, fuses them with
-// vector similarity, drops sub-floor results, calibrates tiers, sorts
-// descending, and caps to limit. Lexical-only matches (no vector hit) are
-// retained — that recall is the whole point of the FULL OUTER JOIN — but
-// weighted by the lexical weight alone, so they top out at the "standard" tier.
+// fuseHybrid normalizes lexical ranks to the batch max, fuses with vector
+// similarity, drops sub-floor results, tiers, sorts desc, and caps to limit.
+// Lexical-only matches are kept (the point of the FULL OUTER JOIN) but weighted by
+// lexical weight alone, so they top out at "standard" tier.
 func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
 	var maxLex float64
 	for _, r := range rows {
@@ -164,9 +158,9 @@ func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
 	return out
 }
 
-// HybridSearch gathers vector and lexical candidates (each scope-filtered and
-// capped) via a FULL OUTER JOIN so lexical-only matches are recalled, then
-// fuses them in Go. Scope filters run inside both CTEs, before ranking.
+// HybridSearch gathers vector and lexical candidates (scope-filtered, capped) via
+// a FULL OUTER JOIN so lexical-only matches are recalled, then fuses them in Go.
+// Scope filters run inside both CTEs, before ranking.
 func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([]SearchResult, error) {
 	if p.Limit <= 0 {
 		p.Limit = 10
@@ -314,9 +308,8 @@ func (r *SectionRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id 
 	return &section, nil
 }
 
-// MarkVerified sets verified_at = NOW() on the section if it belongs to a
-// document in one of the caller's accessible tenants. Returns ErrNotFound if
-// the section doesn't exist in scope.
+// MarkVerified sets verified_at = NOW() if the section belongs to one of the
+// caller's accessible tenants. ErrNotFound if not in scope.
 func (r *SectionRepository) MarkVerified(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Model(&models.Section{}).

@@ -9,33 +9,23 @@ type StalenessThreshold struct {
 
 func (StalenessThreshold) TableName() string { return "staleness_thresholds" }
 
-// Duplicate-similarity thresholds. Both paths use section-level cosine
-// similarity (best-matching section pair across two docs / two embeddings),
-// but they tune independently:
-//
+// Duplicate-similarity thresholds. Both use section-level cosine (best-matching
+// section pair), tuned independently:
 //   - DuplicateGuardThreshold gates the write-time store_memory check
-//     (FindSimilarDocuments — incoming section embeddings vs every existing
-//     section's embedding). A match means the new write substantially
-//     repeats an existing section.
+//     (FindSimilarDocuments): new section embeddings vs every existing section.
+//   - ScanThreshold gates the nightly cleanup scanner (FindNearDuplicatePairs):
+//     MAX cosine over all section-pair combos per doc pair.
 //
-//   - ScanThreshold gates the nightly cleanup scanner
-//     (FindNearDuplicatePairs — for each pair of docs in a tenant, take the
-//     MAX cosine over all section-pair combinations). A match means two
-//     docs share at least one near-identical section.
-//
-// Both knobs are kept separate so a tenant can run aggressive store-time
-// dedup (low threshold) without flooding the nightly cleanup queue, or vice
-// versa. ScanThreshold defaults higher because the scanner output is queue
-// noise to the human reviewer; the write-time guard fires once per
-// store_memory call so a slightly looser bar is tolerable.
+// Kept separate so a tenant can run aggressive store-time dedup without flooding
+// the nightly queue. ScanThreshold defaults higher — scanner output is reviewer
+// queue noise, while the write-time guard fires once per store_memory call.
 const (
 	DuplicateGuardThreshold = 0.70
 	ScanThreshold           = 0.85
 )
 
-// InferDocType classifies a document by category/slug when the caller didn't
-// set doc_type explicitly. Mirrors the SQL backfill rules applied to legacy
-// docs on first migration so new writes land in the same buckets.
+// InferDocType classifies a document by category/slug when doc_type wasn't set.
+// Mirrors the SQL backfill rules for legacy docs so new writes land the same.
 func InferDocType(category string, subcategory *string, slug string) string {
 	switch category {
 	case "projects":
@@ -60,8 +50,7 @@ func InferDocType(category string, subcategory *string, slug string) string {
 	}
 }
 
-// containsFold is a local, case-insensitive substring test — avoids importing
-// strings from a constants package.
+// containsFold is a local case-insensitive substring test.
 func containsFold(s, sub string) bool {
 	if len(sub) > len(s) {
 		return false

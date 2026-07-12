@@ -5,15 +5,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// Store is memory-system's storage.Storage implementation. It groups the four
-// sub-stores against a single *gorm.DB so they share transactions and
-// connection pooling.
+// Store is memory-system's storage.Storage implementation, grouping the four
+// sub-stores on one *gorm.DB so they share transactions and connection pooling.
 type Store struct {
 	db *gorm.DB
 }
 
-// New constructs a Store backed by the supplied GORM DB. The DB must
-// already have the authlet tables migrated.
+// New constructs a Store backed by db, which must already have the authlet
+// tables migrated.
 func New(db *gorm.DB) *Store { return &Store{db: db} }
 
 // Clients returns the ClientStore view.

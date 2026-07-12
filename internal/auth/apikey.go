@@ -48,15 +48,13 @@ func KeyPrefix(plaintext string) string {
 type KeyInfo struct {
 	TenantID uuid.UUID
 	Email    string
-	// SubjectID is the unified authorization subject id for the key: the key's
-	// explicit subject_id when set, else the tenant service principal
-	// "svc:<tenant_id>". Always a user-type subject.
+	// SubjectID is the key's unified subject id: its explicit subject_id when
+	// set, else the tenant service principal "svc:<tenant_id>". Always user-type.
 	SubjectID string
 }
 
-// keySubjectID resolves an API key's authorization subject id: the explicit
-// subject_id when present and non-empty, else the tenant service principal
-// "svc:<tenant_id>" (see authz.ServicePrincipalID).
+// keySubjectID resolves an API key's subject id: the explicit subject_id when
+// non-empty, else the tenant service principal (see authz.ServicePrincipalID).
 func keySubjectID(subjectID *string, tenantID uuid.UUID) string {
 	if subjectID != nil && *subjectID != "" {
 		return *subjectID

@@ -29,12 +29,9 @@ func (s *MemoryService) GetCleanupQueue(ctx context.Context, limit int, includeR
 	return s.cleanup.ListPending(ctx, tid, limit)
 }
 
-// MarkCleanupDone resolves a queue entry. mergedInto is used when resolution
-// is "merged" to record which doc survived. Routed through an editor Check on
-// the entry's referenced document (finding #17): both docs in a queue entry
-// belong to the entry's tenant, so editor on one is equivalent to membership of
-// that tenant — this denies resolving a common-pool / cross-tenant entry
-// without the corresponding write right.
+// MarkCleanupDone resolves a queue entry; mergedInto records the survivor when
+// resolution is "merged". Editor Check on the referenced doc (finding #17):
+// denies resolving a common-pool/cross-tenant entry without the write right.
 func (s *MemoryService) MarkCleanupDone(ctx context.Context, queueID uuid.UUID, resolution, note string, mergedInto *uuid.UUID, overrideID *uuid.UUID) error {
 	tid, err := s.resolveTenant(ctx, overrideID)
 	if err != nil {
@@ -58,18 +55,14 @@ func (s *MemoryService) MarkCleanupDone(ctx context.Context, queueID uuid.UUID, 
 	return s.cleanup.Resolve(ctx, tid, queueID, resolution, note, mergedInto)
 }
 
-// MergeResult describes what happened during a merge: the surviving doc's
-// post-merge view and the section-id → new-ordinal mapping for client bookkeeping.
+// MergeResult holds the surviving doc's post-merge view.
 type MergeResult struct {
 	Winner *DocumentView `json:"winner"`
 }
 
-// MergeDocuments moves sections from the loser into the winner per the caller's
-// sections_to_keep list, deletes unwanted sections, and deletes the loser. The
-// caller is responsible for ordering sections_to_keep in the desired final order.
-//
-// Any section ID in sections_to_keep must belong to either winner or loser; a
-// stranger ID rejects the whole operation.
+// MergeDocuments moves the sections in sections_to_keep (in the caller's desired
+// final order) into the winner, deletes the rest, and deletes the loser. A keep
+// ID not belonging to winner or loser rejects the whole operation.
 func (s *MemoryService) MergeDocuments(
 	ctx context.Context,
 	winnerID, loserID uuid.UUID,
@@ -115,7 +108,7 @@ func (s *MemoryService) MergeDocuments(
 			return fmt.Errorf("%w: cannot merge across tenants", apperr.ErrInvalidInput)
 		}
 
-		// Build membership: which doc does each section belong to?
+		// Map each section to its owning doc.
 		ownership := map[uuid.UUID]uuid.UUID{}
 		var allSections []models.Section
 		if err := tx.Where("document_id IN ?", []uuid.UUID{winnerID, loserID}).Find(&allSections).Error; err != nil {
@@ -170,8 +163,7 @@ func (s *MemoryService) MergeDocuments(
 	if err != nil {
 		return nil, fmt.Errorf("reload winner: %w", err)
 	}
-	// Post-merge view uses the caller's tenant settings for staleness; force-read
-	// is true because the caller just authored the merge — no need to refuse it.
+	// force-read: the caller just authored the merge, so don't refuse the view.
 	settings := s.tenantSettings(ctx, tid)
 	view, err := buildDocumentView(ctx, s.thresholds, postMerge, settings.StalenessMode, true)
 	if err != nil {

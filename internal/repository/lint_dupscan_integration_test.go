@@ -20,9 +20,8 @@ import (
 	"github.com/eliminyro/memory-system/internal/repository"
 )
 
-// dupTestDim matches the dimension the other Postgres integration tests use so
-// a shared test database migrated by one suite doesn't trip the dimension
-// guard in the other.
+// dupTestDim matches the dimension the other Postgres integration tests use so a
+// shared test DB migrated by one suite doesn't trip the other's dimension guard.
 const dupTestDim = 768
 
 func openLintPG(t *testing.T) *gorm.DB {
@@ -60,9 +59,8 @@ func normalizeVec(v []float32) {
 	}
 }
 
-// randUnit returns a random unit vector. In 768 dims the cosine similarity of
-// two independent draws concentrates tightly around zero (std ~1/sqrt(768)),
-// so seeded "noise" documents stay far below any near-duplicate threshold.
+// randUnit returns a random unit vector. In 768 dims two independent draws have
+// cosine near zero (std ~1/sqrt(768)), so noise stays far below any threshold.
 func randUnit(rng *rand.Rand) []float32 {
 	v := make([]float32, dupTestDim)
 	for i := range v {
@@ -156,10 +154,9 @@ func seedNoise(t *testing.T, db *gorm.DB, tenantID uuid.UUID, n int, rng *rand.R
 	}
 }
 
-// TestFindNearDuplicatePairs_Integration seeds a larger set of sections and
-// asserts the bounded nightly scan (a) completes well within its timeout, (b)
-// still surfaces a planted near-duplicate, and (c) never returns a pair drawn
-// from the shared common pool (audit #14 — tenant-owned scope only).
+// TestFindNearDuplicatePairs_Integration seeds a larger section set and asserts the
+// bounded nightly scan (a) finishes within its timeout, (b) still surfaces a planted
+// near-duplicate, and (c) never returns a common-pool pair (audit #14 — tenant scope).
 func TestFindNearDuplicatePairs_Integration(t *testing.T) {
 	db := openLintPG(t)
 	rng := rand.New(rand.NewSource(1))
@@ -167,8 +164,7 @@ func TestFindNearDuplicatePairs_Integration(t *testing.T) {
 	tenantID := seedTenant(t, db)
 	t.Cleanup(func() { cleanupTenant(db, tenantID) })
 
-	// A larger set of unrelated sections — this is the O(N^2) blast radius the
-	// bound is protecting.
+	// A larger set of unrelated sections — the O(N^2) blast radius the bound protects.
 	seedNoise(t, db, tenantID, 300, rng)
 
 	// Planted near-duplicate pair within the tenant.
@@ -176,9 +172,9 @@ func TestFindNearDuplicatePairs_Integration(t *testing.T) {
 	a := seedDoc(t, db, tenantID, "planted-a", base)
 	b := seedDoc(t, db, tenantID, "planted-b", nearDup(base, rng, 0.001))
 
-	// A near-identical doc in the shared common (bootstrap) pool. Under the old
-	// readTenants-merged scope this would have paired with tenant-x; the
-	// tenant-owned scope must exclude it.
+	// A near-identical doc in the shared common (bootstrap) pool. The old
+	// readTenants-merged scope would have paired it with tenant-x; tenant-owned
+	// scope must exclude it.
 	xEmb := randUnit(rng)
 	seedDoc(t, db, tenantID, "tenant-x", xEmb)
 	commonC := seedDoc(t, db, models.BootstrapTenantID, "common-c-"+uuid.NewString(), nearDup(xEmb, rng, 0.001))
@@ -192,9 +188,8 @@ func TestFindNearDuplicatePairs_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	// The bound is a 30s statement_timeout; a healthy run over this set is
-	// sub-second. Anything near the timeout means the bound was the only thing
-	// that stopped it.
+	// The bound is a 30s statement_timeout; a healthy run here is sub-second.
+	// Anything near the timeout means the bound was the only thing that stopped it.
 	if elapsed > 25*time.Second {
 		t.Fatalf("scan did not complete within the bound: took %s", elapsed)
 	}
@@ -216,9 +211,8 @@ func TestFindNearDuplicatePairs_Integration(t *testing.T) {
 	}
 }
 
-// TestCheckNearDuplicates_PairCap_Integration proves the user-triggerable lint
-// (audit #10) enforces its result-set cap: with a generous cap all planted
-// pairs surface, with cap=1 the LIMIT truncates the output.
+// TestCheckNearDuplicates_PairCap_Integration proves the user-triggerable lint (audit
+// #10) enforces its result-set cap: a generous cap surfaces all pairs, cap=1 truncates.
 func TestCheckNearDuplicates_PairCap_Integration(t *testing.T) {
 	db := openLintPG(t)
 	rng := rand.New(rand.NewSource(2))

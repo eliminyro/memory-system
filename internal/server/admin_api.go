@@ -11,19 +11,17 @@ import (
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
-// adminAPIHandler backs the /api/admin/* endpoints that the web admin page
-// consumes. It is mounted behind the same bearer + UserContextBridge stack as
-// the rest of /api, plus the adminOnly gate — so every handler here runs with
-// an authenticated, admin subject in context. Reads are metadata-only (the
-// APIKey hash is `json:"-"` and never serialized); freshly-issued/rotated keys
-// return the plaintext exactly once in the response body.
+// adminAPIHandler backs /api/admin/*, mounted behind bearer + UserContextBridge
+// plus the adminOnly gate, so every handler runs with an authenticated admin
+// subject. Reads are metadata-only (APIKey hash is `json:"-"`); newly issued or
+// rotated keys return the plaintext exactly once.
 type adminAPIHandler struct {
 	memory *service.MemoryService
 }
 
-// adminOnly refuses non-admin principals with a clean 403 before dispatch. The
-// service methods re-check (defense in depth), but they surface admin-denial as
-// a 400; the web page needs a true 403 to gate its UI.
+// adminOnly refuses non-admins with a clean 403 before dispatch. Service methods
+// re-check (defense in depth) but surface denial as 400; the web page needs a
+// true 403 to gate its UI.
 func adminOnly(svc *service.MemoryService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,8 +36,8 @@ func adminOnly(svc *service.MemoryService) func(http.Handler) http.Handler {
 
 func (h *adminAPIHandler) mux() *http.ServeMux {
 	m := http.NewServeMux()
-	// Probe used by the UI to decide whether to show the admin section; only
-	// reachable when adminOnly passed, so a 200 means "you are an admin".
+	// UI probe for whether to show the admin section; only reachable past
+	// adminOnly, so a 200 means "you are an admin".
 	m.HandleFunc("GET /whoami", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"admin": true})
 	})
@@ -235,8 +233,8 @@ func (h *adminAPIHandler) revokeUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// keyIssueResponse is the one-time payload returned when a key is created or
-// rotated: the plaintext (shown once) plus non-secret metadata.
+// keyIssueResponse is the one-time create/rotate payload: plaintext (shown once)
+// plus non-secret metadata.
 func keyIssueResponse(plaintext string, key *models.APIKey) map[string]any {
 	return map[string]any{
 		"id":         key.ID,

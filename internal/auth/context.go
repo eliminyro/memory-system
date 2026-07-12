@@ -36,17 +36,15 @@ func EmailFromContext(ctx context.Context) string {
 	return email
 }
 
-// SubjectTypeUser is the only subject type in the unified authorization model:
-// humans and tenant service principals are both "user" subjects. It matches
-// authz.TypeUser and is the value fed to the Check evaluator's subject type in
-// Pass 2.
+// SubjectTypeUser is the only subject type in the unified authorization model
+// (humans and tenant service principals are both "user"). Matches authz.TypeUser
+// and feeds the Pass 2 Check evaluator's subject type.
 const SubjectTypeUser = "user"
 
-// Subject is the unified authorization principal for a request. Both
-// JWT-authenticated humans (subject id == tenant_users.id) and API-key callers
-// (subject id == the key's subject_id, else "svc:<tenant_id>") resolve to a
-// Subject. The relationship-based Check evaluator (wired in Pass 2) is
-// evaluated against it. Type is always SubjectTypeUser today.
+// Subject is the unified authorization principal for a request. JWT humans
+// (id == tenant_users.id) and API-key callers (id == the key's subject_id, else
+// "svc:<tenant_id>") both resolve to one; the Pass 2 Check evaluator runs
+// against it. Type is always SubjectTypeUser today.
 type Subject struct {
 	Type string
 	ID   string
@@ -61,8 +59,8 @@ func WithSubject(ctx context.Context, s Subject) context.Context {
 }
 
 // SubjectFromContext extracts the authorization subject. The bool is false when
-// no subject was resolved (e.g. a JWT caller with no tenant_users row); Pass 2
-// callers fail closed on that.
+// none was resolved (e.g. a JWT caller with no tenant_users row); Pass 2 fails
+// closed on that.
 func SubjectFromContext(ctx context.Context) (Subject, bool) {
 	s, ok := ctx.Value(subjectContextKey{}).(Subject)
 	return s, ok
@@ -71,15 +69,14 @@ func SubjectFromContext(ctx context.Context) (Subject, bool) {
 type localAdminContextKey struct{}
 
 // WithLocalAdmin marks a context as an offline, inherently-privileged local
-// administrator. It exists solely for the memory-admin CLI, which operates
-// directly against the database (holding DATABASE_URL is already full control)
-// and therefore has no authenticated Subject to resolve. The service's admin
-// gate honors this flag so the CLI can reuse the exact same tuple-seeding
-// lifecycle methods as the network paths, with no duplicated orchestration.
+// admin. Exists solely for the memory-admin CLI, which runs directly against
+// the DB (holding DATABASE_URL is already full control) and has no Subject to
+// resolve; the admin gate honors this so the CLI reuses the same tuple-seeding
+// lifecycle methods as the network paths.
 //
-// SECURITY: only the in-process CLI ever sets this. Network entry points
-// (MCP, HTTP) construct their context from a real authenticated Subject and
-// never call this — so no request can escalate by setting it.
+// SECURITY: only the in-process CLI sets this. Network entry points (MCP, HTTP)
+// build context from a real authenticated Subject and never call it, so no
+// request can escalate by setting it.
 func WithLocalAdmin(ctx context.Context) context.Context {
 	return context.WithValue(ctx, localAdminContextKey{}, true)
 }

@@ -12,8 +12,7 @@ import (
 )
 
 // TestOllamaEmbedder_UpstreamErrorNotLeaked guards audit #18: a non-2xx upstream
-// response must NOT interpolate the provider's response body into the returned
-// error. The caller sees only the generic sentinel; the detail is logged.
+// body must NOT leak into the returned error — caller sees only the sentinel.
 func TestOllamaEmbedder_UpstreamErrorNotLeaked(t *testing.T) {
 	const secret = "SENSITIVE-UPSTREAM-DETAIL-do-not-leak"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

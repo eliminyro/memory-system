@@ -15,10 +15,8 @@ import (
 )
 
 // OpenAIEmbedder calls any OpenAI-compatible /v1/embeddings endpoint. The wire
-// format ({"model","input"} -> {"data":[{"embedding":[...]}]}) is identical
-// across OpenAI, Azure OpenAI, vLLM, LM Studio, LocalAI, and HuggingFace TEI,
-// so one client parameterized by base URL + optional API key + model covers
-// all of them.
+// format is shared across OpenAI, Azure, vLLM, LM Studio, LocalAI, and HF TEI,
+// so one client (base URL + optional API key + model) covers all of them.
 type OpenAIEmbedder struct {
 	baseURL    string
 	apiKey     string
@@ -27,12 +25,10 @@ type OpenAIEmbedder struct {
 	client     *http.Client
 }
 
-// NewOpenAIEmbedder builds an OpenAI-compatible embedder. baseURL is the API
-// root that exposes /embeddings (e.g. https://api.openai.com/v1); a trailing
-// slash is tolerated. apiKey may be empty for local servers that don't require
-// auth. dimensions, when > 0, is sent as the requested output size for models
-// that support truncation (text-embedding-3-*) and is the dimension the corpus
-// is pinned to by the startup guard.
+// NewOpenAIEmbedder builds an OpenAI-compatible embedder. baseURL is the API root
+// exposing /embeddings (trailing slash tolerated); apiKey may be empty for local
+// servers. dimensions>0 requests output truncation (text-embedding-3-*) and is
+// the dimension the corpus is pinned to by the startup guard.
 func NewOpenAIEmbedder(baseURL, apiKey, model string, dimensions int) *OpenAIEmbedder {
 	return &OpenAIEmbedder{
 		baseURL:    strings.TrimRight(baseURL, "/"),
@@ -48,8 +44,7 @@ func (e *OpenAIEmbedder) Dimensions() int { return e.dimensions }
 type openAIEmbedRequest struct {
 	Model string `json:"model"`
 	Input string `json:"input"`
-	// Dimensions is only emitted when > 0 (omitempty). Models that support
-	// output-dimension truncation honor it; lenient servers ignore it.
+	// Emitted only when > 0 (omitempty); truncation-capable models honor it, others ignore.
 	Dimensions int `json:"dimensions,omitempty"`
 }
 
@@ -87,9 +82,8 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) (pgvector.Vecto
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		// Full upstream status/body is logged server-side only (audit #18);
-		// callers get a generic sentinel so provider internals never leak into
-		// MCP responses.
+		// Full status/body logged server-side only (audit #18); caller gets a
+		// generic sentinel so provider internals never leak into MCP responses.
 		slog.Error("openai embedding request failed", "status", resp.StatusCode, "body", string(b))
 		return pgvector.Vector{}, ErrEmbeddingUnavailable
 	}

@@ -2,12 +2,10 @@ package authletas
 
 import "net/http"
 
-// WWWAuth401 returns middleware that injects an RFC 6750 / RFC 9728
-// WWW-Authenticate challenge on any 401 response produced downstream,
-// unless the inner handler already set the header. authlet's BearerMW
-// emits the challenge itself; this middleware covers the legacy
-// API-key path so first-contact MCP clients can always discover the
-// authorization server.
+// WWWAuth401 injects an RFC 6750 / RFC 9728 WWW-Authenticate challenge on any
+// downstream 401 unless the inner handler already set the header. Covers the
+// legacy API-key path (BearerMW emits its own) so first-contact MCP clients can
+// always discover the AS.
 func (w *Wiring) WWWAuth401() func(http.Handler) http.Handler {
 	challenge := `Bearer realm="MCP"`
 	if w.prmURL != "" {
@@ -32,6 +30,6 @@ func (cw *challengeWriter) WriteHeader(code int) {
 	cw.ResponseWriter.WriteHeader(code)
 }
 
-// Unwrap lets http.ResponseController reach underlying Flusher/Hijacker
-// implementations — required for MCP's SSE response path.
+// Unwrap lets http.ResponseController reach the underlying Flusher/Hijacker —
+// required for MCP's SSE response path.
 func (cw *challengeWriter) Unwrap() http.ResponseWriter { return cw.ResponseWriter }

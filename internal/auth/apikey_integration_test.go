@@ -39,9 +39,8 @@ func openAuthPG(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestValidateKeyRealDB exercises the real revocation check against a database:
-// a live key resolves to the right tenant + service-principal subject, an
-// unknown hash errors, and revoking the key makes it error.
+// TestValidateKeyRealDB exercises the real DB path: a live key resolves to the
+// right tenant + service-principal subject; unknown hash and revoked key error.
 func TestValidateKeyRealDB(t *testing.T) {
 	db := openAuthPG(t)
 	ctx := context.Background()
@@ -67,8 +66,7 @@ func TestValidateKeyRealDB(t *testing.T) {
 		t.Fatalf("create api key: %v", err)
 	}
 
-	// Valid key: resolves to the owning tenant + the tenant service principal
-	// subject (no explicit subject_id was pinned) + the tenant email.
+	// Valid key: resolves to owning tenant + service-principal subject + email.
 	info, err := v.ValidateKey(ctx, plaintext)
 	if err != nil {
 		t.Fatalf("ValidateKey(valid) error: %v", err)

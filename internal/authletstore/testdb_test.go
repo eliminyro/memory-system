@@ -7,11 +7,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// openTestDB returns a fresh in-memory sqlite DB with all authlet tables
-// migrated. Each test gets its own DB so tests are isolated. The
-// connection pool is capped at one so concurrent goroutines (used by the
-// ConsumeOnce atomic test) all share the same memory database — without
-// this, each new connection would see a different empty :memory: DB.
+// openTestDB returns a fresh in-memory sqlite DB with the authlet tables
+// migrated; each test gets its own for isolation. The pool is capped at one so
+// concurrent goroutines share one :memory: DB (else each connection sees its own).
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

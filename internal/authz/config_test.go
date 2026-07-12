@@ -2,8 +2,7 @@ package authz
 
 import "testing"
 
-// TestDefaultNamespace_Rewrites enumerates every relation's rewrite rule and
-// asserts it matches design D1 exactly (task 2.1).
+// TestDefaultNamespace_Rewrites asserts every relation's rewrite rule matches design D1 (task 2.1).
 func TestDefaultNamespace_Rewrites(t *testing.T) {
 	ns := DefaultNamespace()
 
@@ -43,8 +42,7 @@ func TestDefaultNamespace_Rewrites(t *testing.T) {
 	}
 }
 
-// TestDefaultNamespace_WildcardViewerSubject confirms the tenant viewer relation
-// documents user:* as an allowed direct subject (the public-read enabler).
+// TestDefaultNamespace_WildcardViewerSubject confirms tenant#viewer lists user:* as a direct subject (public-read enabler).
 func TestDefaultNamespace_WildcardViewerSubject(t *testing.T) {
 	ns := DefaultNamespace()
 	rd, ok := ns.Relation(TypeTenant, RelViewer)

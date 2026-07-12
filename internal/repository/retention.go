@@ -9,9 +9,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// RetentionRepository runs the retention sweep's SQL: archive expired docs and
-// hard-delete docs past the archive grace window. No LLM calls (mirrors the
-// dedup scanner's repository).
+// RetentionRepository runs the retention sweep SQL: archive expired docs and
+// hard-delete docs past the archive grace window. No LLM calls.
 type RetentionRepository struct {
 	db *gorm.DB
 }
@@ -20,12 +19,10 @@ func NewRetentionRepository(db *gorm.DB) *RetentionRepository {
 	return &RetentionRepository{db: db}
 }
 
-// ArchiveExpired sets archived_at on documents whose freshest section is older
-// than the cutoff for their doc_type. A document is a candidate only when NO
-// section has been touched on/after the cutoff, where "touched" is the latest
-// of verified_at, updated_at, or created_at — so editing a section (which bumps
-// updated_at but not verified_at) keeps its document alive, not just an explicit
-// mark_verified. One UPDATE per doc_type keeps the per-type cutoff binding simple.
+// ArchiveExpired sets archived_at on docs whose freshest section is older than
+// the doc_type cutoff. "Freshest" = latest of verified_at/updated_at/created_at,
+// so editing a section (bumps updated_at, not verified_at) keeps a doc alive, not
+// just mark_verified. One UPDATE per doc_type.
 func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.UUID, cutoffs map[string]time.Time) (int64, error) {
 	const sql = `
 		UPDATE documents d
@@ -50,10 +47,10 @@ func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.
 	return total, nil
 }
 
-// DeleteArchived hard-deletes documents archived before `before`, in one
-// atomic statement: it records a deletion_events audit row per victim, purges
-// any cleanup_queue rows referencing a victim (no orphans), then deletes the
-// documents (sections cascade via FK). Returns the number of documents deleted.
+// DeleteArchived hard-deletes docs archived before `before` in one atomic
+// statement: writes a deletion_events audit row per victim, purges cleanup_queue
+// rows referencing a victim, then deletes the docs (sections cascade). Returns
+// count deleted.
 func (r *RetentionRepository) DeleteArchived(ctx context.Context, tenantID uuid.UUID, before time.Time) (int64, error) {
 	const sql = `
 		WITH victims AS (

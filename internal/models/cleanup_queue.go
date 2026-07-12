@@ -13,9 +13,8 @@ const (
 	CleanupResolutionFalsePositive = "false_positive"
 )
 
-// CleanupQueue holds near-duplicate candidates detected by the nightly lint
-// scan. A client-side scheduled agent pulls pending rows, performs LLM-assisted
-// merges, and marks them resolved.
+// CleanupQueue holds near-duplicate candidates from the nightly lint scan. A
+// scheduled agent pulls pending rows, LLM-merges, and marks them resolved.
 type CleanupQueue struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	TenantID       uuid.UUID  `gorm:"type:uuid;not null;index:idx_cleanup_pending,priority:1" json:"tenant_id"`

@@ -1,11 +1,7 @@
-// Package staleness decides whether a section's content should be withheld from
-// a reader because its verification is older than the configured threshold for
-// the parent document's type, AND the content makes claims that can go stale
-// (references to code paths, symbols, or identifiers in source files).
-//
-// The separation between "stale but advisory" and "stale and guarded" is
-// deliberate: general learnings age gracefully, but claims like "function X is
-// at file Y:Z" rot and actively mislead when trusted blindly.
+// Package staleness decides whether a section's content is withheld: verified
+// older than its doc_type threshold AND making claims that rot (code paths,
+// symbols). The advisory-vs-guarded split is deliberate — "function X at Y:Z"
+// claims actively mislead when stale, plain learnings don't.
 package staleness
 
 import (
@@ -22,25 +18,20 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
-// codePathPattern matches content that names files, paths, or symbols likely
-// to change with code. Hits include:
-//   - explicit path fragments ("internal/foo.go", "src/bar.ts")
-//   - file extensions on tokens (".go", ".ts", ".py", ".rs", ".tsx", ".jsx")
-//   - function/file:line references ("foo.go:42")
+// codePathPattern matches file paths, extensions, or file:line refs likely to
+// rot with code (e.g. "internal/foo.go", ".ts", "foo.go:42").
 var codePathPattern = regexp.MustCompile(
 	`(?:\b(?:internal|cmd|pkg|src|app|lib|ops|bin)/[\w./-]+` +
 		`|\b[\w.-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|kt|rb|php|sh|yaml|yml|tf|hcl|sql)\b` +
 		`|\b[\w.-]+\.(?:go|ts|tsx|js|jsx|py|rs):\d+)`,
 )
 
-// MentionsCodePath returns true if content references a path or filename that
-// is likely to rot when code changes.
+// MentionsCodePath reports whether content references a code path likely to rot.
 func MentionsCodePath(content string) bool {
 	return codePathPattern.MatchString(content)
 }
 
-// ExtractVerifyHints pulls the first few matched code paths out of content
-// for use in a verification hint. Returns at most `max` unique matches.
+// ExtractVerifyHints returns up to `max` unique matched code paths for a verification hint.
 func ExtractVerifyHints(content string, max int) []string {
 	if max <= 0 {
 		max = 5
@@ -62,8 +53,7 @@ func ExtractVerifyHints(content string, max int) []string {
 	return out
 }
 
-// Previewer returns a short preview of content for refused sections.
-// Default preview length is 200 chars.
+// Preview returns a short preview of content for refused sections (default 200 chars).
 func Preview(content string, max int) string {
 	if max <= 0 {
 		max = 200
@@ -75,8 +65,7 @@ func Preview(content string, max int) string {
 	return content[:max] + "…"
 }
 
-// ThresholdStore loads and caches staleness thresholds. Thresholds rarely
-// change, so cache for 5 minutes to avoid a DB hit on every search.
+// ThresholdStore loads and caches staleness thresholds (5-min TTL to avoid a DB hit per search).
 type ThresholdStore struct {
 	db *gorm.DB
 
@@ -94,8 +83,7 @@ func NewThresholdStore(db *gorm.DB) *ThresholdStore {
 	}
 }
 
-// DaysFor returns the threshold in days for a doc_type, falling back to the
-// reference threshold if no row exists. Cached.
+// DaysFor returns the day threshold for a doc_type, falling back to the reference threshold. Cached.
 func (s *ThresholdStore) DaysFor(ctx context.Context, docType string) (int, error) {
 	if err := s.refreshIfStale(ctx); err != nil {
 		return 0, err
@@ -119,10 +107,9 @@ func (s *ThresholdStore) refreshIfStale(ctx context.Context) error {
 		return nil
 	}
 
-	// Acquire write lock before loading so concurrent cache misses serialise —
-	// otherwise every goroutine that hits a stale cache issues its own DB load.
-	// Double-check under the write lock in case another goroutine refreshed
-	// while we were waiting.
+	// Write lock before loading so concurrent misses serialise (else every
+	// goroutine issues its own DB load). Double-check under the lock in case
+	// another goroutine already refreshed.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cache != nil && time.Since(s.cachedAt) < s.defaultTTL {
@@ -143,8 +130,7 @@ func (s *ThresholdStore) refreshIfStale(ctx context.Context) error {
 	return nil
 }
 
-// Invalidate forces a reload on the next lookup. Exposed so admin tools that
-// change thresholds can signal the store.
+// Invalidate forces a reload on the next lookup (for admin tools that change thresholds).
 func (s *ThresholdStore) Invalidate() {
 	s.mu.Lock()
 	s.cache = nil
@@ -159,13 +145,11 @@ type CheckResult struct {
 	Age           time.Duration
 }
 
-// ErrGuarded is returned when the caller must either pass force_read or
-// verify-then-mark the section before reading. Wrap with context where needed.
+// ErrGuarded signals the caller must pass force_read or verify-then-mark before reading.
 var ErrGuarded = errors.New("section requires verification")
 
-// Check evaluates whether a section is guarded. A section with NULL verified_at
-// is treated as verified at creation — the migration backfills this for legacy
-// rows, and the model default handles new rows.
+// Check evaluates whether a section is guarded. NULL verified_at is treated as
+// verified at creation (migration backfills legacy rows; model default handles new).
 func Check(ctx context.Context, store *ThresholdStore, section models.Section, docType string) (CheckResult, error) {
 	days, err := store.DaysFor(ctx, docType)
 	if err != nil {

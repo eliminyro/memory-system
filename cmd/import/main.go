@@ -34,8 +34,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// --tenant is mandatory: refuse to silently default to the shared
-	// bootstrap/common pool, which would pollute every tenant's read scope.
+	// --tenant is mandatory: silently defaulting to the shared bootstrap/common
+	// pool would pollute every tenant's read scope.
 	if *tenantFlag == "" {
 		slog.Error("--tenant is required; refusing to default to the shared bootstrap/common pool")
 		flag.Usage()
@@ -103,7 +103,6 @@ func main() {
 	// parent edge seeded during import.
 	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
 
-	// Inject tenant ID into context
 	ctx := auth.WithTenantID(context.Background(), tenantID)
 	var imported, failed int
 

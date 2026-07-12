@@ -135,9 +135,8 @@ func TestCheck_Matrix(t *testing.T) {
 }
 
 // TestCheck_DepthLimit confirms Check fails closed with a distinguishable error
-// when the evaluation exceeds the configured depth cap. The global-admin grant
-// resolves through document.editor -> tenant.member -> tenant.admin ->
-// system.admin (depth 3), so a cap of 2 forces ErrDepthExceeded.
+// past the depth cap. The gadmin grant resolves doc.editor -> tenant.member ->
+// tenant.admin -> system.admin (depth 3), so cap 2 forces ErrDepthExceeded.
 func TestCheck_DepthLimit(t *testing.T) {
 	store := NewMemoryStore()
 	seedWorld(t, store)
@@ -154,8 +153,7 @@ func TestCheck_DepthLimit(t *testing.T) {
 	}
 }
 
-// TestCheck_CycleSafety confirms a userset cycle terminates and denies rather
-// than recursing forever.
+// TestCheck_CycleSafety confirms a userset cycle terminates and denies rather than recursing forever.
 func TestCheck_CycleSafety(t *testing.T) {
 	store := NewMemoryStore()
 	ctx := context.Background()
@@ -184,8 +182,7 @@ func TestCheck_CycleSafety(t *testing.T) {
 	}
 }
 
-// TestCheck_UnknownRelation confirms an undefined relation is a distinguishable
-// error rather than a silent allow.
+// TestCheck_UnknownRelation confirms an undefined relation is a distinguishable error, not a silent allow.
 func TestCheck_UnknownRelation(t *testing.T) {
 	e := NewEngine(NewMemoryStore())
 	got, err := e.Check(context.Background(), TypeDocument, "d1", "owner", TypeUser, "alice")

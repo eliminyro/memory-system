@@ -13,16 +13,14 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-// bedrockInvoker is the minimal seam over the Bedrock Runtime client used by
-// AWSEmbedder. The real *bedrockruntime.Client satisfies it, so tests can swap
-// in a stub without any network access.
+// bedrockInvoker is the test seam over the Bedrock Runtime client; the real
+// *bedrockruntime.Client satisfies it, so tests can stub without network.
 type bedrockInvoker interface {
 	InvokeModel(ctx context.Context, in *bedrockruntime.InvokeModelInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.InvokeModelOutput, error)
 }
 
-// loadAWSConfig is a package-level seam so tests can inject a config whose
-// credential resolution deterministically fails, without depending on the host
-// AWS credential chain. Production callers get the standard default config.
+// loadAWSConfig is a test seam for injecting a config with deterministic
+// credential-resolution failure; production uses the standard default config.
 var loadAWSConfig = func(ctx context.Context, region string) (aws.Config, error) {
 	return config.LoadDefaultConfig(ctx, config.WithRegion(region))
 }
@@ -34,9 +32,8 @@ type AWSEmbedder struct {
 	dimensions int
 }
 
-// NewAWSEmbedder resolves AWS config + credentials from the standard chain and
-// builds a Bedrock-backed embedder. Credentials are never taken from config —
-// they come from the environment, shared config, or an assumed role.
+// NewAWSEmbedder resolves config + credentials from the standard AWS chain (env,
+// shared config, or assumed role — never from config) and builds the embedder.
 func NewAWSEmbedder(region, model string, dimensions int) (*AWSEmbedder, error) {
 	if region == "" {
 		return nil, fmt.Errorf("aws: region is required")
@@ -60,9 +57,8 @@ func NewAWSEmbedder(region, model string, dimensions int) (*AWSEmbedder, error) 
 	return newAWSEmbedder(bedrockruntime.NewFromConfig(cfg), model, dimensions), nil
 }
 
-// newAWSEmbedder wraps a bedrockInvoker directly. It exists so the success-path
-// tests can construct an embedder around a stub without going through the
-// credential-resolving public constructor.
+// newAWSEmbedder wraps a bedrockInvoker directly so success-path tests can build
+// around a stub, bypassing the credential-resolving public constructor.
 func newAWSEmbedder(inv bedrockInvoker, model string, dim int) *AWSEmbedder {
 	return &AWSEmbedder{
 		client:     inv,
@@ -94,10 +90,9 @@ type cohereResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-// Embed generates an embedding vector for the given text, dispatching on the
-// model family prefix. On any upstream error or empty result it logs the full
-// detail server-side and returns the tenant-safe ErrEmbeddingUnavailable
-// sentinel (audit #18) — provider internals never reach the caller.
+// Embed generates an embedding, dispatching on the model family prefix. Upstream
+// errors/empty results are logged server-side and returned as the tenant-safe
+// ErrEmbeddingUnavailable sentinel (audit #18) — provider internals never leak.
 func (e *AWSEmbedder) Embed(ctx context.Context, text string) (pgvector.Vector, error) {
 	var body []byte
 	var err error
@@ -125,8 +120,7 @@ func (e *AWSEmbedder) Embed(ctx context.Context, text string) (pgvector.Vector, 
 		Body:        body,
 	})
 	if err != nil {
-		// Log the full upstream detail server-side; never surface it to the
-		// caller (audit #18) — it can carry provider internals.
+		// Log full detail server-side; never surface to caller (audit #18).
 		slog.Error("bedrock embedding request failed", "model", e.model, "err", err)
 		return pgvector.Vector{}, ErrEmbeddingUnavailable
 	}

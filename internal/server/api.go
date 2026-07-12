@@ -13,16 +13,13 @@ import (
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
-// apiHandler holds the dependencies the JSON API needs. Every handler runs
-// behind the bearer middleware + UserContextBridge, so the request context
-// already carries the tenant; handlers pass overrideID = nil and let the
-// service resolve the tenant from context, exactly like the MCP tools.
+// apiHandler backs the JSON API. Every handler runs behind bearer + UserContextBridge,
+// so handlers pass overrideID = nil and let the service resolve the tenant from context.
 type apiHandler struct {
 	memory *service.MemoryService
 }
 
-// apiMux builds the /api router. Routes are registered without the /api
-// prefix because the caller strips it via http.StripPrefix.
+// mux builds the /api router; routes omit the /api prefix (caller strips it).
 func (h *apiHandler) mux() *http.ServeMux {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /index", h.getIndex)
@@ -34,9 +31,8 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
 	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 
-	// Admin surface: /api/admin/* (after the caller strips /api, seen here as
-	// /admin/*). Gated by adminOnly so non-admins get a clean 403; the shared
-	// bearer + UserContextBridge stack already put the subject in context.
+	// Admin surface /admin/* (i.e. /api/admin/*), gated by adminOnly so non-admins
+	// get a clean 403; the shared bearer + UserContextBridge stack set the subject.
 	admin := &adminAPIHandler{memory: h.memory}
 	m.Handle("/admin/", adminOnly(h.memory)(http.StripPrefix("/admin", admin.mux())))
 	return m
@@ -48,12 +44,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeErr maps apperr sentinels to an HTTP status + a JSON {error} body. Only
-// the mapped, safe-to-expose sentinels (ErrNotFound / ErrInvalidInput) put
-// their message on the wire. Any other error is an internal fault: the full
-// error is logged server-side and the client gets a generic body, so raw
-// internal strings (SQL, driver, connection-string fragments) never leak to
-// /api callers.
+// writeErr maps apperr sentinels to HTTP status + JSON {error}. Only the safe
+// sentinels (ErrNotFound / ErrInvalidInput) put their message on the wire; any
+// other error is logged and returns a generic body so internal strings (SQL,
+// driver, connection-string fragments) never leak to /api callers.
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apperr.ErrNotFound):
@@ -200,8 +194,8 @@ func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// deleteDocument resolves the doc by id (to its path) then deletes via the
-// audited by-path DeleteDocument — which also refuses common-pool docs.
+// deleteDocument resolves the doc by id to its path, then deletes via the audited
+// by-path DeleteDocument (which also refuses common-pool docs).
 func (h *apiHandler) deleteDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
