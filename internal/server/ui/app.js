@@ -97,7 +97,12 @@ async function apiFetch(path, opts = {}) {
     headers: { ...(opts.headers || {}), Authorization: `Bearer ${token}` },
   });
   if (res.status === 401) { sessionStorage.removeItem("access_token"); await beginLogin(); throw new Error("re-auth"); }
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    err.status = res.status; // let callers distinguish 403 (e.g. non-admin) from other failures
+    throw err;
+  }
   if (res.status === 204 || res.headers.get("content-length") === "0") return null;
   const ct = res.headers.get("content-type") || "";
   return ct.includes("application/json") ? res.json() : null;
@@ -512,6 +517,369 @@ function showError(err) {
   view.replaceChildren(el("p", { className: "state-msg state-err", textContent: err.message || String(err) }));
 }
 
+// ── Admin ───────────────────────────────────────────────────────────────────
+// Gated on GET /admin/whoami. The admin affordance is only ever created for
+// admins: a 403 means "not an admin" and is swallowed (distinct from 401, which
+// apiFetch already turns into a re-login). Every call goes through
+// apiFetch("/admin/..."). Reachable via the header "Admin" button / "#admin" hash.
+
+let isAdmin = false;
+
+// checkAdmin probes /admin/whoami. Returns true (and mounts the header entry
+// point) when the caller is an admin; returns false silently on 403 or any other
+// failure, so non-admins never receive the admin UI.
+async function checkAdmin() {
+  try {
+    const r = await apiFetch("/admin/whoami");
+    if (!r || !r.admin) return false;
+  } catch (err) {
+    // 403 => not an admin: do not surface admin, do not re-login. apiFetch has
+    // already handled 401 via re-login. Any other error: also stay silent.
+    return false;
+  }
+  isAdmin = true;
+  mountAdminEntry();
+  return true;
+}
+
+// mountAdminEntry adds an "Admin" button to the header and wires hash routing.
+// The element is created only for admins, so non-admins never receive it.
+function mountAdminEntry() {
+  const header = document.querySelector("header");
+  if (!header || document.getElementById("admin-link")) return;
+  const link = el("button", { id: "admin-link", className: "admin-link", textContent: "Admin", type: "button" });
+  link.addEventListener("click", () => { location.hash = "admin"; });
+  header.append(link);
+
+  window.addEventListener("hashchange", () => {
+    if (!isAdmin) return;
+    if (location.hash === "#admin") renderAdmin().catch(showError);
+    else renderBrowse().catch(showError);
+  });
+}
+
+// renderAdmin — admin root: list tenants + create-tenant form.
+async function renderAdmin() {
+  navStack.length = 0; // admin root — clear browse/search history
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let tenants;
+  try {
+    tenants = await apiFetch("/admin/tenants");
+  } catch (err) { showError(err); return; }
+  view.replaceChildren();
+
+  const hdr = el("div", { className: "cat-hdr" });
+  const browseBtn = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
+  browseBtn.addEventListener("click", () => { location.hash = ""; });
+  hdr.append(browseBtn, el("h2", { textContent: "Admin · Tenants" }));
+  view.append(hdr);
+
+  view.append(newTenantForm());
+
+  if (!tenants || !tenants.length) {
+    view.append(el("p", { className: "state-msg", textContent: "no tenants" }));
+    return;
+  }
+  const list = el("ul", { className: "doc-list" });
+  for (const t of tenants) {
+    const meta = [t.email, t.staleness_mode ? `staleness: ${t.staleness_mode}` : "", t.id].filter(Boolean).join(" · ");
+    const item = el("li", { className: "doc-item" },
+      el("h3", { textContent: t.name || "(unnamed)" }),
+      el("div", { className: "doc-meta", textContent: meta }),
+    );
+    item.addEventListener("click", () => { navStack.push(renderAdmin); showTenant(t); });
+    list.append(item);
+  }
+  view.append(list);
+}
+
+// newTenantForm — collapsed create-tenant form (name + email).
+function newTenantForm() {
+  const wrap = el("div", { className: "admin-form" });
+  const toggle = el("button", { textContent: "+ New tenant", className: "sec-btn", type: "button" });
+  const form = el("form", { className: "admin-form-fields" });
+  form.hidden = true;
+  const name = el("input", { className: "admin-input", type: "text", placeholder: "name", required: true });
+  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
+  const submit = el("button", { textContent: "Create", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(name, email, submit);
+  toggle.addEventListener("click", () => { form.hidden = !form.hidden; if (!form.hidden) name.focus(); });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    try {
+      await apiFetch("/admin/tenants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.value.trim(), email: email.value.trim() }),
+      });
+      renderAdmin();
+    } catch (err) {
+      submit.disabled = false;
+      alert("Create tenant failed: " + err.message);
+    }
+  });
+  wrap.append(toggle, form);
+  return wrap;
+}
+
+// showTenant — tenant detail: users + keys tables with their management forms.
+async function showTenant(t) {
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let users, keys;
+  try {
+    [users, keys] = await Promise.all([
+      apiFetch(`/admin/tenants/${t.id}/users`),
+      apiFetch(`/admin/tenants/${t.id}/keys`),
+    ]);
+  } catch (err) { showError(err); return; }
+  view.replaceChildren();
+
+  const hdr = el("div", { className: "doc-hdr" });
+  hdr.append(backBtn(), el("h1", { textContent: t.name || "(unnamed)" }));
+  view.append(hdr);
+  view.append(el("div", { className: "meta", textContent: `${t.email || ""} · staleness: ${t.staleness_mode || "?"} · ${t.id}` }));
+
+  view.append(usersSection(t, users || []));
+  view.append(keysSection(t, keys || []));
+}
+
+// wrapScroll — horizontal-scroll container so wide tables never scroll the page.
+function wrapScroll(node) {
+  return el("div", { className: "admin-table-wrap" }, node);
+}
+
+function usersSection(t, users) {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "Users" }));
+
+  const table = el("table", { className: "admin-table" });
+  const thead = el("thead", {}, el("tr", {},
+    el("th", { textContent: "Email" }),
+    el("th", { textContent: "Role" }),
+    el("th", { textContent: "" }),
+  ));
+  const tbody = el("tbody");
+  for (const u of users) tbody.append(userRow(t, u));
+  table.append(thead, tbody);
+  sec.append(users.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no users" }));
+
+  const form = el("form", { className: "admin-form-fields" });
+  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
+  const role = el("select", { className: "admin-input" },
+    el("option", { value: "member", textContent: "member" }),
+    el("option", { value: "admin", textContent: "admin" }),
+  );
+  const submit = el("button", { textContent: "Grant", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(el("span", { className: "admin-form-label", textContent: "Grant user:" }), email, role, submit);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    try {
+      await apiFetch("/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.value.trim(), tenant_id: t.id, role: role.value }),
+      });
+      showTenant(t);
+    } catch (err) {
+      submit.disabled = false;
+      alert("Grant failed: " + err.message);
+    }
+  });
+  sec.append(form);
+  return sec;
+}
+
+function userRow(t, u) {
+  const tr = el("tr");
+
+  const roleSel = el("select", { className: "admin-input admin-role-select" },
+    el("option", { value: "member", textContent: "member" }),
+    el("option", { value: "admin", textContent: "admin" }),
+  );
+  roleSel.value = u.role || "member";
+  roleSel.addEventListener("change", async () => {
+    const prev = u.role || "member";
+    roleSel.disabled = true;
+    try {
+      await apiFetch("/admin/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: u.email, role: roleSel.value }),
+      });
+      u.role = roleSel.value;
+    } catch (err) {
+      roleSel.value = prev;
+      alert("Set role failed: " + err.message);
+    } finally {
+      roleSel.disabled = false;
+    }
+  });
+
+  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
+  revoke.addEventListener("click", async () => {
+    if (!confirm(`Revoke access for ${u.email}?`)) return;
+    revoke.disabled = true;
+    try {
+      await apiFetch(`/admin/users?email=${encodeURIComponent(u.email)}`, { method: "DELETE" });
+      tr.remove();
+    } catch (err) {
+      revoke.disabled = false;
+      alert("Revoke failed: " + err.message);
+    }
+  });
+
+  tr.append(
+    el("td", { textContent: u.email || "" }),
+    el("td", {}, roleSel),
+    el("td", { className: "admin-actions" }, revoke),
+  );
+  return tr;
+}
+
+function keysSection(t, keys) {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "API keys" }));
+
+  const table = el("table", { className: "admin-table" });
+  const thead = el("thead", {}, el("tr", {},
+    el("th", { textContent: "Label" }),
+    el("th", { textContent: "Prefix" }),
+    el("th", { textContent: "Created" }),
+    el("th", { textContent: "Last used" }),
+    el("th", { textContent: "Expires" }),
+    el("th", { textContent: "Status" }),
+    el("th", { textContent: "" }),
+  ));
+  const tbody = el("tbody");
+  for (const k of keys) tbody.append(keyRow(t, k));
+  table.append(thead, tbody);
+  sec.append(keys.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no keys" }));
+
+  const form = el("form", { className: "admin-form-fields" });
+  const label = el("input", { className: "admin-input", type: "text", placeholder: "label", required: true });
+  const ttl = el("input", { className: "admin-input admin-input-num", type: "number", min: "1", placeholder: "TTL days (optional)" });
+  const submit = el("button", { textContent: "Issue key", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(el("span", { className: "admin-form-label", textContent: "Issue key:" }), label, ttl, submit);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    const body = { label: label.value.trim() };
+    if (ttl.value) body.expires_in_days = parseInt(ttl.value, 10);
+    try {
+      const result = await apiFetch(`/admin/tenants/${t.id}/keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      showKeyModal(result); // plaintext shown once; modal outlives the view refresh below
+      showTenant(t);
+    } catch (err) {
+      submit.disabled = false;
+      alert("Issue key failed: " + err.message);
+    }
+  });
+  sec.append(form);
+  return sec;
+}
+
+function keyRow(t, k) {
+  const tr = el("tr", { className: k.revoked_at ? "admin-key-revoked" : "" });
+  const revoked = !!k.revoked_at;
+  const status = revoked ? `revoked ${fmtDate(k.revoked_at)}` : "active";
+
+  const rotate = el("button", { textContent: "Rotate", className: "sec-btn", type: "button" });
+  rotate.addEventListener("click", async () => {
+    const g = prompt("Rotate key. Optional grace period in hours (blank = none):", "");
+    if (g === null) return; // cancelled
+    const body = {};
+    const gh = parseInt(g, 10);
+    if (g.trim() !== "" && !Number.isNaN(gh)) body.grace_hours = gh;
+    rotate.disabled = true;
+    try {
+      const result = await apiFetch(`/admin/keys/${k.id}/rotate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      showKeyModal(result);
+      showTenant(t);
+    } catch (err) {
+      rotate.disabled = false;
+      alert("Rotate failed: " + err.message);
+    }
+  });
+
+  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
+  revoke.addEventListener("click", async () => {
+    if (!confirm(`Revoke key "${k.label || ""}" (${k.prefix || ""})?`)) return;
+    revoke.disabled = true;
+    try {
+      await apiFetch(`/admin/keys/${k.id}`, { method: "DELETE" });
+      showTenant(t);
+    } catch (err) {
+      revoke.disabled = false;
+      alert("Revoke key failed: " + err.message);
+    }
+  });
+
+  const actions = el("td", { className: "admin-actions" });
+  if (!revoked) actions.append(rotate, revoke);
+
+  tr.append(
+    el("td", { textContent: k.label || "" }),
+    el("td", { textContent: k.prefix || "" }),
+    el("td", { textContent: fmtDate(k.created_at) || "—" }),
+    el("td", { textContent: fmtDate(k.last_used_at) || "—" }),
+    el("td", { textContent: fmtDate(k.expires_at) || "—" }),
+    el("td", { textContent: status }),
+    actions,
+  );
+  return tr;
+}
+
+// showKeyModal displays a freshly minted plaintext key exactly once. The secret
+// lives only in this closure variable and the visible field — it is never written
+// to sessionStorage/localStorage or a data-* attribute, and it becomes
+// unreachable when the overlay is removed on close. Backdrop clicks do NOT close
+// the modal, so the key can't be dismissed accidentally before it's copied.
+function showKeyModal(result) {
+  const key = result && result.key;
+  if (!key) return;
+
+  const overlay = el("div", { className: "modal-overlay" });
+  const modal = el("div", { className: "modal" });
+
+  modal.append(el("h2", { className: "modal-title", textContent: "API key created" }));
+  modal.append(el("p", { className: "modal-warn", textContent: "Shown only once — copy and store it now. You will not be able to see it again." }));
+
+  const meta = [result.label, result.prefix, result.expires_at ? `expires ${fmtDate(result.expires_at)}` : ""].filter(Boolean).join(" · ");
+  if (meta) modal.append(el("div", { className: "meta", textContent: meta }));
+
+  modal.append(el("code", { className: "modal-key", textContent: key }));
+
+  const row = el("div", { className: "modal-actions" });
+  const copyBtn = el("button", { textContent: "Copy", className: "sec-btn sec-btn-primary", type: "button" });
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(key);
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+    } catch (err) {
+      alert("Copy failed — select the key above and copy it manually.");
+    }
+  });
+  const closeBtn = el("button", { textContent: "Done", className: "sec-btn", type: "button" });
+  closeBtn.addEventListener("click", () => overlay.remove());
+  row.append(copyBtn, closeBtn);
+  modal.append(row);
+
+  overlay.append(modal);
+  document.body.append(overlay);
+  copyBtn.focus();
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 (async function init() {
@@ -522,7 +890,12 @@ function showError(err) {
       return;
     }
     wireSearch();
-    await renderBrowse();
+    const admin = await checkAdmin();
+    if (admin && location.hash === "#admin") {
+      await renderAdmin();
+    } else {
+      await renderBrowse();
+    }
   } catch (err) {
     // beginLogin() throws "redirecting to login" — that's expected; ignore it.
     if (err.message !== "redirecting to login") showError(err);
