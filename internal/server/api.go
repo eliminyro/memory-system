@@ -33,6 +33,12 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("PATCH /documents/{id}", h.patchDocument)
 	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
 	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
+
+	// Admin surface: /api/admin/* (after the caller strips /api, seen here as
+	// /admin/*). Gated by adminOnly so non-admins get a clean 403; the shared
+	// bearer + UserContextBridge stack already put the subject in context.
+	admin := &adminAPIHandler{memory: h.memory}
+	m.Handle("/admin/", adminOnly(h.memory)(http.StripPrefix("/admin", admin.mux())))
 	return m
 }
 

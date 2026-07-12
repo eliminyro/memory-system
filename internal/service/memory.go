@@ -186,6 +186,11 @@ func (s *MemoryService) resolveTenant(ctx context.Context, overrideID *uuid.UUID
 // isAdmin reports whether the request's subject is a global admin
 // (system:memory#admin), resolved through the tuple Check — the mutable
 // tenant.Email column has no bearing on this decision.
+// IsAdmin exposes the internal admin gate for the admin HTTP middleware, which
+// must answer 403-vs-proceed before dispatching (the service methods re-check,
+// so this is not the sole enforcement point).
+func (s *MemoryService) IsAdmin(ctx context.Context) bool { return s.isAdmin(ctx) }
+
 func (s *MemoryService) isAdmin(ctx context.Context) bool {
 	// The offline memory-admin CLI is inherently privileged (direct DB access)
 	// and carries no authenticated subject; it marks its context local-admin so
