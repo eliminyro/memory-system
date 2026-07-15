@@ -129,8 +129,9 @@ func TestMount_NonGETWellKnownReturns405(t *testing.T) {
 }
 
 // TestMount_OAuthWithoutTrailingSlashRedirects locks in ServeMux behaviour: a
-// GET /oauth (no trailing slash) redirects to /oauth/ (307/308). Clients append
-// full paths like /oauth/authorize, so bare /oauth is mostly human-typed.
+// GET /oauth (no trailing slash) redirects to /oauth/ (a 3xx; 301 on go1.25,
+// 307/308 on newer). Clients append full paths like /oauth/authorize, so bare
+// /oauth is mostly human-typed.
 func TestMount_OAuthWithoutTrailingSlashRedirects(t *testing.T) {
 	mux := http.NewServeMux()
 	w := newTestWiring(t)
@@ -140,8 +141,12 @@ func TestMount_OAuthWithoutTrailingSlashRedirects(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusTemporaryRedirect && rec.Code != http.StatusPermanentRedirect {
-		t.Fatalf("GET %s: status = %d, want 307 or 308", PathPrefix, rec.Code)
+	// The exact redirect code for a bare subtree path varies by Go version
+	// (301 on go1.25, 307/308 on newer) — any of them redirects to /oauth/.
+	switch rec.Code {
+	case http.StatusMovedPermanently, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+	default:
+		t.Fatalf("GET %s: status = %d, want a 3xx redirect", PathPrefix, rec.Code)
 	}
 	if loc := rec.Header().Get("Location"); loc != PathPrefix+"/" {
 		t.Fatalf("Location = %q, want %q", loc, PathPrefix+"/")
