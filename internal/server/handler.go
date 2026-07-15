@@ -137,5 +137,6 @@ func versionHandler(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"version": version.Version,
 		"commit":  version.Commit,
+		"date":    version.Date,
 	})
 }

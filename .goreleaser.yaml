@@ -1,0 +1,79 @@
+# goreleaser builds the release binaries, archives, checksums, SBOMs, and the
+# GitHub Release with a grouped changelog. The multi-arch container image is
+# built and pushed separately by the release workflow (docker buildx + the
+# existing Dockerfile). See docs / release.yml.
+version: 2
+
+project_name: memory-system
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: memory-mcp
+    main: ./cmd/server
+    binary: memory-mcp
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/eliminyro/memory-system/internal/version.Version={{ .Version }}
+      - -X github.com/eliminyro/memory-system/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/eliminyro/memory-system/internal/version.Date={{ .Date }}
+  - id: memory-import
+    main: ./cmd/import
+    binary: memory-import
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: [-s -w]
+  - id: memory-admin
+    main: ./cmd/admin
+    binary: memory-admin
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: [-s -w]
+
+archives:
+  - id: default
+    ids: [memory-mcp, memory-import, memory-admin]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^cleanup:"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other changes
+      order: 999
+
+release:
+  github:
+    owner: eliminyro
+    name: memory-system
+  draft: false
+  prerelease: auto
