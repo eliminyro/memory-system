@@ -47,10 +47,12 @@ jobs:
             echo "::error::these files need gofmt:"; echo "$unformatted"; exit 1
           fi
 
+      # v8 = golangci-lint v2 line; pin a build made with Go >= the repo's
+      # go.mod version (v6/latest shipped a go1.24 build that refuses a 1.25 target).
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.12.2
 
       - name: Unit tests
         run: go test ./...
