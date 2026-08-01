@@ -27,7 +27,8 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN }}
+          # Default GITHUB_TOKEN (contents: write) suffices: we push a tag, not a
+          # protected-branch commit, and no downstream workflow keys off the tag.
 
       - name: Verify commit matches the CI trigger
         run: |
