@@ -100,6 +100,20 @@ That emits a ready-to-paste `mcpServers` block. The server answers MCP at
 `http://localhost:8090/mcp` with `Authorization: Bearer mmcp_...`; unauthenticated calls
 receive a `401` JSON challenge. Health lives at `/~/health`.
 
+## Container image
+
+Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published on every release
+to **GHCR** (canonical) and mirrored to **Docker Hub** — pull from whichever you prefer:
+
+```bash
+docker pull ghcr.io/eliminyro/memory-system:latest   # GHCR — no pull rate limits
+docker pull eliminyro/memory-system:latest           # Docker Hub mirror
+```
+
+Tags are `:vX.Y.Z` (semver), `:latest`, and `:<git-sha>`. The `docker-compose.yml` above
+builds from source for a hackable dev loop; to run a pinned release instead, swap
+`build: .` for `image: ghcr.io/eliminyro/memory-system:latest`.
+
 ## Configuration
 
 All configuration is via environment variables (parsed by
@@ -230,10 +244,10 @@ go test -tags=integration -p 1 ./...
 ```
 
 Releases are automated: on a green CI run on `master`, the release workflow computes the
-next version, tags it, builds and pushes a multi-arch image to
-`ghcr.io/eliminyro/memory-system`, and runs [`goreleaser`](.goreleaser.yaml) to produce
-the `memory-mcp`, `memory-import`, and `memory-admin` binaries, archives, checksums,
-SBOMs, and a GitHub Release.
+next version, tags it, builds and pushes a multi-arch image to `ghcr.io/eliminyro/memory-system`
+(mirrored to Docker Hub when its credentials are configured), and runs
+[`goreleaser`](.goreleaser.yaml) to produce the `memory-mcp`, `memory-import`, and
+`memory-admin` binaries, archives, checksums, SBOMs, and a GitHub Release.
 
 ## Contributing
 

@@ -72,6 +72,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # GHCR (canonical) is always pushed; Docker Hub is added as a mirror only
+      # when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are configured, so a fork without
+      # them still releases to GHCR.
+      - name: Compose image tags
+        id: img
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.next }}
+          SHA: ${{ github.sha }}
+        run: |
+          dh=""
+          [ -n "$DOCKERHUB_TOKEN" ] && dh="docker.io/eliminyro/memory-system"
+          echo "dockerhub=${dh:+yes}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            for repo in ghcr.io/eliminyro/memory-system $dh; do
+              echo "$repo:$VERSION"
+              echo "$repo:latest"
+              echo "$repo:$SHA"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        if: steps.img.outputs.dockerhub == 'yes'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Set up QEMU
         if: steps.version.outputs.should_release == 'true'
         uses: docker/setup-qemu-action@v3
@@ -89,10 +120,7 @@ jobs:
           push: true
           build-args: |
             BUILD_COMMIT=${{ github.sha }}
-          tags: |
-            ghcr.io/eliminyro/memory-system:${{ steps.version.outputs.next }}
-            ghcr.io/eliminyro/memory-system:latest
-            ghcr.io/eliminyro/memory-system:${{ github.sha }}
+          tags: ${{ steps.img.outputs.tags }}
 
       - name: Run goreleaser (binaries + GitHub Release)
         if: steps.version.outputs.should_release == 'true'
