@@ -119,6 +119,12 @@ jobs:
             BUILD_COMMIT=${{ github.sha }}
           tags: ${{ steps.img.outputs.tags }}
 
+      # goreleaser-action installs goreleaser but not syft, which the .goreleaser
+      # sboms config shells out to.
+      - name: Install syft (goreleaser SBOM)
+        if: steps.version.outputs.should_release == 'true'
+        uses: anchore/sbom-action/download-syft@v0
+
       - name: Run goreleaser (binaries + GitHub Release)
         if: steps.version.outputs.should_release == 'true'
         uses: goreleaser/goreleaser-action@v7
