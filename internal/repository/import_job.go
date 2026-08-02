@@ -1,0 +1,151 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
+)
+
+// ImportJobRepository persists the async document-import queue (design D7). Rows
+// carry the uploaded archive as bytea plus progress counters a worker updates as
+// it drains the queue.
+type ImportJobRepository struct {
+	db *gorm.DB
+}
+
+func NewImportJobRepository(db *gorm.DB) *ImportJobRepository {
+	return &ImportJobRepository{db: db}
+}
+
+// Create inserts a job (typically status=queued) with its archive bytes.
+func (r *ImportJobRepository) Create(ctx context.Context, job *models.ImportJob) error {
+	if err := r.db.WithContext(ctx).Create(job).Error; err != nil {
+		return fmt.Errorf("create import job: %w", err)
+	}
+	return nil
+}
+
+// ClaimNext atomically claims the oldest queued job and flips it to running,
+// using SELECT ... FOR UPDATE SKIP LOCKED so multiple worker replicas cooperate
+// without ever double-processing a row (design: Risks — multi-replica worker).
+// Returns (nil, nil) when the queue holds no claimable job.
+func (r *ImportJobRepository) ClaimNext(ctx context.Context) (*models.ImportJob, error) {
+	var job models.ImportJob
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock one queued row, skipping rows a peer replica already holds.
+		if err := tx.
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("status = ?", models.ImportJobStatusQueued).
+			Order("created_at ASC").
+			First(&job).Error; err != nil {
+			return err
+		}
+		// Flip to running inside the same tx so the claim and the transition are
+		// one unit — a peer never sees it as queued again.
+		if err := tx.Model(&models.ImportJob{}).
+			Where("id = ?", job.ID).
+			Update("status", models.ImportJobStatusRunning).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claim import job: %w", err)
+	}
+	job.Status = models.ImportJobStatusRunning
+	return &job, nil
+}
+
+// UpdateProgress writes the counters of an in-flight job (e.g. seeding total at
+// the start of processing) without changing its status. The write is guarded by
+// WHERE status = running so it only mutates a job that is still running: if a
+// peer replica's startup sweep already reclaimed the row (running->failed), the
+// update is a no-op and ErrNotFound is returned, letting the caller tell "job no
+// longer running" from success (design D9).
+func (r *ImportJobRepository) UpdateProgress(ctx context.Context, id uuid.UUID, total, imported, skipped, failed int) error {
+	res := r.db.WithContext(ctx).
+		Model(&models.ImportJob{}).
+		Where("id = ? AND status = ?", id, models.ImportJobStatusRunning).
+		Updates(map[string]any{
+			"total":    total,
+			"imported": imported,
+			"skipped":  skipped,
+			"failed":   failed,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("update import job progress: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("%w: import job %s", apperr.ErrNotFound, id)
+	}
+	return nil
+}
+
+// Finish writes the terminal status (succeeded|failed), final counters, and the
+// error string (empty on success). The write is guarded by WHERE status = running
+// so a terminal row is never overwritten: once a startup sweep marks an orphaned
+// job failed, a slower worker's Finish(succeeded) matches no row, is a no-op, and
+// returns ErrNotFound. This makes the terminal state deterministic (failed wins),
+// matching the interrupted->failed->retry semantics (design D9).
+func (r *ImportJobRepository) Finish(ctx context.Context, id uuid.UUID, status, errMsg string, total, imported, skipped, failed int) error {
+	res := r.db.WithContext(ctx).
+		Model(&models.ImportJob{}).
+		Where("id = ? AND status = ?", id, models.ImportJobStatusRunning).
+		Updates(map[string]any{
+			"status":   status,
+			"error":    errMsg,
+			"total":    total,
+			"imported": imported,
+			"skipped":  skipped,
+			"failed":   failed,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("finish import job: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("%w: import job %s", apperr.ErrNotFound, id)
+	}
+	return nil
+}
+
+// SweepRunningToFailed flips every running row to failed (interrupted). Called on
+// worker start: a job left running means the previous process died mid-import,
+// so the operator sees a clean failure to retry rather than a stuck row (D9).
+func (r *ImportJobRepository) SweepRunningToFailed(ctx context.Context) (int64, error) {
+	res := r.db.WithContext(ctx).
+		Model(&models.ImportJob{}).
+		Where("status = ?", models.ImportJobStatusRunning).
+		Updates(map[string]any{
+			"status": models.ImportJobStatusFailed,
+			"error":  "interrupted: server restarted while the job was running",
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("sweep running import jobs: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
+// GetByID returns a job scoped to its owning tenant. ErrNotFound when the id is
+// unknown or belongs to a different tenant — a job is visible only to its owner.
+func (r *ImportJobRepository) GetByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error) {
+	var job models.ImportJob
+	if err := r.db.WithContext(ctx).
+		Where("id = ? AND tenant_id = ?", id, tenantID).
+		First(&job).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: import job %s", apperr.ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("get import job: %w", err)
+	}
+	return &job, nil
+}

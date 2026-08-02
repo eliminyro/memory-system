@@ -69,6 +69,31 @@ func selfCheckBootstrapAdmins(ctx context.Context, engine *authz.Engine, db *gor
 	return nil
 }
 
+// resetBootstrapper is the subset of *service.MemoryService that
+// maybeResetBootstrap needs, narrowed so the boot-time decision is
+// unit-testable without a database.
+type resetBootstrapper interface {
+	ResetBootstrap(ctx context.Context) error
+}
+
+// maybeResetBootstrap implements the break-glass reset (task 6.1, design D5):
+// a boot-time-only signal, never a route. When reset (cfg.MemoryReset /
+// MEMORY_RESET) is set, it calls ResetBootstrap to clear the admin-key set +
+// system#admin tuple(s) so bootstrap re-arms; all tenants, documents, and
+// memories are preserved (ResetBootstrap only touches keys/tuples — see
+// internal/service/memory.go). No HTTP handler reads cfg.MemoryReset, so this
+// call is the only trigger path — it cannot be invoked over the network.
+func maybeResetBootstrap(ctx context.Context, reset bool, svc resetBootstrapper, logger *slog.Logger) error {
+	if !reset {
+		return nil
+	}
+	if err := svc.ResetBootstrap(ctx); err != nil {
+		return fmt.Errorf("reset bootstrap: %w", err)
+	}
+	logger.Warn("MEMORY_RESET set: cleared admin set, bootstrap re-armed")
+	return nil
+}
+
 func main() {
 	// --opts overrides MEMORY_DEFAULT_OPTS. Format:
 	//   --opts staleness=off,duplicate_guard=false,cleanup_scan_enabled=false
@@ -119,6 +144,7 @@ func main() {
 	overrideRepo := repository.NewOverrideLogRepository(db)
 	cleanupRepo := repository.NewCleanupQueueRepository(db)
 	retentionRepo := repository.NewRetentionRepository(db)
+	importJobRepo := repository.NewImportJobRepository(db)
 
 	// Staleness threshold cache — loads from staleness_thresholds table.
 	thresholdStore := staleness.NewThresholdStore(db)
@@ -161,11 +187,21 @@ func main() {
 
 	// Services
 	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore)
+	// Inject the configured bootstrap token so first-run provisioning can gate on it.
+	memorySvc.BootstrapToken = cfg.BootstrapToken
 
 	// Root context for background work — cancelled on SIGINT/SIGTERM so the
 	// cleanup scanner and HTTP server shut down together.
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Break-glass reset (task 6.1): DB is connected, migrations ran, and
+	// memorySvc is constructed above; this runs before anything else starts
+	// (scanners, authlet, HTTP server). See maybeResetBootstrap.
+	if err := maybeResetBootstrap(rootCtx, cfg.MemoryReset, memorySvc, slog.Default()); err != nil {
+		slog.Error("MEMORY_RESET: reset failed; refusing to start", "error", err)
+		os.Exit(1)
+	}
 
 	// Cleanup pipeline — nightly near-duplicate scan + Telegram summary. Notifier
 	// is nil (silent) when Telegram creds are unset.
@@ -178,6 +214,15 @@ func main() {
 	if cfg.CleanupEnabled {
 		cleanupScanner.Start(rootCtx, time.Duration(cfg.CleanupIntervalHours)*time.Hour)
 	}
+
+	// Async document-import worker (design D7). Same background-goroutine lifecycle
+	// as the cleanup scanner, bound to rootCtx: it sweeps interrupted jobs on start
+	// (D9), then drains import_jobs honoring IMPORT_WORKER_CONCURRENCY.
+	importWorker := service.NewImportWorker(
+		importJobRepo, memorySvc.ImportDocuments,
+		cfg.ImportWorkerConcurrency, 2*time.Second, slog.Default(),
+	)
+	importWorker.Start(rootCtx)
 
 	// MCP server — admin split resolves through the same Check engine.
 	mcpServer := mcp.NewServer(memorySvc, authzEngine)
@@ -220,6 +265,9 @@ func main() {
 		MaxRequestBytes: cfg.MaxRequestBytes,
 		RateLimitRPS:    cfg.RateLimitRPS,
 		RateLimitBurst:  cfg.RateLimitBurst,
+
+		ImportJobs:           importJobRepo,
+		ImportMaxUploadBytes: cfg.ImportMaxUploadBytes,
 	})
 
 	srv := &http.Server{

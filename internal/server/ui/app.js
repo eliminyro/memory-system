@@ -574,6 +574,7 @@ async function renderAdmin() {
   hdr.append(browseBtn, el("h2", { textContent: "Admin · Tenants" }));
   view.append(hdr);
 
+  view.append(importSection());
   view.append(newTenantForm());
 
   if (!tenants || !tenants.length) {
@@ -591,6 +592,107 @@ async function renderAdmin() {
     list.append(item);
   }
   view.append(list);
+}
+
+// ── Import (Task 8.2) ─────────────────────────────────────────────────────────
+// Upload a .zip archive -> POST /admin/import (multipart, field "archive") ->
+// 202 {id, status}; poll GET /admin/import/{id} on an interval until a
+// terminal state (succeeded/failed), rendering the running counts. Import
+// always targets the caller's own tenant (resolved server-side from the
+// bearer token via auth.TenantIDFromContext) — there is no tenant picker —
+// so this panel lives on the admin root page rather than under a specific
+// tenant's detail view.
+
+const IMPORT_POLL_MS = 1500;
+
+// importSection builds the upload form + progress area shown on the admin root.
+function importSection() {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "Import documents" }));
+  sec.append(el("p", {
+    className: "meta",
+    textContent: "Upload a .zip archive of memory files. Files must sit at the archive's " +
+      "ROOT (category/subcategory/slug.md or category/slug.md) — a wrapping top-level " +
+      "directory makes every path parse as misc/<path> instead of its real category.",
+  }));
+
+  const form = el("form", { className: "admin-form-fields" });
+  const fileInput = el("input", { className: "admin-input", type: "file", accept: ".zip", required: true });
+  const submit = el("button", { textContent: "Upload", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(fileInput, submit);
+
+  const progress = el("div", { className: "import-progress" });
+  let activeTimer = null; // guards against overlapping polls if a second file is uploaded before the first job finishes
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
+    submit.disabled = true;
+    progress.replaceChildren();
+    try {
+      const body = new FormData();
+      body.append("archive", file);
+      // No Content-Type header here on purpose: the browser sets the
+      // multipart boundary itself. apiFetch only adds Authorization.
+      const job = await apiFetch("/admin/import", { method: "POST", body });
+      fileInput.value = "";
+      renderImportProgress(progress, job);
+      activeTimer = pollImportJob(progress, job.id, () => { activeTimer = null; });
+    } catch (err) {
+      progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Upload failed: " + err.message }));
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  sec.append(form, progress);
+  return sec;
+}
+
+// renderImportProgress renders one job's state + counts into `container`,
+// replacing whatever was there before — each poll tick calls this fresh.
+function renderImportProgress(container, job) {
+  container.replaceChildren();
+  const badge = el("span", {
+    className: `import-status-badge import-status-${job.status}`,
+    textContent: job.status,
+  });
+  container.append(el("p", {}, "Job ", el("code", { textContent: job.id }), " — ", badge));
+  container.append(el("div", { className: "import-counts" },
+    el("span", { textContent: `total ${job.total ?? 0}` }),
+    el("span", { textContent: `imported ${job.imported ?? 0}` }),
+    el("span", { textContent: `skipped ${job.skipped ?? 0}` }),
+    el("span", { textContent: `failed ${job.failed ?? 0}` }),
+  ));
+  if (job.status === "failed" && job.error) {
+    container.append(el("p", { className: "state-msg state-err", textContent: job.error }));
+  }
+}
+
+// pollImportJob polls GET /admin/import/{id} on an interval until the job
+// reaches a terminal state (succeeded/failed), then stops polling and calls
+// onDone. Returns the interval id so the caller can cancel it early (e.g. a
+// new upload superseding this one).
+function pollImportJob(container, id, onDone) {
+  const timer = setInterval(async () => {
+    let job;
+    try {
+      job = await apiFetch("/admin/import/" + id);
+    } catch (err) {
+      clearInterval(timer);
+      onDone();
+      container.append(el("p", { className: "state-msg state-err", textContent: "Status check failed: " + err.message }));
+      return;
+    }
+    renderImportProgress(container, job);
+    if (job.status === "succeeded" || job.status === "failed") {
+      clearInterval(timer);
+      onDone();
+    }
+  }, IMPORT_POLL_MS);
+  return timer;
 }
 
 // newTenantForm — collapsed create-tenant form (name + email).

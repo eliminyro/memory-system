@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -52,6 +54,10 @@ type MemoryService struct {
 	// authzEngine is the single authoritative gate for admin, tenant_id override,
 	// and cross-tenant/common-pool access. Nil (no authzStore) fails every Check closed.
 	authzEngine *authz.Engine
+	// BootstrapToken is the configured BOOTSTRAP_TOKEN the first-run Bootstrap path
+	// compares the caller's token against (constant-time). Set once at construction
+	// in cmd/server/main.go from config; empty means the instance refuses to bootstrap.
+	BootstrapToken string
 }
 
 // NewMemoryService constructs the service. Optional deps may be nil outside the
@@ -614,6 +620,190 @@ func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*
 	s.seedTuple(ctx, authzseed.TenantSystemEdge(tenant.ID))
 	s.seedTuple(ctx, authzseed.TenantMember(tenant.ID, authz.ServicePrincipalID(tenant.ID.String())))
 	return tenant, nil
+}
+
+// --- Bootstrap (token-gated, one-shot first-run provisioning) ---
+
+// bootstrapAdvisoryLockKey is the fixed pg_advisory_xact_lock key that serializes
+// concurrent Bootstrap calls so exactly one admin is provisioned (design D2). The
+// value is ASCII "BOOT"; any stable constant unique among the instance's advisory
+// locks works. It is currently the only advisory lock in the codebase.
+const bootstrapAdvisoryLockKey int64 = 0x424F4F54 // "BOOT"
+
+var (
+	// ErrBootstrapForbidden is returned when the caller token is empty, the
+	// configured BOOTSTRAP_TOKEN is empty, or the two do not match. The instance
+	// fails closed and never provisions. Front-ends map this to HTTP 403.
+	ErrBootstrapForbidden = errors.New("bootstrap forbidden: missing or invalid token")
+	// ErrAlreadyBootstrapped is returned when an admin already exists; bootstrap is
+	// one-shot. Front-ends map this to HTTP 409.
+	ErrAlreadyBootstrapped = errors.New("already bootstrapped: an admin already exists")
+)
+
+// BootstrapSpec describes the first tenant and admin API key to provision. Empty
+// fields fall back to sensible defaults so HTTP/CLI front-ends can stay thin.
+type BootstrapSpec struct {
+	TenantName  string // default "admin"
+	TenantEmail string // optional
+	KeyLabel    string // default "admin"
+}
+
+// HasAnyAdmin reports whether any subject holds system:memory#admin — the derived
+// "is this instance bootstrapped?" signal (design D1: bootstrap state IS the admin
+// tuple, not a separate state column). A nil authz store yields false.
+func (s *MemoryService) HasAnyAdmin(ctx context.Context) (bool, error) {
+	if s.authz == nil {
+		return false, nil
+	}
+	tuples, err := s.authz.ReadByObjectRelation(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin)
+	if err != nil {
+		return false, err
+	}
+	return len(tuples) > 0, nil
+}
+
+// withTx returns a shallow copy of the service whose DB, tenant/key repositories,
+// and authz store are all bound to tx, so composed lifecycle methods (CreateTenant,
+// CreateAPIKey, seedTuple, HasAnyAdmin) execute inside the caller's transaction
+// rather than on the pooled autocommit connection.
+func (s *MemoryService) withTx(tx *gorm.DB) *MemoryService {
+	clone := *s
+	clone.db = tx
+	clone.tenants = repository.NewTenantRepository(tx)
+	clone.keys = repository.NewAPIKeyRepository(tx)
+	txStore := authz.NewPostgresStore(tx)
+	clone.authz = txStore
+	clone.authzEngine = authz.NewEngine(txStore)
+	return &clone
+}
+
+// Bootstrap performs token-gated, one-shot first-run provisioning. It verifies the
+// caller token against the configured BOOTSTRAP_TOKEN in constant time (failing
+// closed when either is empty), then — inside ONE transaction guarded by a Postgres
+// advisory lock so concurrent callers yield exactly one admin — confirms no admin
+// exists yet and provisions the first tenant + admin API key, seeding the
+// system:memory#admin tuple via authzseed. The plaintext key is returned exactly
+// once and is deliberately never logged.
+func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec BootstrapSpec) (string, *models.APIKey, error) {
+	// Fail closed: refuse if either side of the compare is empty (design D4). This
+	// runs before any DB access so an un-configured or un-supplied token can never
+	// provision.
+	configured := s.BootstrapToken
+	if token == "" || configured == "" {
+		return "", nil, ErrBootstrapForbidden
+	}
+	// Constant-time compare (never ==) to avoid leaking the token via a timing oracle.
+	if subtle.ConstantTimeCompare([]byte(token), []byte(configured)) != 1 {
+		return "", nil, ErrBootstrapForbidden
+	}
+	// Provisioning needs the tuple store to record admin-ness; without it we cannot
+	// mint a valid admin, so fail rather than issue a key that is not an admin.
+	if s.authz == nil {
+		return "", nil, fmt.Errorf("bootstrap: authz store not configured")
+	}
+
+	tenantName := spec.TenantName
+	if tenantName == "" {
+		tenantName = "admin"
+	}
+	keyLabel := spec.KeyLabel
+	if keyLabel == "" {
+		keyLabel = "admin"
+	}
+
+	var plaintext string
+	var key *models.APIKey
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize the check-and-provision (design D2). The transaction-scoped
+		// advisory lock is held until this closure commits/rolls back, so a second
+		// concurrent caller blocks here, then sees the committed admin below and is
+		// rejected — exactly one admin results.
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", bootstrapAdvisoryLockKey).Error; err != nil {
+			return fmt.Errorf("bootstrap: acquire advisory lock: %w", err)
+		}
+		txSvc := s.withTx(tx)
+
+		// One-shot guard, under the lock and on the transaction's connection.
+		already, err := txSvc.HasAnyAdmin(ctx)
+		if err != nil {
+			return fmt.Errorf("bootstrap: check existing admin: %w", err)
+		}
+		if already {
+			return ErrAlreadyBootstrapped
+		}
+
+		// Provision with a local-admin context so the admin-gated lifecycle methods
+		// pass their own requireAdmin check — the pre-auth bootstrap path has no
+		// authenticated subject.
+		adminCtx := auth.WithLocalAdmin(ctx)
+		tenant, err := txSvc.CreateTenant(adminCtx, tenantName, spec.TenantEmail)
+		if err != nil {
+			return fmt.Errorf("bootstrap: create tenant: %w", err)
+		}
+		pt, k, err := txSvc.CreateAPIKey(adminCtx, tenant.ID, keyLabel, nil, nil)
+		if err != nil {
+			return fmt.Errorf("bootstrap: create admin key: %w", err)
+		}
+		// Seed system:memory#admin for the key's subject via authzseed. Unlike the
+		// best-effort seedTuple used for tenant edges, a failure here must roll the
+		// transaction back: we never commit an "admin" key that lacks the admin tuple.
+		if err := txSvc.authz.Write(ctx, authzseed.SystemAdmin(authzseed.APIKeySubjectID(*k))); err != nil {
+			return fmt.Errorf("bootstrap: seed system admin: %w", err)
+		}
+		plaintext, key = pt, k
+		return nil
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	// plaintext is intentionally never logged; it is returned to the caller once.
+	return plaintext, key, nil
+}
+
+// ResetBootstrap is the operator-only break-glass reset (design D5, spec:
+// *Break-glass reset*). In ONE transaction it deletes every system:memory#admin
+// tuple and the API key(s) behind each one's subject — nothing else. Tenants,
+// documents, sections, and any non-admin API key are left untouched. After it
+// commits, HasAnyAdmin is false again and the instance re-arms for Bootstrap
+// (still gated by BOOTSTRAP_TOKEN).
+//
+// This mirrors Bootstrap's seeding in reverse: Bootstrap mints an admin key and
+// writes authzseed.SystemAdmin(authzseed.APIKeySubjectID(key)); this reads those
+// tuples back, uses APIKeySubjectID's resolution (via the repo's FindBySubjectID)
+// to find the key(s) that produced each subject, deletes the key(s), then deletes
+// the tuple.
+//
+// Security-critical: this function has no HTTP route and must never gain one
+// (spec: *Reset cannot be triggered over the network*) — the only caller is the
+// boot-time MEMORY_RESET check in cmd/server/main.go (task 6.1).
+func (s *MemoryService) ResetBootstrap(ctx context.Context) error {
+	if s.authz == nil {
+		return fmt.Errorf("reset: authz store not configured")
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txSvc := s.withTx(tx)
+
+		adminTuples, err := txSvc.authz.ReadByObjectRelation(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin)
+		if err != nil {
+			return fmt.Errorf("reset: read admin tuples: %w", err)
+		}
+
+		for _, t := range adminTuples {
+			keys, err := txSvc.keys.FindBySubjectID(ctx, t.SubjectID)
+			if err != nil {
+				return fmt.Errorf("reset: find keys for admin subject %s: %w", t.SubjectID, err)
+			}
+			for _, k := range keys {
+				if err := txSvc.keys.Delete(ctx, k.ID); err != nil {
+					return fmt.Errorf("reset: delete admin key %s: %w", k.ID, err)
+				}
+			}
+			if err := txSvc.authz.Delete(ctx, t); err != nil {
+				return fmt.Errorf("reset: delete admin tuple for subject %s: %w", t.SubjectID, err)
+			}
+		}
+		return nil
+	})
 }
 
 // GrantTenantUser maps a verified email to a tenant+role, creating the

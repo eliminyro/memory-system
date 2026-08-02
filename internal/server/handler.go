@@ -24,6 +24,11 @@ type Deps struct {
 	Memory        *service.MemoryService
 	UIClientID    string
 
+	// ImportJobs backs the admin async-import surface; ImportMaxUploadBytes caps
+	// each uploaded archive (config.ImportMaxUploadBytes).
+	ImportJobs           importJobStore
+	ImportMaxUploadBytes int64
+
 	// PublicBaseURL is the server's external origin (scheme+host, no trailing
 	// slash); the UI's OAuth config is derived from it so login works on any host.
 	PublicBaseURL string
@@ -61,16 +66,31 @@ func NewHandler(d Deps) http.Handler {
 	// Web UI JSON API — JWT-only, reusing /mcp's bearer validation + tenant bridge.
 	// Requires authlet wiring; without it the UI can't authenticate.
 	if d.AuthletWiring != nil && d.Memory != nil {
-		api := &apiHandler{memory: d.Memory}
+		api := &apiHandler{memory: d.Memory, importJobs: d.ImportJobs, maxUploadBytes: d.ImportMaxUploadBytes}
 		apiStack := d.AuthletWiring.BearerMW(d.AuthletWiring.UserContextBridge()(http.StripPrefix("/api", api.mux())))
 		mux.Handle("/api/", apiStack)
 	}
 
+	// Bootstrap: pre-auth, one-shot, token-gated first-run provisioning (design
+	// D3). Registered as a SPECIFIC pattern on the root mux, deliberately
+	// outside the BearerMW-wrapped /api/ subtree above — no admin (and so no
+	// valid bearer token) can exist yet to authenticate this call. Go 1.22+
+	// ServeMux gives "POST /api/bootstrap" precedence over the "/api/" subtree
+	// pattern regardless of registration order, so it stays reachable even when
+	// the JSON API is also mounted. Gating (token compare + one-shot guard)
+	// lives inside service.Bootstrap; nil Memory (e.g. minimal test Deps) simply
+	// leaves the route unregistered.
+	if d.Memory != nil {
+		mux.HandleFunc("POST /api/bootstrap", bootstrapHandler(d.Memory))
+	}
+
 	// Web UI static shell — public, no auth; it carries no data. Only the /api
-	// routes that return data require a token.
+	// routes that return data require a token. GET /ui is gated: it serves the
+	// setup view while un-bootstrapped and the normal shell redirect once an
+	// admin exists (design D1).
 	uiFiles, uiConfig := uiHandlers(d.UIClientID, d.PublicBaseURL)
 	mux.HandleFunc("GET /ui/config.json", uiConfig)
-	mux.HandleFunc("GET /ui", uiRedirectHandler)
+	mux.HandleFunc("GET /ui", uiGateHandler(uiHasAdminFunc(d.Memory)))
 	mux.Handle("GET /ui/", uiFiles)
 
 	// Operational endpoints under /~/ (liveness, readiness, version). Unauthenticated
@@ -80,17 +100,54 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("/~/version", versionHandler)
 
 	// Middleware stack (innermost first): CORS nearest the mux; body cap and rate
-	// limiter wrap the whole surface (limiter exempts the probes internally);
+	// limiter wrap the whole surface (limiter exempts the probes internally;
+	// body cap exempts POST /api/admin/import, see withGlobalBodyCap);
 	// SecurityHeaders outermost so even 429/413/OPTIONS responses carry the CSP.
 	handler := middleware.CORS(mux)
-	if d.MaxRequestBytes > 0 {
-		handler = middleware.MaxBytes(d.MaxRequestBytes)(handler)
-	}
+	handler = withGlobalBodyCap(handler, d.MaxRequestBytes)
 	if d.RateLimitRPS > 0 {
 		handler = middleware.RateLimit(d.RateLimitRPS, d.RateLimitBurst)(handler)
 	}
 	handler = middleware.SecurityHeaders(handler)
 	return handler
+}
+
+// importUploadPath is the sole route exempted from the global body-size cap
+// (see bypassGlobalBodyCap).
+const importUploadPath = "/api/admin/import"
+
+// bypassGlobalBodyCap reports whether a request should skip the global
+// MaxRequestBytes wrapper and rely solely on its own, purpose-built body-size
+// enforcement. Only POST /api/admin/import qualifies: MaxRequestBytes is DoS
+// hardening for the general surface, including unauthenticated routes (health
+// probes, UI shell, bootstrap); this route, by contrast, is admin-authenticated
+// and already enforces its own larger ImportMaxUploadBytes ceiling via
+// http.MaxBytesReader inside enqueueImport. Wrapping it in the smaller global
+// cap too would nest MaxBytesReaders, silently shrinking the effective limit to
+// min(MaxRequestBytes, ImportMaxUploadBytes) instead of the intended, larger
+// upload ceiling — so it is exempted here and governed solely by its own cap.
+func bypassGlobalBodyCap(method, path string) bool {
+	return method == http.MethodPost && path == importUploadPath
+}
+
+// withGlobalBodyCap wraps next with the global MaxRequestBytes cap, except for
+// requests matching bypassGlobalBodyCap, which reach next unwrapped and so are
+// governed solely by their own body-size enforcement. maxRequestBytes <= 0
+// disables the cap entirely (next is returned as-is). Factored out of
+// NewHandler so the exemption is unit-testable without standing up the full
+// auth stack (see handler_test.go).
+func withGlobalBodyCap(next http.Handler, maxRequestBytes int64) http.Handler {
+	if maxRequestBytes <= 0 {
+		return next
+	}
+	capped := middleware.MaxBytes(maxRequestBytes)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bypassGlobalBodyCap(r.Method, r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		capped.ServeHTTP(w, r)
+	})
 }
 
 // uiRedirectHandler redirects /ui to /ui/, preserving the query string. authlet

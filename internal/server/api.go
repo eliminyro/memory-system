@@ -17,6 +17,11 @@ import (
 // so handlers pass overrideID = nil and let the service resolve the tenant from context.
 type apiHandler struct {
 	memory *service.MemoryService
+
+	// importJobs + maxUploadBytes back the admin import surface (/api/admin/import),
+	// threaded down to adminAPIHandler in mux().
+	importJobs     importJobStore
+	maxUploadBytes int64
 }
 
 // mux builds the /api router; routes omit the /api prefix (caller strips it).
@@ -33,7 +38,7 @@ func (h *apiHandler) mux() *http.ServeMux {
 
 	// Admin surface /admin/* (i.e. /api/admin/*), gated by adminOnly so non-admins
 	// get a clean 403; the shared bearer + UserContextBridge stack set the subject.
-	admin := &adminAPIHandler{memory: h.memory}
+	admin := &adminAPIHandler{memory: h.memory, importJobs: h.importJobs, maxUploadBytes: h.maxUploadBytes}
 	m.Handle("/admin/", adminOnly(h.memory)(http.StripPrefix("/admin", admin.mux())))
 	return m
 }

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory — setup</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <main class="setup-main">
+    <div class="setup-card">
+      <h1>Set up this instance</h1>
+      <p class="meta">No admin exists yet. Enter the bootstrap token configured on the
+      server (<code>BOOTSTRAP_TOKEN</code>) to provision the initial tenant and admin
+      API key.</p>
+
+      <form id="setup-form" class="setup-form">
+        <label class="setup-label" for="setup-token">Bootstrap token</label>
+        <input id="setup-token" class="admin-input" type="password" autocomplete="off" required>
+
+        <label class="setup-label" for="setup-tenant-name">Tenant name <span class="meta">(optional)</span></label>
+        <input id="setup-tenant-name" class="admin-input" type="text" autocomplete="off">
+
+        <label class="setup-label" for="setup-tenant-email">Admin email <span class="meta">(optional)</span></label>
+        <input id="setup-tenant-email" class="admin-input" type="email" autocomplete="off">
+
+        <label class="setup-label" for="setup-key-label">Admin key label <span class="meta">(optional)</span></label>
+        <input id="setup-key-label" class="admin-input" type="text" autocomplete="off">
+
+        <button id="setup-submit" class="sec-btn sec-btn-primary" type="submit">Bootstrap</button>
+      </form>
+
+      <div id="setup-result"></div>
+    </div>
+  </main>
+  <script type="module" src="/ui/setup.js"></script>
+</body>
+</html>

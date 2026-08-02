@@ -89,6 +89,19 @@ type Config struct {
 	// callback URLs and the UI OAuth config. REQUIRED (absolute http(s)) when the
 	// authlet path is enabled; unused by the API-key-only path.
 	PublicBaseURL string `env:"PUBLIC_BASE_URL"`
+
+	// Bootstrap & reset — BootstrapToken gates the pre-auth first-run provisioning
+	// path (POST /api/bootstrap and `memory-admin bootstrap`); unset = the HTTP
+	// path fails closed. MemoryReset is a boot-time signal (never a route) that
+	// re-arms bootstrap by clearing the admin-key set only.
+	BootstrapToken string `env:"BOOTSTRAP_TOKEN"`
+	MemoryReset    bool   `env:"MEMORY_RESET"`
+
+	// Import jobs — bounds on the async document-import path. MaxUploadBytes caps
+	// the archive accepted by POST /api/admin/import (default 32 MiB).
+	// WorkerConcurrency bounds the in-process worker draining import_jobs.
+	ImportMaxUploadBytes    int64 `env:"IMPORT_MAX_UPLOAD_BYTES" envDefault:"33554432"`
+	ImportWorkerConcurrency int   `env:"IMPORT_WORKER_CONCURRENCY" envDefault:"1"`
 }
 
 // TenantDefaults is the operator baseline for the three per-tenant toggles,

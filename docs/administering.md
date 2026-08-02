@@ -45,7 +45,157 @@ engine** (a Zanzibar-style tuple ACL), not by a hard-coded list of emails.
 
 ---
 
+## First-run bootstrap (HTTP or CLI, one step)
+
+On a brand-new instance, the server can provision the first tenant and admin
+API key itself — over HTTP or with a single CLI command — instead of the
+manual tenant/key dance in the next section. This is unrelated to
+`ADMIN_ALLOWED_EMAILS` (which only seeds an admin grant for an existing user
+at every startup): first-run bootstrap creates the tenant and key from
+nothing.
+
+Bootstrap only provisions when **both** hold:
+
+- no admin API key already exists (it is **one-shot** — once an admin exists,
+  every further bootstrap attempt is rejected, regardless of token validity),
+  and
+- the caller presents a secret equal to the operator-configured
+  `BOOTSTRAP_TOKEN` environment variable. If `BOOTSTRAP_TOKEN` is unset, the
+  bootstrap path fails closed — it never provisions without a token gate.
+
+The returned admin API key is shown **exactly once** and is never written to
+application logs.
+
+### Over HTTP
+
+While the instance is un-bootstrapped, `/ui` serves a setup form instead of
+the normal knowledge browser: paste in the token, optionally a tenant
+name/email and an admin key label, and submit. It calls the endpoint below and
+displays the returned key once.
+
+Equivalently, call the endpoint directly:
+
+```bash
+curl -X POST https://mem.example.org/api/bootstrap \
+  -H 'Content-Type: application/json' \
+  -d '{"token": "'"$BOOTSTRAP_TOKEN"'", "tenant_name": "acme", "key_label": "acme-admin"}'
+# -> {"api_key":"mmcp_XXXXXXXX...","tenant_id":"...","key_id":"..."}
+```
+
+`tenant_name`, `tenant_email`, and `key_label` are all optional, defaulting to
+`"admin"` (tenant name and key label) when omitted. Once an admin exists,
+`/ui` serves the normal shell again and `POST /api/bootstrap` rejects every
+further call with an already-bootstrapped error.
+
+### From the CLI
+
+```bash
+export BOOTSTRAP_TOKEN='...'
+memory-admin bootstrap --tenant-name acme --key-label acme-admin
+# -> prints the plaintext admin key to stdout, once
+```
+
+`memory-admin bootstrap` reads `BOOTSTRAP_TOKEN` from the environment and
+drives the identical one-shot core the HTTP endpoint does; it exits non-zero
+if an admin already exists. (`memory-admin setup` is a different, unrelated
+command that emits an `mcpServers` client config — see
+[`connecting-clients.md`](connecting-clients.md).)
+
+---
+
+## Break-glass reset
+
+`MEMORY_RESET` is an operator-only, boot-time-only escape hatch: there is no
+network route that can trigger it. Set it when starting the server:
+
+```bash
+MEMORY_RESET=1 memory-mcp
+```
+
+On startup, this clears the admin API key(s) and their `system:memory#admin`
+authorization tuple(s) and re-arms bootstrap — **it never deletes tenants,
+documents, or memories**. After the reset, `/ui` serves the setup view again,
+and re-bootstrapping still requires presenting a valid `BOOTSTRAP_TOKEN`.
+Unset `MEMORY_RESET` before the next restart, or every boot will reset again.
+
+---
+
+## Importing documents
+
+Load a corpus of markdown documents — each parsed from its path into
+`category/subcategory/slug` — via the admin UI, the admin HTTP API, or the
+CLI. All three front-ends feed the same ingest core and bypass the
+near-duplicate guard (bulk import is assumed intentional).
+
+### Admin UI
+
+The admin page at `/ui` includes an upload view: pick an archive, submit, and
+watch it progress to `succeeded` (or `failed`) via the same status polling
+described below.
+
+### HTTP API
+
+`POST /api/admin/import` (admin-authenticated) accepts a **zip** archive as a
+multipart form upload in the `archive` field:
+
+```bash
+curl -X POST https://mem.example.org/api/admin/import \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F archive=@corpus.zip
+# -> 202 {"id":"...","status":"queued"}
+```
+
+**The documents must sit at the root of the zip** —
+`category/slug.md` or `category/subcategory/slug.md`. A wrapping top-level
+directory shifts every path down a level, so
+`wrapper/category/subcategory/slug.md` no longer parses into
+category/subcategory/slug: the whole nested path is instead stored under the
+catch-all `misc` category. Zip the contents of your export directory, not a
+parent directory containing it.
+
+Import is **asynchronous**: the request returns immediately with a job id,
+and an in-process worker (concurrency set by `IMPORT_WORKER_CONCURRENCY`)
+drains the queue in the background. Poll status with:
+
+```bash
+curl https://mem.example.org/api/admin/import/<id> \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# -> {"id":"...","tenant_id":"...","status":"running","total":42,
+#     "imported":30,"skipped":1,"failed":0, ...}
+```
+
+`status` is one of `queued`, `running`, `succeeded`, `failed`. A job is
+visible only within the tenant that owns it — an unknown or cross-tenant id
+returns 404. If the server restarts mid-import, the interrupted job is marked
+`failed` on the next boot rather than sticking in `running` — re-upload to
+retry.
+
+The upload is capped by `IMPORT_MAX_UPLOAD_BYTES` (default 32 MiB). This is
+deliberately its own limit: the global `MAX_REQUEST_BYTES` cap does not apply
+to this route, since a corpus archive is expected to be larger than a typical
+API request.
+
+### CLI
+
+For bulk or offline loads (no running server needed, or a k8s Job), walk a
+local directory with the `memory-import` binary:
+
+```bash
+memory-import --tenant <tenant-uuid-or-name> ~/path/to/memory-directory
+```
+
+`--tenant` is required. Since the CLI walks the filesystem directly (not a
+zip), ordinary nested subdirectories are fine — the zip-root caveat above
+does not apply here. It reports imported/skipped/failed counts on completion.
+
+---
+
 ## Bootstrapping a fresh instance (CLI, no server needed)
+
+Prefer the [one-shot bootstrap](#first-run-bootstrap-http-or-cli-one-step)
+above for a fresh instance. Use the manual flow below instead when you want
+independent control over the tenant name/email, key label, or key TTL, or
+when `BOOTSTRAP_TOKEN` is not set.
 
 On a brand-new instance there are no tenants, no keys, and possibly no server
 running yet. Bootstrap entirely from the CLI. Point it at the database first:
