@@ -275,3 +275,41 @@ main {
   border-radius: 4px;
 }
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
+/* ── Setup view (pre-auth bootstrap form) ─────────────────────────────────── */
+
+.setup-main {
+  max-width: 480px;
+  margin: 3rem auto;
+  padding: 0 1rem 4rem;
+}
+.setup-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.5rem 1.75rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.setup-card h1 { font-size: 1.3rem; margin: 0 0 0.5rem; }
+.setup-form { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 1rem; }
+.setup-label { font-size: 13px; color: #444; margin-top: 0.5rem; }
+.setup-form .admin-input { width: 100%; }
+.setup-form .sec-btn { margin-top: 1rem; align-self: flex-start; }
+.setup-result-ok h2 { font-size: 1.1rem; margin: 1rem 0 0.5rem; }
+
+/* Import view (admin) */
+.import-progress { margin-top: 0.75rem; }
+.import-counts { display: flex; gap: 1rem; font-size: 13px; color: #444; margin-top: 0.4rem; }
+.import-status-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  background: #eef2f7;
+  color: #445;
+}
+.import-status-succeeded { background: #e6f9ee; color: #1a7a40; }
+.import-status-failed { background: #fdf0ef; color: #c0392b; }
+.import-status-running, .import-status-queued { background: #fff8e6; color: #a05000; }

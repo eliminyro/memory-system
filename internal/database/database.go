@@ -89,6 +89,7 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		&models.CleanupQueue{},
 		&models.DeletionEvent{},
 		&models.EmbeddingMetadata{},
+		&models.ImportJob{},
 		// authlet tables — Phase A of authlet integration
 		&authletstore.OAuthClient{},
 		&authletstore.OAuthCode{},

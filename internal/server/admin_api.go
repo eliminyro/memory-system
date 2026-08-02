@@ -1,12 +1,16 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -17,6 +21,19 @@ import (
 // rotated keys return the plaintext exactly once.
 type adminAPIHandler struct {
 	memory *service.MemoryService
+
+	// importJobs backs POST/GET /admin/import; maxUploadBytes caps the archive
+	// accepted by the enqueue endpoint (config.ImportMaxUploadBytes).
+	importJobs     importJobStore
+	maxUploadBytes int64
+}
+
+// importJobStore is the slice of the import_jobs repository the admin HTTP
+// surface needs (enqueue + tenant-scoped status). An interface so handler unit
+// tests can stub it without a database.
+type importJobStore interface {
+	Create(ctx context.Context, job *models.ImportJob) error
+	GetByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error)
 }
 
 // adminOnly refuses non-admins with a clean 403 before dispatch. Service methods
@@ -51,6 +68,8 @@ func (h *adminAPIHandler) mux() *http.ServeMux {
 	m.HandleFunc("POST /users", h.grantUser)
 	m.HandleFunc("PATCH /users", h.updateUserRole)
 	m.HandleFunc("DELETE /users", h.revokeUser)
+	m.HandleFunc("POST /import", h.enqueueImport)
+	m.HandleFunc("GET /import/{id}", h.importStatus)
 	return m
 }
 
@@ -231,6 +250,80 @@ func (h *adminAPIHandler) revokeUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// enqueueImport accepts a zip archive upload (multipart form file field
+// "archive"), persists it as a queued import_jobs row for the authenticated
+// admin's tenant, and returns the job id (202). The in-process worker ingests it
+// off the request path (design D7). Oversized uploads are rejected 413 via
+// http.MaxBytesReader; a missing tenant or malformed form is 400. Non-admins
+// never reach here — adminOnly returns 403 before dispatch.
+func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) {
+	tenantID := auth.TenantIDFromContext(r.Context())
+	if tenantID == uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no tenant in context"})
+		return
+	}
+
+	// Cap the whole request body: MaxBytesReader makes reads past the limit fail
+	// with *http.MaxBytesError, surfaced below as 413. Passing the same cap as
+	// ParseMultipartForm's maxMemory keeps the file part in memory (no temp-file
+	// spill — the image runs on a read-only rootfs).
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadBytes)
+	archive, err := readArchiveUpload(r, h.maxUploadBytes)
+	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "archive exceeds the upload size limit"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `invalid archive upload (expected multipart form file field "archive")`})
+		return
+	}
+
+	job := &models.ImportJob{
+		TenantID: tenantID,
+		Status:   models.ImportJobStatusQueued,
+		Archive:  archive,
+	}
+	if err := h.importJobs.Create(r.Context(), job); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status})
+}
+
+// readArchiveUpload extracts the uploaded archive bytes from the "archive"
+// multipart form file. maxMemory bounds in-memory buffering so
+// ParseMultipartForm never spills a part to a temp file.
+func readArchiveUpload(r *http.Request, maxMemory int64) ([]byte, error) {
+	if err := r.ParseMultipartForm(maxMemory); err != nil {
+		return nil, err
+	}
+	file, _, err := r.FormFile("archive")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(file)
+}
+
+// importStatus returns an import job's state and progress counters. A job is
+// visible only within the tenant that owns it (GetByID is tenant-scoped), so an
+// unknown or cross-tenant id yields 404 via writeErr. The archive bytes never
+// leave the server (json:"-" on the model).
+func (h *adminAPIHandler) importStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job id"})
+		return
+	}
+	job, err := h.importJobs.GetByID(r.Context(), id, auth.TenantIDFromContext(r.Context()))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 // keyIssueResponse is the one-time create/rotate payload: plaintext (shown once)
