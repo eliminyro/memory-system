@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -19,38 +18,33 @@ import (
 // that touches).
 type bootstrapFunc func(ctx context.Context, token string, spec service.BootstrapSpec) (string, *models.APIKey, error)
 
-// newBootstrapCmd provisions the initial tenant and admin API key: one-shot,
-// token-gated first-run provisioning — the same shared core POST /api/bootstrap
-// runs. Named "bootstrap", not "setup" (setup.go already owns that name for the
+// newBootstrapCmd provisions the initial tenant and admin API key: one-shot
+// first-run provisioning — the same shared core POST /bootstrap runs. Named
+// "bootstrap", not "setup" (setup.go already owns that name for the
 // mcpServers-config emitter).
 //
-// The token comes from BOOTSTRAP_TOKEN. service.Bootstrap compares the caller's
-// token against the *service's own* configured BootstrapToken field, and this
-// CLI process shares no memory with the running server — buildService() has no
-// way to inherit cfg.BootstrapToken. So this command also assigns the service's
-// BootstrapToken from that same env var before calling Bootstrap. In practice
-// that means: any non-empty BOOTSTRAP_TOKEN bootstraps an empty instance from
-// the CLI (already privileged — it holds DATABASE_URL); leaving it unset still
-// fails closed (design D4), matching the HTTP front-end's behavior.
+// buildService returns a local-admin context (auth.WithLocalAdmin), and
+// service.Bootstrap skips the token gate for local admins (design D2) — the CLI
+// talks directly to the DB and is inherently privileged (holding DATABASE_URL is
+// full control). So this command provisions directly with no token; it still
+// errors non-zero if an admin already exists.
 func newBootstrapCmd() *cobra.Command {
 	var tenantName, tenantEmail, keyLabel string
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
-		Short: "Provision the initial tenant and admin API key (one-shot, token-gated)",
-		Long: "bootstrap runs the same one-shot, token-gated first-run provisioning\n" +
-			"core as POST /api/bootstrap. The token is read from BOOTSTRAP_TOKEN and is\n" +
-			"also used to configure the service's compare target for this process, so any\n" +
-			"non-empty value bootstraps an empty instance; unset fails closed. Errors\n" +
-			"non-zero if an admin already exists.",
+		Short: "Provision the initial tenant and admin API key (one-shot)",
+		Long: "bootstrap runs the same one-shot first-run provisioning core as\n" +
+			"POST /bootstrap. It runs under a local-admin context and is inherently\n" +
+			"privileged (it holds DATABASE_URL), so no bootstrap token is required.\n" +
+			"Errors non-zero if an admin already exists.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			svc, ctx, err := buildService()
 			if err != nil {
 				return err
 			}
-			token := os.Getenv("BOOTSTRAP_TOKEN")
-			svc.BootstrapToken = token
+			// ctx is local-admin, so Bootstrap bypasses the token gate — pass none.
 			spec := service.BootstrapSpec{TenantName: tenantName, TenantEmail: tenantEmail, KeyLabel: keyLabel}
-			return runBootstrap(cmd, svc.Bootstrap, ctx, token, spec)
+			return runBootstrap(cmd, svc.Bootstrap, ctx, "", spec)
 		},
 	}
 	cmd.Flags().StringVar(&tenantName, "tenant-name", "", "Initial tenant name (default \"admin\")")

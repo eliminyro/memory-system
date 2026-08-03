@@ -14,8 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/authzseed"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
@@ -152,4 +154,55 @@ func TestBootstrapNoLog(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, plaintext)
 	require.NotContains(t, buf.String(), plaintext, "plaintext admin key must never be logged")
+}
+
+// TestBootstrapAdminEmailSeedsWhenOAuthConfigured: with OAuth configured and an
+// AdminEmail supplied, Bootstrap maps the email to the new tenant as admin — a
+// tenant_users row plus the tenant admin tuple (design D4) — so the operator can
+// log in via /ui. Uses a local-admin context (no token needed on that path).
+func TestBootstrapAdminEmailSeedsWhenOAuthConfigured(t *testing.T) {
+	db := openServicePG(t)
+	clearAdmins(t, db)
+	store := authz.NewPostgresStore(db)
+	svc := newAdminTestSvc(db, store)
+	svc.OAuthConfigured = true
+
+	adminCtx := auth.WithLocalAdmin(context.Background())
+	email := uuid.NewString() + "@example.test"
+	_, key, err := svc.Bootstrap(adminCtx, "", service.BootstrapSpec{
+		TenantName: "admin-" + uuid.NewString(),
+		AdminEmail: email,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	users, err := svc.ListTenantUsers(adminCtx, key.TenantID)
+	require.NoError(t, err)
+	require.Len(t, users, 1, "the admin email must be mapped to the new tenant")
+	require.Equal(t, email, users[0].Email)
+	require.Equal(t, models.TenantUserRoleAdmin, users[0].Role)
+	requireTuple(t, store, authzseed.TenantAdmin(key.TenantID, users[0].ID.String()))
+}
+
+// TestBootstrapAdminEmailIgnoredWhenOAuthOff: an AdminEmail is ignored when OAuth
+// is not configured (design D4) — only the tenant + admin key are provisioned,
+// no tenant_users mapping is created.
+func TestBootstrapAdminEmailIgnoredWhenOAuthOff(t *testing.T) {
+	db := openServicePG(t)
+	clearAdmins(t, db)
+	store := authz.NewPostgresStore(db)
+	svc := newAdminTestSvc(db, store)
+	svc.OAuthConfigured = false
+
+	adminCtx := auth.WithLocalAdmin(context.Background())
+	_, key, err := svc.Bootstrap(adminCtx, "", service.BootstrapSpec{
+		TenantName: "admin-" + uuid.NewString(),
+		AdminEmail: uuid.NewString() + "@example.test",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	users, err := svc.ListTenantUsers(adminCtx, key.TenantID)
+	require.NoError(t, err)
+	require.Empty(t, users, "admin email must be ignored when OAuth is not configured")
 }

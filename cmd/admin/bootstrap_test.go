@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
-	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -76,29 +74,6 @@ func TestRunBootstrap_ForbiddenErrorsNonNil(t *testing.T) {
 	}
 
 	err := runBootstrap(cmd, stub, context.Background(), "", service.BootstrapSpec{})
-	if !errors.Is(err, service.ErrBootstrapForbidden) {
-		t.Fatalf("err = %v, want ErrBootstrapForbidden", err)
-	}
-}
-
-// TestBootstrapEnvWiring_MissingTokenFailsClosed exercises the exact wiring
-// newBootstrapCmd's RunE performs (read BOOTSTRAP_TOKEN -> assign
-// svc.BootstrapToken -> call Bootstrap) against the REAL service.Bootstrap, but
-// with an in-memory authz store and a nil db — safe because an empty token
-// (design D4: unset fails closed) returns before service.Bootstrap ever touches
-// the database, exactly like internal/service/bootstrap_test.go's token-gate
-// cases. This is the one property specific to the CLI front-end: buildService()
-// shares no process with the server, so without this assignment the compare
-// could never succeed.
-func TestBootstrapEnvWiring_MissingTokenFailsClosed(t *testing.T) {
-	t.Setenv("BOOTSTRAP_TOKEN", "")
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
-
-	token := os.Getenv("BOOTSTRAP_TOKEN")
-	svc.BootstrapToken = token // mirrors newBootstrapCmd's RunE
-
-	cmd, _ := newTestCmd()
-	err := runBootstrap(cmd, svc.Bootstrap, context.Background(), token, service.BootstrapSpec{})
 	if !errors.Is(err, service.ErrBootstrapForbidden) {
 		t.Fatalf("err = %v, want ErrBootstrapForbidden", err)
 	}

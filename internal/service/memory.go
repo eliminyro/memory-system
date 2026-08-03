@@ -54,10 +54,18 @@ type MemoryService struct {
 	// authzEngine is the single authoritative gate for admin, tenant_id override,
 	// and cross-tenant/common-pool access. Nil (no authzStore) fails every Check closed.
 	authzEngine *authz.Engine
-	// BootstrapToken is the configured BOOTSTRAP_TOKEN the first-run Bootstrap path
-	// compares the caller's token against (constant-time). Set once at construction
-	// in cmd/server/main.go from config; empty means the instance refuses to bootstrap.
+	// BootstrapToken is the generated first-run token the HTTP Bootstrap path
+	// compares the caller's token against (constant-time). Set once at startup in
+	// cmd/server/main.go when the instance has no admin yet (design D1); empty means
+	// the HTTP path refuses to bootstrap. The offline CLI bypasses it via a
+	// local-admin context (design D2), so it need not be set for that path.
 	BootstrapToken string
+	// OAuthConfigured mirrors cfg.AuthletEnabled(): whether the authlet OAuth login
+	// path is wired. Set once at construction in cmd/server/main.go. Bootstrap uses
+	// it to decide admin-email seeding (design D4) — an operator email is only
+	// useful when logins can actually resolve via OAuth. The offline CLI, which
+	// skips config.Load, leaves it false.
+	OAuthConfigured bool
 }
 
 // NewMemoryService constructs the service. Optional deps may be nil outside the
@@ -631,9 +639,10 @@ func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*
 const bootstrapAdvisoryLockKey int64 = 0x424F4F54 // "BOOT"
 
 var (
-	// ErrBootstrapForbidden is returned when the caller token is empty, the
-	// configured BOOTSTRAP_TOKEN is empty, or the two do not match. The instance
-	// fails closed and never provisions. Front-ends map this to HTTP 403.
+	// ErrBootstrapForbidden is returned on the network path when the caller token is
+	// empty, the generated BootstrapToken is empty, or the two do not match. The
+	// instance fails closed and never provisions. Front-ends map this to HTTP 403.
+	// (The local-admin CLI path bypasses the gate and never returns this.)
 	ErrBootstrapForbidden = errors.New("bootstrap forbidden: missing or invalid token")
 	// ErrAlreadyBootstrapped is returned when an admin already exists; bootstrap is
 	// one-shot. Front-ends map this to HTTP 409.
@@ -646,6 +655,19 @@ type BootstrapSpec struct {
 	TenantName  string // default "admin"
 	TenantEmail string // optional
 	KeyLabel    string // default "admin"
+	// AdminEmail, when set AND the OAuth login path is configured, is mapped to the
+	// new tenant as admin (design D4) so the operator can log in via /ui without a
+	// race-to-claim. Ignored when empty or when OAuth is not configured.
+	AdminEmail string
+}
+
+// shouldSeedAdminEmail reports whether Bootstrap should map an operator email to
+// the freshly-provisioned tenant as admin (design D4): only when an email is
+// supplied AND the OAuth login path is configured — an email is useless if
+// operators cannot log in via OAuth. Pure predicate so both branches are
+// unit-testable without a database.
+func shouldSeedAdminEmail(email string, oauthConfigured bool) bool {
+	return email != "" && oauthConfigured
 }
 
 // HasAnyAdmin reports whether any subject holds system:memory#admin — the derived
@@ -677,24 +699,30 @@ func (s *MemoryService) withTx(tx *gorm.DB) *MemoryService {
 	return &clone
 }
 
-// Bootstrap performs token-gated, one-shot first-run provisioning. It verifies the
-// caller token against the configured BOOTSTRAP_TOKEN in constant time (failing
-// closed when either is empty), then — inside ONE transaction guarded by a Postgres
+// Bootstrap performs token-gated, one-shot first-run provisioning. On the network
+// path it verifies the caller token against the generated BootstrapToken in
+// constant time (failing closed when either is empty); a local-admin context (the
+// offline CLI) bypasses the token gate. It then — inside ONE transaction guarded by a Postgres
 // advisory lock so concurrent callers yield exactly one admin — confirms no admin
 // exists yet and provisions the first tenant + admin API key, seeding the
 // system:memory#admin tuple via authzseed. The plaintext key is returned exactly
 // once and is deliberately never logged.
 func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec BootstrapSpec) (string, *models.APIKey, error) {
-	// Fail closed: refuse if either side of the compare is empty (design D4). This
-	// runs before any DB access so an un-configured or un-supplied token can never
-	// provision.
-	configured := s.BootstrapToken
-	if token == "" || configured == "" {
-		return "", nil, ErrBootstrapForbidden
-	}
-	// Constant-time compare (never ==) to avoid leaking the token via a timing oracle.
-	if subtle.ConstantTimeCompare([]byte(token), []byte(configured)) != 1 {
-		return "", nil, ErrBootstrapForbidden
+	// Token gate (design D2). The offline memory-admin CLI runs under a local-admin
+	// context and is inherently privileged (holding DATABASE_URL is already full
+	// control), so it bypasses the token entirely. Every network caller (the HTTP
+	// /bootstrap front-end) must present the generated token: fail closed if either
+	// side of the compare is empty, then constant-time compare (never ==) to avoid
+	// leaking the token via a timing oracle. Runs before any DB access so an
+	// un-armed or un-supplied token can never provision.
+	if !auth.IsLocalAdmin(ctx) {
+		configured := s.BootstrapToken
+		if token == "" || configured == "" {
+			return "", nil, ErrBootstrapForbidden
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(configured)) != 1 {
+			return "", nil, ErrBootstrapForbidden
+		}
 	}
 	// Provisioning needs the tuple store to record admin-ness; without it we cannot
 	// mint a valid admin, so fail rather than issue a key that is not an admin.
@@ -750,6 +778,17 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 		if err := txSvc.authz.Write(ctx, authzseed.SystemAdmin(authzseed.APIKeySubjectID(*k))); err != nil {
 			return fmt.Errorf("bootstrap: seed system admin: %w", err)
 		}
+		// Admin-email seeding (design D4): when an operator email is supplied and the
+		// OAuth login path is configured, map it to the new tenant as admin via the
+		// same lifecycle method the admin API uses — creating the tenant_users row the
+		// authlet resolver needs plus the admin tuple. Inside the transaction so the
+		// mapping is atomic with the tenant+key; a failure rolls the whole bootstrap
+		// back. The admin API key is still minted and returned for the API/MCP path.
+		if shouldSeedAdminEmail(spec.AdminEmail, s.OAuthConfigured) {
+			if _, err := txSvc.GrantTenantUser(adminCtx, spec.AdminEmail, tenant.ID, models.TenantUserRoleAdmin); err != nil {
+				return fmt.Errorf("bootstrap: grant admin email: %w", err)
+			}
+		}
 		plaintext, key = pt, k
 		return nil
 	})
@@ -765,7 +804,7 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 // tuple and the API key(s) behind each one's subject — nothing else. Tenants,
 // documents, sections, and any non-admin API key are left untouched. After it
 // commits, HasAnyAdmin is false again and the instance re-arms for Bootstrap
-// (still gated by BOOTSTRAP_TOKEN).
+// (the next server boot generates and logs a fresh bootstrap token).
 //
 // This mirrors Bootstrap's seeding in reverse: Bootstrap mints an admin key and
 // writes authzseed.SystemAdmin(authzseed.APIKeySubjectID(key)); this reads those
