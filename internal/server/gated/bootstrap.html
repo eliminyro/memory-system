@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory — bootstrap</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <main class="setup-main">
+    <div class="setup-card">
+      <h1>Bootstrap this instance</h1>
+      <p class="meta">No admin exists yet. Paste the bootstrap token printed to the
+      server logs at startup (<code>docker logs</code>) to provision the initial
+      tenant and admin API key.</p>
+
+      <form id="bootstrap-form" class="setup-form">
+        <label class="setup-label" for="bootstrap-token">Bootstrap token</label>
+        <input id="bootstrap-token" class="admin-input" type="password" autocomplete="off" required>
+
+        <div id="bootstrap-email-field" hidden>
+          <label class="setup-label" for="bootstrap-admin-email">Admin email <span class="meta">(optional)</span></label>
+          <input id="bootstrap-admin-email" class="admin-input" type="email" autocomplete="off">
+        </div>
+
+        <button id="bootstrap-submit" class="sec-btn sec-btn-primary" type="submit">Bootstrap</button>
+      </form>
+
+      <div id="bootstrap-result"></div>
+    </div>
+  </main>
+  <script type="module" src="/bootstrap/bootstrap.js"></script>
+</body>
+</html>

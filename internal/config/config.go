@@ -90,12 +90,11 @@ type Config struct {
 	// authlet path is enabled; unused by the API-key-only path.
 	PublicBaseURL string `env:"PUBLIC_BASE_URL"`
 
-	// Bootstrap & reset — BootstrapToken gates the pre-auth first-run provisioning
-	// path (POST /api/bootstrap and `memory-admin bootstrap`); unset = the HTTP
-	// path fails closed. MemoryReset is a boot-time signal (never a route) that
-	// re-arms bootstrap by clearing the admin-key set only.
-	BootstrapToken string `env:"BOOTSTRAP_TOKEN"`
-	MemoryReset    bool   `env:"MEMORY_RESET"`
+	// Reset — MemoryReset is a boot-time signal (never a route) that re-arms
+	// bootstrap by clearing the admin-key set only. The first-run bootstrap token
+	// is no longer configured via env: cmd/server/main.go generates and logs it on
+	// an un-bootstrapped instance (design D1; see MemoryService.BootstrapToken).
+	MemoryReset bool `env:"MEMORY_RESET"`
 
 	// Import jobs — bounds on the async document-import path. MaxUploadBytes caps
 	// the archive accepted by POST /api/admin/import (default 32 MiB).

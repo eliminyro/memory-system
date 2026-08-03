@@ -56,9 +56,10 @@ shared "common" pool for knowledge every tenant can read.
 - **Admin CLI + web UI** — a `memory-admin` binary that operates directly against the
   database (no server required, ideal for bootstrap), plus a small admin page served at
   `/ui`.
-- **Self-service bootstrap & import** — a token-gated, one-shot first-run setup over
-  HTTP or CLI, plus an async, job-based document-archive import (admin UI, HTTP, or
-  CLI), so a fresh instance needs no direct database access.
+- **Self-service bootstrap & import** — a one-shot first-run setup gated by a token the
+  server generates and logs at boot (no env var to manage), available over HTTP or CLI,
+  plus an async, job-based document-archive import (admin UI, HTTP, or CLI), so a fresh
+  instance needs no direct database access.
 - **Rich MCP tool surface** — a regular tool set for agents and a privileged admin tool
   set, routed automatically by the caller's authorization.
 - **Hardened HTTP edge** — request-size limits, token-bucket rate limiting, strict CSP
@@ -142,7 +143,6 @@ Ollama deploy works out of the box.
 | `AWS_REGION` | *(unset)* | **Required** when `EMBEDDING_PROVIDER=aws`. |
 | `AWS_EMBEDDING_MODEL` | *(unset)* | **Required** when `EMBEDDING_PROVIDER=aws`. |
 | `ADMIN_ALLOWED_EMAILS` | *(unset)* | Bootstrap seed only — emails granted `system:memory#admin` at startup. |
-| `BOOTSTRAP_TOKEN` | *(unset)* | Secret gating first-run provisioning (HTTP `/api/bootstrap` and `memory-admin bootstrap`); unset fails the HTTP path closed. |
 | `MEMORY_RESET` | *(unset)* | Boot-only break-glass flag — clears the admin key(s) and re-arms bootstrap; never touches tenants/documents/memories. |
 | `IMPORT_MAX_UPLOAD_BYTES` | `33554432` (32 MiB) | Cap on an uploaded import archive at `POST /api/admin/import`; exempt from `MAX_REQUEST_BYTES`. |
 | `IMPORT_WORKER_CONCURRENCY` | `1` | Concurrent goroutines draining the async import job queue. |
@@ -201,19 +201,26 @@ global grant `system:memory#admin`. `ADMIN_ALLOWED_EMAILS` only seeds that grant
 startup. Keys are issued as opaque `mmcp_...` tokens, stored only as a SHA-256 hash, and
 shown in plaintext exactly once. Rotation issues a replacement and can hold the
 predecessor valid for a grace window for zero-downtime swaps. A small admin web page is
-served at `/ui`; while the instance is un-bootstrapped it serves a first-run setup form
-in place of the knowledge browser.
+served at `/ui`, gated on bootstrap state: **404** before an admin exists, a static
+"OAuth not configured" notice once bootstrapped without OAuth wired up, and the real
+knowledge browser once both hold — it never shows a login or setup form itself.
 
-A fresh instance can bootstrap itself instead of requiring direct database access: a
-`BOOTSTRAP_TOKEN`-gated, one-shot provisioning path is exposed both over HTTP (the setup
-form / `POST /api/bootstrap`) and via `memory-admin bootstrap`, returning the plaintext
-admin key exactly once. An operator-only `MEMORY_RESET=1` boot flag re-arms bootstrap by
-clearing the admin key(s) — it never deletes tenant data. Loading a corpus works the
-same way: upload an archive from the admin UI, `POST /api/admin/import` (multipart, a
-zip, processed asynchronously by a background worker), or run the `memory-import` CLI
-over a local directory. See [`docs/administering.md`](docs/administering.md) for the
-full first-run bootstrap, break-glass reset, document import, user-management, and
-key-lifecycle runbook.
+A fresh instance can bootstrap itself instead of requiring direct database access: on
+first boot, while no admin exists yet, the server generates a one-time bootstrap token
+and logs it at `WARN` (read it with `docker logs`; it is regenerated every boot until an
+admin exists and is never persisted or logged again afterward). `GET /bootstrap` serves
+a dedicated setup page — paste the logged token plus an optional admin email — and
+`POST /bootstrap` provisions the first tenant and admin, returning the plaintext admin
+key exactly once; the whole `/bootstrap` surface **404s** once an admin exists.
+`memory-admin bootstrap` provisions the same way straight from the CLI with no token
+needed (it talks to the database directly and is inherently privileged). An
+operator-only `MEMORY_RESET=1` boot flag re-arms bootstrap by clearing the admin key(s)
+— it never deletes tenant data, and the next boot logs a fresh token. Loading a corpus
+works the same way: upload an archive from the admin UI, `POST /api/admin/import`
+(multipart, a zip, processed asynchronously by a background worker), or run the
+`memory-import` CLI over a local directory. See
+[`docs/administering.md`](docs/administering.md) for the full first-run bootstrap,
+break-glass reset, document import, user-management, and key-lifecycle runbook.
 
 ## Connecting a client
 

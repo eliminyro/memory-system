@@ -51,36 +51,53 @@ func newBootstrapHandler(t *testing.T, token string) http.Handler {
 	return NewHandler(Deps{DB: db, Memory: svc})
 }
 
+// jsonReq builds a POST whose body the /bootstrap handler decodes as JSON.
+// parseBootstrapRequest branches on Content-Type; without this header it would
+// form-parse the JSON body and read an empty token (→ a spurious 403).
+func jsonReq(method, path, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
 // TestBootstrapEndpoint_ProvisionsThenRejects drives the full stack (design D1
-// bootstrapped-state derivation, D2 one-shot, D3 routing, D4 fail-closed token)
-// end to end: /ui serves the setup view pre-bootstrap, POST /api/bootstrap
-// provisions and returns the plaintext key once, /ui then serves the normal
-// shell redirect, and a second bootstrap attempt is rejected as already-done.
+// bootstrapped-state derivation, D2 one-shot, D3 /bootstrap routing, D4
+// fail-closed token, D5 /ui gating) end to end: /bootstrap serves the page and
+// /ui 404s pre-bootstrap (no AuthletWiring, so OAuth is not configured
+// either), POST /bootstrap provisions and returns the plaintext key once,
+// /bootstrap then 404s and /ui serves the no-oauth page, and a second
+// bootstrap attempt is rejected as already-done.
 func TestBootstrapEndpoint_ProvisionsThenRejects(t *testing.T) {
 	token := "s3cr3t-" + uuid.NewString()
 	h := newBootstrapHandler(t, token)
 
-	// Pre-bootstrap: /ui serves the setup view.
+	// Pre-bootstrap: /bootstrap serves the page, /ui 404s.
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bootstrap", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("/ui pre-bootstrap status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("/bootstrap pre-bootstrap status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "bootstrap") {
-		t.Fatalf("/ui pre-bootstrap body missing setup view marker: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "bootstrap-form") {
+		t.Fatalf("/bootstrap pre-bootstrap body missing form marker: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/ui pre-bootstrap status = %d, want 404 (%s)", rec.Code, rec.Body.String())
 	}
 
 	// A bad token is rejected and provisions nothing.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/bootstrap", strings.NewReader(`{"token":"wrong"}`)))
+	h.ServeHTTP(rec, jsonReq(http.MethodPost, "/bootstrap", `{"token":"wrong"}`))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("bad-token bootstrap status = %d, want 403 (%s)", rec.Code, rec.Body.String())
 	}
 
 	// The right token provisions and returns the plaintext key exactly once.
 	rec = httptest.NewRecorder()
-	body := `{"token":"` + token + `","tenant_name":"admin-` + uuid.NewString() + `"}`
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/bootstrap", strings.NewReader(body)))
+	body := `{"token":"` + token + `"}`
+	h.ServeHTTP(rec, jsonReq(http.MethodPost, "/bootstrap", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
@@ -92,18 +109,27 @@ func TestBootstrapEndpoint_ProvisionsThenRejects(t *testing.T) {
 		t.Fatalf("incomplete bootstrap response: %+v", resp)
 	}
 
-	// Post-bootstrap: /ui redirects to the normal shell instead of setup.
+	// Post-bootstrap: /bootstrap 404s, /ui serves the no-oauth page (no
+	// AuthletWiring in this test's Deps).
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui", nil))
-	if rec.Code != http.StatusFound {
-		t.Fatalf("/ui post-bootstrap status = %d, want 302 (%s)", rec.Code, rec.Body.String())
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bootstrap", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/bootstrap post-bootstrap status = %d, want 404 (%s)", rec.Code, rec.Body.String())
 	}
 
-	// A second bootstrap attempt (even with the valid token) is rejected.
 	rec = httptest.NewRecorder()
-	body = `{"token":"` + token + `"}`
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/bootstrap", strings.NewReader(body)))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("second bootstrap status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ui post-bootstrap status = %d, want 200 (no-oauth page) (%s)", rec.Code, rec.Body.String())
+	}
+
+	// A second bootstrap attempt (even with the valid token) is rejected —
+	// though the front guard now shadows it with 404 rather than reaching
+	// service.Bootstrap's 409, since /bootstrap is one-shot at the HTTP layer
+	// (design D3: "Bootstrap endpoint disabled after bootstrap").
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, jsonReq(http.MethodPost, "/bootstrap", body))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("second bootstrap status = %d, want 404 (%s)", rec.Code, rec.Body.String())
 	}
 }

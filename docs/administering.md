@@ -49,55 +49,76 @@ engine** (a Zanzibar-style tuple ACL), not by a hard-coded list of emails.
 
 On a brand-new instance, the server can provision the first tenant and admin
 API key itself — over HTTP or with a single CLI command — instead of the
-manual tenant/key dance in the next section. This is unrelated to
+manual tenant/key dance further down. This is unrelated to
 `ADMIN_ALLOWED_EMAILS` (which only seeds an admin grant for an existing user
 at every startup): first-run bootstrap creates the tenant and key from
 nothing.
+
+There is no environment variable to set for this. Instead, on every boot
+where no admin exists yet, the server generates a random one-time token
+and logs it at `WARN` — read it with `docker logs` (or your log aggregator).
+The token is regenerated every boot while the instance stays un-bootstrapped,
+held only in memory, and never persisted to disk; once an admin exists it is
+no longer generated or logged, and the network-path token compare is
+constant-time.
 
 Bootstrap only provisions when **both** hold:
 
 - no admin API key already exists (it is **one-shot** — once an admin exists,
   every further bootstrap attempt is rejected, regardless of token validity),
   and
-- the caller presents a secret equal to the operator-configured
-  `BOOTSTRAP_TOKEN` environment variable. If `BOOTSTRAP_TOKEN` is unset, the
-  bootstrap path fails closed — it never provisions without a token gate.
+- the caller presents a token matching the one the server logged this boot
+  (the network path only — see "From the CLI" below for the token-free
+  offline path).
 
 The returned admin API key is shown **exactly once** and is never written to
 application logs.
 
 ### Over HTTP
 
-While the instance is un-bootstrapped, `/ui` serves a setup form instead of
-the normal knowledge browser: paste in the token, optionally a tenant
-name/email and an admin key label, and submit. It calls the endpoint below and
-displays the returned key once.
+While the instance is un-bootstrapped, `GET /bootstrap` serves a dedicated,
+self-contained setup page (styled like `/ui` but with no vendor JS): paste in
+the token logged at boot, optionally an admin email, and submit. It calls
+`POST /bootstrap` below and displays the returned key once. Once an admin
+exists, every route under `/bootstrap` — the page, `POST /bootstrap`, and
+`GET /bootstrap/config.json` — returns **404**; bootstrap is one-shot and the
+whole surface vanishes once armed.
 
 Equivalently, call the endpoint directly:
 
 ```bash
-curl -X POST https://mem.example.org/api/bootstrap \
+curl -X POST https://mem.example.org/bootstrap \
   -H 'Content-Type: application/json' \
-  -d '{"token": "'"$BOOTSTRAP_TOKEN"'", "tenant_name": "acme", "key_label": "acme-admin"}'
+  -d '{"token": "<token from docker logs>", "admin_email": "alice@example.com"}'
 # -> {"api_key":"mmcp_XXXXXXXX...","tenant_id":"...","key_id":"..."}
 ```
 
-`tenant_name`, `tenant_email`, and `key_label` are all optional, defaulting to
-`"admin"` (tenant name and key label) when omitted. Once an admin exists,
-`/ui` serves the normal shell again and `POST /api/bootstrap` rejects every
-further call with an already-bootstrapped error.
+(`POST /bootstrap` also accepts a form-encoded body with `token` and
+`admin_email` fields, for a plain `curl -d` without `Content-Type: application/json`.)
+
+`admin_email` is optional and is the only other field this endpoint reads —
+the tenant name and key label are **not** configurable over HTTP and always
+default to `"admin"`; use `memory-admin bootstrap` or the manual CLI flow
+further down for custom naming or a key TTL. When `admin_email` is set **and**
+OAuth login is configured (`MEMORY_MCP_GOOGLE_CLIENT_ID` /
+`MEMORY_MCP_GOOGLE_CLIENT_SECRET`), that email is seeded as admin on the new
+tenant so the operator can sign in at `/ui` and is already an admin; the field
+is ignored (and the setup page hides it) when OAuth isn't configured.
 
 ### From the CLI
 
 ```bash
-export BOOTSTRAP_TOKEN='...'
 memory-admin bootstrap --tenant-name acme --key-label acme-admin
 # -> prints the plaintext admin key to stdout, once
 ```
 
-`memory-admin bootstrap` reads `BOOTSTRAP_TOKEN` from the environment and
-drives the identical one-shot core the HTTP endpoint does; it exits non-zero
-if an admin already exists. (`memory-admin setup` is a different, unrelated
+`memory-admin bootstrap` needs no token: it talks to the database directly via
+`DATABASE_URL`, runs under a local-admin context, and bypasses the token gate
+entirely (holding `DATABASE_URL` is already full control). It drives the same
+one-shot provisioning core as the HTTP endpoint and exits non-zero if an admin
+already exists. Unlike the HTTP path it does **not** take an admin-email flag
+— grant a human OAuth admin afterward with `memory-admin user grant` (see
+"Managing users" below). (`memory-admin setup` is a different, unrelated
 command that emits an `mcpServers` client config — see
 [`connecting-clients.md`](connecting-clients.md).)
 
@@ -114,9 +135,11 @@ MEMORY_RESET=1 memory-mcp
 
 On startup, this clears the admin API key(s) and their `system:memory#admin`
 authorization tuple(s) and re-arms bootstrap — **it never deletes tenants,
-documents, or memories**. After the reset, `/ui` serves the setup view again,
-and re-bootstrapping still requires presenting a valid `BOOTSTRAP_TOKEN`.
-Unset `MEMORY_RESET` before the next restart, or every boot will reset again.
+documents, or memories**. After the reset, `GET /ui` goes back to returning
+**404** (no admin exists again), `/bootstrap` reappears, and that same
+startup logs a freshly generated bootstrap token — none is persisted across
+boots, so re-bootstrapping needs whatever token this boot printed. Unset
+`MEMORY_RESET` before the next restart, or every boot will reset again.
 
 ---
 
@@ -193,9 +216,10 @@ does not apply here. It reports imported/skipped/failed counts on completion.
 ## Bootstrapping a fresh instance (CLI, no server needed)
 
 Prefer the [one-shot bootstrap](#first-run-bootstrap-http-or-cli-one-step)
-above for a fresh instance. Use the manual flow below instead when you want
-independent control over the tenant name/email, key label, or key TTL, or
-when `BOOTSTRAP_TOKEN` is not set.
+above for a fresh instance — `memory-admin bootstrap` already covers
+independent tenant name/email and key label. Use the manual flow below
+instead when you want a key TTL (`memory-admin bootstrap` doesn't take one),
+or want the three provisioning steps broken out individually.
 
 On a brand-new instance there are no tenants, no keys, and possibly no server
 running yet. Bootstrap entirely from the CLI. Point it at the database first:

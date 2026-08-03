@@ -72,25 +72,30 @@ func NewHandler(d Deps) http.Handler {
 	}
 
 	// Bootstrap: pre-auth, one-shot, token-gated first-run provisioning (design
-	// D3). Registered as a SPECIFIC pattern on the root mux, deliberately
-	// outside the BearerMW-wrapped /api/ subtree above — no admin (and so no
-	// valid bearer token) can exist yet to authenticate this call. Go 1.22+
-	// ServeMux gives "POST /api/bootstrap" precedence over the "/api/" subtree
-	// pattern regardless of registration order, so it stays reachable even when
-	// the JSON API is also mounted. Gating (token compare + one-shot guard)
-	// lives inside service.Bootstrap; nil Memory (e.g. minimal test Deps) simply
-	// leaves the route unregistered.
+	// D3), on the root mux, deliberately outside the BearerMW-wrapped /api/
+	// subtree above — no admin (and so no valid bearer token) can exist yet to
+	// authenticate this call. Registered as both the exact "/bootstrap" pattern
+	// (so GET/POST /bootstrap resolve directly, no redirect) and the "/bootstrap/"
+	// subtree (so GET /bootstrap/config.json resolves too) — same handler either
+	// way, since it is itself a small mux. The front guard (HasAnyAdmin -> 404)
+	// and the token compare + one-shot guard live inside bootstrapGate /
+	// service.Bootstrap; nil Memory (e.g. minimal test Deps) simply leaves the
+	// route unregistered.
 	if d.Memory != nil {
-		mux.HandleFunc("POST /api/bootstrap", bootstrapHandler(d.Memory))
+		bootstrapSurface := bootstrapRoutes(d.Memory, d.Memory.HasAnyAdmin, d.AuthletWiring != nil)
+		mux.Handle("/bootstrap", bootstrapSurface)
+		mux.Handle("/bootstrap/", bootstrapSurface)
 	}
 
 	// Web UI static shell — public, no auth; it carries no data. Only the /api
-	// routes that return data require a token. GET /ui is gated: it serves the
-	// setup view while un-bootstrapped and the normal shell redirect once an
-	// admin exists (design D1).
+	// routes that return data require a token. GET /ui is gated (design D5):
+	// 404 while un-bootstrapped, the static no-oauth page once bootstrapped but
+	// OAuth is not configured, and the normal shell redirect once both hold.
+	// AuthletWiring != nil is the same OAuth-configured signal used above to
+	// mount the /api bearer stack.
 	uiFiles, uiConfig := uiHandlers(d.UIClientID, d.PublicBaseURL)
 	mux.HandleFunc("GET /ui/config.json", uiConfig)
-	mux.HandleFunc("GET /ui", uiGateHandler(uiHasAdminFunc(d.Memory)))
+	mux.HandleFunc("GET /ui", uiGateHandler(uiHasAdminFunc(d.Memory), d.AuthletWiring != nil))
 	mux.Handle("GET /ui/", uiFiles)
 
 	// Operational endpoints under /~/ (liveness, readiness, version). Unauthenticated

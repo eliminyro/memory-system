@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/authzseed"
 	"github.com/eliminyro/memory-system/internal/service"
@@ -77,4 +78,21 @@ func TestBootstrapTokenGates(t *testing.T) {
 			require.False(t, has)
 		})
 	}
+}
+
+// TestBootstrapLocalAdminBypassesTokenGate proves the offline CLI trust context
+// (design D2): a local-admin caller skips the token gate entirely, so an empty
+// token no longer yields ErrBootstrapForbidden — the same input that rejects a
+// network caller in TestBootstrapTokenGates. We wire a nil authz store so the
+// call stops at the very next check ("authz store not configured") instead of
+// reaching the database, proving the gate was bypassed without needing Postgres.
+func TestBootstrapLocalAdminBypassesTokenGate(t *testing.T) {
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc.BootstrapToken = "" // a network caller would be rejected here
+
+	ctx := auth.WithLocalAdmin(context.Background())
+	_, _, err := svc.Bootstrap(ctx, "", service.BootstrapSpec{})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, service.ErrBootstrapForbidden, "local-admin must bypass the token gate")
+	require.Contains(t, err.Error(), "authz store not configured")
 }

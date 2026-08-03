@@ -276,7 +276,7 @@ main {
 }
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 
-/* ── Setup view (pre-auth bootstrap form) ─────────────────────────────────── */
+/* ── Bootstrap / no-oauth views (pre-auth pages) ──────────────────────────── */
 
 .setup-main {
   max-width: 480px;

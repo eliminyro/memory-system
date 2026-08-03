@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -92,6 +94,36 @@ func maybeResetBootstrap(ctx context.Context, reset bool, svc resetBootstrapper,
 	}
 	logger.Warn("MEMORY_RESET set: cleared admin set, bootstrap re-armed")
 	return nil
+}
+
+// generateBootstrapToken returns a hex-encoded 32-byte random token from
+// crypto/rand for the first-run HTTP bootstrap gate. Held only in memory and
+// regenerated every boot (design D1); never persisted.
+func generateBootstrapToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate bootstrap token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// armBootstrapToken is the boot-time decision seam (design D1), kept pure and
+// DB-free — the caller performs the HasAnyAdmin lookup and passes the result in.
+// On an un-bootstrapped instance (hasAdmin == false) it generates a token, logs
+// it at WARN so it is unmissable in `docker logs`, and returns it for
+// MemoryService.BootstrapToken. When an admin already exists it generates and
+// logs nothing and returns "", leaving the HTTP bootstrap path failing closed.
+func armBootstrapToken(hasAdmin bool, logger *slog.Logger) (string, error) {
+	if hasAdmin {
+		return "", nil
+	}
+	token, err := generateBootstrapToken()
+	if err != nil {
+		return "", err
+	}
+	logger.Warn("instance not bootstrapped: POST this one-time token to /bootstrap (or run `memory-admin bootstrap`) to provision the first admin; regenerated every boot, never persisted",
+		"bootstrap_token", token)
+	return token, nil
 }
 
 func main() {
@@ -187,8 +219,23 @@ func main() {
 
 	// Services
 	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore)
-	// Inject the configured bootstrap token so first-run provisioning can gate on it.
-	memorySvc.BootstrapToken = cfg.BootstrapToken
+	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
+	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
+
+	// First-run provisioning (design D1): on an un-bootstrapped instance generate a
+	// one-time bootstrap token and log it at WARN; when an admin already exists,
+	// generate/log nothing and leave BootstrapToken empty so the HTTP path fails closed.
+	hasAdmin, err := memorySvc.HasAnyAdmin(context.Background())
+	if err != nil {
+		slog.Error("failed to check bootstrap state", "error", err)
+		os.Exit(1)
+	}
+	bootstrapToken, err := armBootstrapToken(hasAdmin, slog.Default())
+	if err != nil {
+		slog.Error("failed to arm bootstrap token", "error", err)
+		os.Exit(1)
+	}
+	memorySvc.BootstrapToken = bootstrapToken
 
 	// Root context for background work — cancelled on SIGINT/SIGTERM so the
 	// cleanup scanner and HTTP server shut down together.

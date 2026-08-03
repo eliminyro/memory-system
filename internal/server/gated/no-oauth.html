@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory — OAuth not configured</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <main class="setup-main">
+    <div class="setup-card">
+      <h1>Web UI unavailable</h1>
+      <p class="meta">This instance is bootstrapped, but OAuth login is not configured, so the
+      web UI has no way to authenticate anyone.</p>
+      <p>Set <code>MEMORY_MCP_GOOGLE_CLIENT_ID</code> and <code>MEMORY_MCP_GOOGLE_CLIENT_SECRET</code>
+      on the server to enable OAuth login, or use the admin API key issued at bootstrap directly
+      against the MCP/API endpoints.</p>
+    </div>
+  </main>
+</body>
+</html>
