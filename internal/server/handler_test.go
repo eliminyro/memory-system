@@ -47,6 +47,9 @@ func TestBypassGlobalBodyCap(t *testing.T) {
 		{"other admin route not exempted", http.MethodPost, "/api/admin/tenants", false},
 		{"other api route not exempted", http.MethodPost, "/api/documents", false},
 		{"unauthenticated route not exempted", http.MethodPost, "/mcp", false},
+		{"relational import upload exempted", http.MethodPost, "/api/import", true},
+		{"relational import wrong method not exempted", http.MethodGet, "/api/import", false},
+		{"relational import status not exempted", http.MethodGet, "/api/import/some-id", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

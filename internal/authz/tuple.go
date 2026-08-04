@@ -14,12 +14,13 @@ const (
 
 // Relation names.
 const (
-	RelAdmin  = "admin"
-	RelMember = "member"
-	RelViewer = "viewer"
-	RelEditor = "editor"
-	RelSystem = "system" // tenant -> system parent edge
-	RelTenant = "tenant" // document -> tenant parent edge
+	RelAdmin   = "admin"
+	RelManager = "manager"
+	RelMember  = "member"
+	RelViewer  = "viewer"
+	RelEditor  = "editor"
+	RelSystem  = "system" // tenant -> system parent edge
+	RelTenant  = "tenant" // document -> tenant parent edge
 )
 
 const (

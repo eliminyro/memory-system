@@ -1,6 +1,9 @@
 package authz
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestDefaultNamespace_Rewrites asserts every relation's rewrite rule matches design D1 (task 2.1).
 func TestDefaultNamespace_Rewrites(t *testing.T) {
@@ -15,11 +18,12 @@ func TestDefaultNamespace_Rewrites(t *testing.T) {
 
 		{TypeTenant, RelSystem, []Rewrite{thisRewrite()}},
 		{TypeTenant, RelAdmin, []Rewrite{thisRewrite(), from(RelSystem, RelAdmin)}},
-		{TypeTenant, RelMember, []Rewrite{thisRewrite(), computed(RelAdmin)}},
+		{TypeTenant, RelManager, []Rewrite{thisRewrite(), computed(RelAdmin)}},
+		{TypeTenant, RelMember, []Rewrite{thisRewrite(), computed(RelManager)}},
 		{TypeTenant, RelViewer, []Rewrite{thisRewrite(), computed(RelMember)}},
 
 		{TypeDocument, RelTenant, []Rewrite{thisRewrite()}},
-		{TypeDocument, RelViewer, []Rewrite{thisRewrite(), from(RelTenant, RelViewer)}},
+		{TypeDocument, RelViewer, []Rewrite{thisRewrite(), computed(RelEditor), from(RelTenant, RelViewer)}},
 		{TypeDocument, RelEditor, []Rewrite{thisRewrite(), from(RelTenant, RelMember)}},
 	}
 
@@ -69,5 +73,120 @@ func TestDefaultNamespace_UnknownRelation(t *testing.T) {
 	}
 	if _, ok := ns.Relation("group", RelMember); ok {
 		t.Error("group type should not be defined")
+	}
+}
+
+// TestCheck_EditorImpliesViewer asserts the editor⇒viewer fix: a subject with a
+// direct document#editor grant passes a document#viewer Check, while a subject
+// with only document#viewer does NOT pass document#editor (no back-edge).
+func TestCheck_EditorImpliesViewer(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	// de: direct editor grant to "writer". dv: direct viewer grant to "reader".
+	mustWrite(t, store, tup(TypeDocument, "de", RelEditor, TypeUser, "writer", ""))
+	mustWrite(t, store, tup(TypeDocument, "dv", RelViewer, TypeUser, "reader", ""))
+	e := NewEngine(store)
+
+	tests := []struct {
+		name     string
+		objID    string
+		relation string
+		subjID   string
+		want     bool
+	}{
+		{"direct editor is editor", "de", RelEditor, "writer", true},
+		{"direct editor is also viewer (editor⇒viewer)", "de", RelViewer, "writer", true},
+		{"direct viewer is viewer", "dv", RelViewer, "reader", true},
+		{"direct viewer is NOT editor (no back-edge)", "dv", RelEditor, "reader", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.Check(ctx, TypeDocument, tc.objID, tc.relation, TypeUser, tc.subjID)
+			if err != nil {
+				t.Fatalf("Check(document:%s#%s@user:%s) error: %v", tc.objID, tc.relation, tc.subjID, err)
+			}
+			if got != tc.want {
+				t.Errorf("Check(document:%s#%s@user:%s) = %v, want %v", tc.objID, tc.relation, tc.subjID, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheck_ManagerOrdering asserts admin ⊆ manager ⊆ member ⊆ viewer: a manager
+// reaches member/viewer, an admin reaches manager, but a plain member does NOT
+// reach manager.
+func TestCheck_ManagerOrdering(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	mustWrite(t, store, tup(TypeTenant, "tm", RelManager, TypeUser, "mgr", ""))
+	mustWrite(t, store, tup(TypeTenant, "tm", RelMember, TypeUser, "mem", ""))
+	mustWrite(t, store, tup(TypeTenant, "tm", RelAdmin, TypeUser, "adm", ""))
+	e := NewEngine(store)
+
+	tests := []struct {
+		name     string
+		relation string
+		subjID   string
+		want     bool
+	}{
+		{"manager is member", RelMember, "mgr", true},
+		{"manager is viewer", RelViewer, "mgr", true},
+		{"manager is manager (direct)", RelManager, "mgr", true},
+		{"member is NOT manager", RelManager, "mem", false},
+		{"member is member (direct)", RelMember, "mem", true},
+		{"admin is manager (admin⇒manager)", RelManager, "adm", true},
+		{"admin is member", RelMember, "adm", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.Check(ctx, TypeTenant, "tm", tc.relation, TypeUser, tc.subjID)
+			if err != nil {
+				t.Fatalf("Check(tenant:tm#%s@user:%s) error: %v", tc.relation, tc.subjID, err)
+			}
+			if got != tc.want {
+				t.Errorf("Check(tenant:tm#%s@user:%s) = %v, want %v", tc.relation, tc.subjID, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheck_SystemAdminResolvesDocumentViewer confirms the deepest chain — a
+// system admin reading a doc via document#viewer — terminates, grants, and stays
+// at the design's depth 5 (well under DefaultMaxDepth). This also demonstrates no
+// rewrite cycle was introduced by the editor⇒viewer + manager edits.
+func TestCheck_SystemAdminResolvesDocumentViewer(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	mustWrite(t, store, tup(TypeSystem, SystemObjectID, RelAdmin, TypeUser, "sa", ""))
+	mustWrite(t, store, tup(TypeTenant, "td", RelSystem, TypeSystem, SystemObjectID, ""))
+	mustWrite(t, store, tup(TypeDocument, "dd", RelTenant, TypeTenant, "td", ""))
+
+	// Default depth: grants with no error.
+	e := NewEngine(store)
+	got, err := e.Check(ctx, TypeDocument, "dd", RelViewer, TypeUser, "sa")
+	if err != nil {
+		t.Fatalf("default-depth Check error: %v", err)
+	}
+	if !got {
+		t.Error("system admin should resolve document#viewer, got deny")
+	}
+
+	// The chain resolves at exactly depth 5, so MaxDepth=5 still grants.
+	e5 := NewEngine(store)
+	e5.MaxDepth = 5
+	got5, err5 := e5.Check(ctx, TypeDocument, "dd", RelViewer, TypeUser, "sa")
+	if err5 != nil {
+		t.Fatalf("depth-5 Check error: %v", err5)
+	}
+	if !got5 {
+		t.Error("chain should resolve within depth 5, got deny")
+	}
+}
+
+// mustWrite writes a tuple to the store, failing the test on error.
+func mustWrite(t *testing.T, s Store, tp Tuple) {
+	t.Helper()
+	if err := s.Write(context.Background(), tp); err != nil {
+		t.Fatalf("write %+v: %v", tp, err)
 	}
 }

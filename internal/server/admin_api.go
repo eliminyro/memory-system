@@ -253,26 +253,44 @@ func (h *adminAPIHandler) revokeUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// importAuthorizer decides whether the caller may target tenantID for an
+// import operation (enqueue or status), given the resolved target tenant.
+// Shared between the admin and relational import surfaces (design.md §8) via
+// enqueueImportShared / importStatusShared, so the upload/status mechanics
+// aren't duplicated between adminAPIHandler and apiHandler.
+type importAuthorizer func(ctx context.Context, tenantID uuid.UUID) bool
+
+// allowAnyTenant is the admin surface's importAuthorizer: unrestricted,
+// because the whole /api/admin subtree already sits behind adminOnly before
+// this ever runs (a system admin may direct an import at any tenant).
+func allowAnyTenant(context.Context, uuid.UUID) bool { return true }
+
 // enqueueImport accepts a zip archive upload (multipart form file field
 // "archive"), persists it as a queued import_jobs row, and returns the job id
 // (202). The in-process worker ingests it off the request path (design D7).
-// Oversized uploads are rejected 413 via http.MaxBytesReader; a missing tenant
-// or malformed form is 400. Non-admins never reach here — adminOnly returns 403
-// before dispatch.
-//
-// The target tenant defaults to the caller's own (auth.TenantIDFromContext) but
-// may be overridden with an optional "tenant_id" form field: the whole
-// /api/admin surface is adminOnly, so a system admin may direct an import at any
-// tenant (the /ui Import page's tenant picker sends this). The worker ingests
-// into job.TenantID regardless of who enqueued it.
+// Non-admins never reach here — adminOnly returns 403 before dispatch — so the
+// target tenant is trusted unconditionally (allowAnyTenant); see
+// enqueueImportShared for the upload/authorize/enqueue mechanics shared with
+// the relational /api/import surface (apiHandler.enqueueImport, design.md §8).
 func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) {
+	enqueueImportShared(w, r, h.importJobs, h.maxUploadBytes, allowAnyTenant)
+}
+
+// enqueueImportShared implements the archive-upload + enqueue mechanics
+// common to POST /api/admin/import and POST /api/import: extract the
+// multipart "archive" field, resolve the target tenant (context default,
+// optionally overridden by a "tenant_id" form field), authorize the resolved
+// target via authorize, then persist a queued import_jobs row. Oversized
+// uploads are rejected 413 via http.MaxBytesReader; a missing/malformed
+// tenant or archive is 400; an authorize failure is 403.
+func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobStore, maxUploadBytes int64, authorize importAuthorizer) {
 	// Cap the whole request body: MaxBytesReader makes reads past the limit fail
 	// with *http.MaxBytesError, surfaced below as 413. Passing the same cap as
 	// ParseMultipartForm's maxMemory keeps the file part in memory (no temp-file
 	// spill — the image runs on a read-only rootfs). Parsing the form here also
 	// makes the optional tenant_id field readable via r.FormValue below.
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadBytes)
-	archive, err := readArchiveUpload(r, h.maxUploadBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	archive, err := readArchiveUpload(r, maxUploadBytes)
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
@@ -296,13 +314,17 @@ func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no target tenant: pass tenant_id or authenticate with a tenant-scoped key"})
 		return
 	}
+	if !authorize(r.Context(), tenantID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to import into this tenant"})
+		return
+	}
 
 	job := &models.ImportJob{
 		TenantID: tenantID,
 		Status:   models.ImportJobStatusQueued,
 		Archive:  archive,
 	}
-	if err := h.importJobs.Create(r.Context(), job); err != nil {
+	if err := jobs.Create(r.Context(), job); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -326,13 +348,23 @@ func readArchiveUpload(r *http.Request, maxMemory int64) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-// importStatus returns an import job's state and progress counters. GetByID is
-// tenant-scoped, so the archive bytes never leave the server (json:"-") and an
-// unknown or wrong-tenant id yields 404 via writeErr. The owning tenant defaults
-// to the caller's own but may be given as an optional "tenant_id" query param —
-// echoed by enqueueImport — so a job an admin sent to another tenant is
-// pollable. Trusting the param leaks nothing: this surface is adminOnly.
+// importStatus returns an import job's state and progress counters. Non-admins
+// never reach here — adminOnly returns 403 before dispatch — so the target
+// tenant is trusted unconditionally (allowAnyTenant); see importStatusShared
+// for the lookup/authorize mechanics shared with the relational
+// GET /api/import/{id} surface (apiHandler.importStatus, design.md §8).
 func (h *adminAPIHandler) importStatus(w http.ResponseWriter, r *http.Request) {
+	importStatusShared(w, r, h.importJobs, allowAnyTenant)
+}
+
+// importStatusShared implements the job-status lookup mechanics common to
+// GET /api/admin/import/{id} and GET /api/import/{id}: resolve the job id and
+// the target tenant (context default, optionally overridden by a "tenant_id"
+// query param — echoed by enqueueImportShared), authorize the resolved target
+// via authorize, then fetch the tenant-scoped job. GetByID is tenant-scoped,
+// so the archive bytes never leave the server (json:"-") and an unknown or
+// wrong-tenant id yields 404 via writeErr.
+func importStatusShared(w http.ResponseWriter, r *http.Request, jobs importJobStore, authorize importAuthorizer) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job id"})
@@ -344,7 +376,11 @@ func (h *adminAPIHandler) importStatus(w http.ResponseWriter, r *http.Request) {
 			tenantID = parsed
 		}
 	}
-	job, err := h.importJobs.GetByID(r.Context(), id, tenantID)
+	if !authorize(r.Context(), tenantID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to view this tenant's import jobs"})
+		return
+	}
+	job, err := jobs.GetByID(r.Context(), id, tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return

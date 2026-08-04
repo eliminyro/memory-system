@@ -51,6 +51,28 @@ func TenantAdmin(tenantID uuid.UUID, subjectID string) authz.Tuple {
 	}
 }
 
+// TenantManager returns tenant:<T>#manager@user:<subjectID>.
+func TenantManager(tenantID uuid.UUID, subjectID string) authz.Tuple {
+	return authz.Tuple{
+		ObjectType:  authz.TypeTenant,
+		ObjectID:    tenantID.String(),
+		Relation:    authz.RelManager,
+		SubjectType: authz.TypeUser,
+		SubjectID:   subjectID,
+	}
+}
+
+// TenantViewer returns tenant:<T>#viewer@user:<subjectID>.
+func TenantViewer(tenantID uuid.UUID, subjectID string) authz.Tuple {
+	return authz.Tuple{
+		ObjectType:  authz.TypeTenant,
+		ObjectID:    tenantID.String(),
+		Relation:    authz.RelViewer,
+		SubjectType: authz.TypeUser,
+		SubjectID:   subjectID,
+	}
+}
+
 // DocumentTenantEdge returns document:<D>#tenant@tenant:<T>, set at document
 // create; routes document viewer/editor through the owning tenant's membership.
 func DocumentTenantEdge(docID, tenantID uuid.UUID) authz.Tuple {
@@ -60,6 +82,30 @@ func DocumentTenantEdge(docID, tenantID uuid.UUID) authz.Tuple {
 		Relation:    authz.RelTenant,
 		SubjectType: authz.TypeTenant,
 		SubjectID:   tenantID.String(),
+	}
+}
+
+// DocumentViewer returns document:<D>#viewer@user:<subjectID>, a per-document
+// guest read grant.
+func DocumentViewer(docID uuid.UUID, subjectID string) authz.Tuple {
+	return authz.Tuple{
+		ObjectType:  authz.TypeDocument,
+		ObjectID:    docID.String(),
+		Relation:    authz.RelViewer,
+		SubjectType: authz.TypeUser,
+		SubjectID:   subjectID,
+	}
+}
+
+// DocumentEditor returns document:<D>#editor@user:<subjectID>, a per-document
+// guest write grant (also confers read via the editor⇒viewer rewrite).
+func DocumentEditor(docID uuid.UUID, subjectID string) authz.Tuple {
+	return authz.Tuple{
+		ObjectType:  authz.TypeDocument,
+		ObjectID:    docID.String(),
+		Relation:    authz.RelEditor,
+		SubjectType: authz.TypeUser,
+		SubjectID:   subjectID,
 	}
 }
 

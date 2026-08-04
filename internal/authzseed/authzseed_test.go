@@ -34,9 +34,29 @@ func TestTupleConstructors(t *testing.T) {
 			authz.Tuple{ObjectType: authz.TypeTenant, ObjectID: tid.String(), Relation: authz.RelAdmin, SubjectType: authz.TypeUser, SubjectID: "u1"},
 		},
 		{
+			"tenant manager",
+			TenantManager(tid, "u3"),
+			authz.Tuple{ObjectType: authz.TypeTenant, ObjectID: tid.String(), Relation: authz.RelManager, SubjectType: authz.TypeUser, SubjectID: "u3"},
+		},
+		{
+			"tenant viewer",
+			TenantViewer(tid, "u4"),
+			authz.Tuple{ObjectType: authz.TypeTenant, ObjectID: tid.String(), Relation: authz.RelViewer, SubjectType: authz.TypeUser, SubjectID: "u4"},
+		},
+		{
 			"document tenant edge",
 			DocumentTenantEdge(did, tid),
 			authz.Tuple{ObjectType: authz.TypeDocument, ObjectID: did.String(), Relation: authz.RelTenant, SubjectType: authz.TypeTenant, SubjectID: tid.String()},
+		},
+		{
+			"document viewer",
+			DocumentViewer(did, "u5"),
+			authz.Tuple{ObjectType: authz.TypeDocument, ObjectID: did.String(), Relation: authz.RelViewer, SubjectType: authz.TypeUser, SubjectID: "u5"},
+		},
+		{
+			"document editor",
+			DocumentEditor(did, "u6"),
+			authz.Tuple{ObjectType: authz.TypeDocument, ObjectID: did.String(), Relation: authz.RelEditor, SubjectType: authz.TypeUser, SubjectID: "u6"},
 		},
 		{
 			"system admin",
