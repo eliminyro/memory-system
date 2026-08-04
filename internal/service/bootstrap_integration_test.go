@@ -184,6 +184,43 @@ func TestBootstrapAdminEmailSeedsWhenOAuthConfigured(t *testing.T) {
 	requireTuple(t, store, authzseed.TenantAdmin(key.TenantID, users[0].ID.String()))
 }
 
+// TestBootstrapAdminEmailBecomesSystemAdmin: with OAuth configured and an
+// AdminEmail supplied, Bootstrap grants that email system:memory#admin on the SAME
+// subject id the OAuth UserContextBridge resolves it to (tenant_users.id) — so the
+// founding operator reaches the admin console after logging in via /ui (design D1).
+// Two system#admin tuples then exist: the founding key's and the founding email's.
+func TestBootstrapAdminEmailBecomesSystemAdmin(t *testing.T) {
+	db := openServicePG(t)
+	clearAdmins(t, db)
+	store := authz.NewPostgresStore(db)
+	svc := newAdminTestSvc(db, store)
+	svc.OAuthConfigured = true
+
+	adminCtx := auth.WithLocalAdmin(context.Background())
+	email := uuid.NewString() + "@example.test"
+	_, key, err := svc.Bootstrap(adminCtx, "", service.BootstrapSpec{
+		TenantName: "admin-" + uuid.NewString(),
+		AdminEmail: email,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	users, err := svc.ListTenantUsers(adminCtx, key.TenantID)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	subject := users[0].ID.String()
+
+	// The tenant_users.id subject holds system:memory#admin (store-level tuple)...
+	requireTuple(t, store, authzseed.SystemAdmin(subject))
+	// ...and IsAdmin agrees for a context carrying that subject, exactly as the OAuth
+	// login path presents it (UserContextBridge -> auth.WithSubject).
+	subjCtx := auth.WithSubject(context.Background(), auth.Subject{Type: auth.SubjectTypeUser, ID: subject})
+	require.True(t, svc.IsAdmin(subjCtx), "founding email subject must be recognized as system admin")
+
+	// Exactly two system#admin tuples: the founding key's and the founding email's.
+	require.Len(t, systemAdminTuples(t, store), 2)
+}
+
 // TestBootstrapAdminEmailIgnoredWhenOAuthOff: an AdminEmail is ignored when OAuth
 // is not configured (design D4) — only the tenant + admin key are provisioned,
 // no tenant_users mapping is created.
@@ -205,4 +242,8 @@ func TestBootstrapAdminEmailIgnoredWhenOAuthOff(t *testing.T) {
 	users, err := svc.ListTenantUsers(adminCtx, key.TenantID)
 	require.NoError(t, err)
 	require.Empty(t, users, "admin email must be ignored when OAuth is not configured")
+
+	// No system#admin beyond the founding key: OAuth off means no email subject is
+	// granted (design D1 negative case).
+	require.Len(t, systemAdminTuples(t, store), 1, "OAuth off: only the founding key holds system#admin")
 }

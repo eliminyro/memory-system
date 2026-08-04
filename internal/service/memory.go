@@ -785,8 +785,18 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 		// mapping is atomic with the tenant+key; a failure rolls the whole bootstrap
 		// back. The admin API key is still minted and returned for the API/MCP path.
 		if shouldSeedAdminEmail(spec.AdminEmail, s.OAuthConfigured) {
-			if _, err := txSvc.GrantTenantUser(adminCtx, spec.AdminEmail, tenant.ID, models.TenantUserRoleAdmin); err != nil {
+			tu, err := txSvc.GrantTenantUser(adminCtx, spec.AdminEmail, tenant.ID, models.TenantUserRoleAdmin)
+			if err != nil {
 				return fmt.Errorf("bootstrap: grant admin email: %w", err)
+			}
+			// The founding email must hold system:memory#admin exactly like the founding
+			// key, or the admin console (adminOnly/IsAdmin gate on system:memory#admin)
+			// rejects it. The OAuth login path resolves the email to the tenant_users.id
+			// subject (UserContextBridge), the same id GrantTenantUser used for its
+			// member/admin tuples, so seed system admin on that subject. Like the key
+			// seed above, a failure here rolls the whole bootstrap back.
+			if err := txSvc.authz.Write(ctx, authzseed.SystemAdmin(tu.ID.String())); err != nil {
+				return fmt.Errorf("bootstrap: seed admin email system admin: %w", err)
 			}
 		}
 		plaintext, key = pt, k

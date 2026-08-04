@@ -410,8 +410,18 @@ function renderSearchResults(results) {
 async function renderBrowse() {
   navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  const entries = await apiFetch("/index?depth=summary");
+  // A freshly-bootstrapped tenant with zero documents can yield JSON null here
+  // (and older servers still do); coerce to [] so we never iterate a non-array.
+  const entries = (await apiFetch("/index?depth=summary")) || [];
   view.replaceChildren();
+
+  if (!entries.length) {
+    view.append(el("p", {
+      className: "state-msg",
+      textContent: "No memories yet — import a .zip from the Admin panel, or add memories via your MCP client / the API.",
+    }));
+    return;
+  }
 
   // Group by category
   const byCategory = new Map();
@@ -513,8 +523,18 @@ function wireSearch() {
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
+// showError surfaces a clean, human-readable banner to the user and keeps the
+// technical detail in the console. Errors thrown by apiFetch carry an HTTP
+// `status` and a server-provided message — those are safe and useful to show.
+// Unexpected throws (e.g. a TypeError like "X is not iterable") have no status
+// and are meaningless to a user, so we show a generic sentence instead of the
+// raw exception string.
 function showError(err) {
-  view.replaceChildren(el("p", { className: "state-msg state-err", textContent: err.message || String(err) }));
+  console.error("memory UI error:", err);
+  const msg = err && err.status
+    ? `Couldn't load this view: ${err.message}`
+    : "Something went wrong loading this view. Try reloading the page; if it persists, check the server logs.";
+  view.replaceChildren(el("p", { className: "state-msg state-err", textContent: msg }));
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────────
@@ -556,6 +576,70 @@ function mountAdminEntry() {
     if (location.hash === "#admin") renderAdmin().catch(showError);
     else renderBrowse().catch(showError);
   });
+}
+
+// ── Connect an MCP client (Task 5 / D5) ───────────────────────────────────────
+// A header entry point mounted for every logged-in user. It renders a static
+// panel explaining how to point an MCP client at this server — the OAuth path
+// (no token) and the static-key path. It never fetches or persists a secret.
+
+// mcpURL returns this instance's MCP endpoint (<origin>/mcp), preferring the
+// server-published `resource` from config.json (equals <base>/mcp) and falling
+// back to the current origin when config has not been loaded.
+function mcpURL() {
+  return (CONFIG && CONFIG.resource) || (window.location.origin + "/mcp");
+}
+
+// mountConnectEntry adds a "Connect" button to the header for every logged-in
+// user. It renders the panel directly on click (no hash routing) so it never
+// races the admin hash router in mountAdminEntry.
+function mountConnectEntry() {
+  const header = document.querySelector("header");
+  if (!header || document.getElementById("connect-link")) return;
+  const link = el("button", { id: "connect-link", className: "admin-link", textContent: "Connect", type: "button" });
+  link.addEventListener("click", () => renderConnect());
+  header.append(link);
+}
+
+// renderConnect shows how to connect an MCP client: the server URL, the OAuth
+// path, and the static API-key path. Values are copy-pasteable; nothing here
+// reads or stores a secret.
+function renderConnect() {
+  navStack.length = 0; // root-ish view — clear history
+  view.replaceChildren();
+
+  const hdr = el("div", { className: "cat-hdr" });
+  const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
+  back.addEventListener("click", () => renderBrowse().catch(showError));
+  hdr.append(back, el("h2", { textContent: "Connect an MCP client" }));
+  view.append(hdr);
+
+  const url = mcpURL();
+  const sec = el("section");
+  sec.append(el("p", { className: "meta", textContent: "Point your MCP client at this server:" }));
+  sec.append(el("code", { className: "modal-key", textContent: url }));
+
+  sec.append(el("h3", { textContent: "With OAuth (recommended)" }));
+  sec.append(el("p", {
+    className: "meta",
+    textContent: "MCP clients that support OAuth need only the URL above — they complete the login flow themselves. There is no static token to manage.",
+  }));
+
+  sec.append(el("h3", { textContent: "With an API key" }));
+  const keyPara = isAdmin
+    ? el("p", { className: "meta" },
+        "Or use a static Bearer API key. Issue one from ",
+        el("a", { href: "#admin", textContent: "Admin" }),
+        ", open a tenant, then \"Issue key\" — send it as ",
+        el("code", { textContent: "Authorization: Bearer <key>" }),
+        ".")
+    : el("p", { className: "meta" },
+        "Or use a static Bearer API key sent as ",
+        el("code", { textContent: "Authorization: Bearer <key>" }),
+        ". Ask an admin to issue you a key.");
+  sec.append(keyPara);
+
+  view.append(sec);
 }
 
 // renderAdmin — admin root: list tenants + create-tenant form.
@@ -992,11 +1076,12 @@ function showKeyModal(result) {
       return;
     }
     wireSearch();
+    mountConnectEntry();
     const admin = await checkAdmin();
     if (admin && location.hash === "#admin") {
-      await renderAdmin();
+      await renderAdmin().catch(showError);
     } else {
-      await renderBrowse();
+      await renderBrowse().catch(showError);
     }
   } catch (err) {
     // beginLogin() throws "redirecting to login" — that's expected; ignore it.

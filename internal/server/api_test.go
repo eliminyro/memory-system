@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/repository"
 )
 
 // Behavioral counterparts (handlers forwarding context tenant + params, marshaling
@@ -181,5 +182,23 @@ func TestAPIPatchDocument_InvalidID(t *testing.T) {
 	h.mux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", rec.Code)
+	}
+}
+
+// jsonList must coerce a nil slice (empty corpus) to a JSON array, never null —
+// a null body breaks the /ui client (design D2). The getIndex element type stands
+// in for every list endpoint's empty-result path.
+func TestJSONList_NilCoercesToArray(t *testing.T) {
+	var empty []repository.IndexEntry // nil, as GenerateIndex returns on an empty corpus
+	b, err := json.Marshal(jsonList(empty))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("nil list marshaled to %s, want []", b)
+	}
+	// A populated slice passes through unchanged.
+	if got := jsonList([]int{1, 2}); len(got) != 2 {
+		t.Errorf("populated slice len = %d, want 2", len(got))
 	}
 }
