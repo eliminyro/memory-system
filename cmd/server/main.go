@@ -282,10 +282,21 @@ func main() {
 	// Setup skipped.
 	var authletWiring *authletas.Wiring
 	if cfg.AuthletEnabled() {
+		authletStore := authletstore.New(db)
+
+		// Idempotently register the public PKCE OAuth client the /ui SPA
+		// authenticates as, so no operator hand-inserts an oauth_clients row.
+		// Safe here: database.Migrate (above) created the authlet tables. Logs
+		// at INFO when it creates or updates the client (no secret — public).
+		if err := authletstore.SeedUIClient(rootCtx, authletStore, cfg.UIClientID, cfg.PublicBaseURL, slog.Default()); err != nil {
+			slog.Error("failed to seed UI OAuth client", "error", err)
+			os.Exit(1)
+		}
+
 		authletWiring, err = authletas.Setup(
 			rootCtx,
 			db,
-			authletstore.New(db),
+			authletStore,
 			cfg.GoogleClientID,
 			cfg.GoogleClientSecret,
 			cfg.PublicBaseURL,
