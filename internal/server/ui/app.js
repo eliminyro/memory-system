@@ -590,6 +590,18 @@ function mcpURL() {
   return (CONFIG && CONFIG.resource) || (window.location.origin + "/mcp");
 }
 
+// mcpConfigJSON returns a generic `mcpServers` config block for an MCP client.
+// Most coding agents (Claude Code, Cursor, Windsurf, …) share this shape; field
+// names vary slightly (type/transport), but the URL — and, for key auth, the
+// Authorization header — are the constants. withKey uses a placeholder, never a
+// real secret.
+function mcpConfigJSON(url, withKey) {
+  const server = withKey
+    ? { type: "http", url, headers: { Authorization: "Bearer <admin key>" } }
+    : { type: "http", url };
+  return JSON.stringify({ mcpServers: { memory: server } }, null, 2);
+}
+
 // mountConnectEntry adds a "Connect" button to the header for every logged-in
 // user. It renders the panel directly on click (no hash routing) so it never
 // races the admin hash router in mountAdminEntry.
@@ -622,22 +634,21 @@ function renderConnect() {
   sec.append(el("h3", { textContent: "With OAuth (recommended)" }));
   sec.append(el("p", {
     className: "meta",
-    textContent: "MCP clients that support OAuth need only the URL above — they complete the login flow themselves. There is no static token to manage.",
+    textContent: "Clients that support OAuth need only the URL — they complete the login flow themselves, with no static token to manage. Field names vary slightly by client (type/transport).",
   }));
+  sec.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(url, false) }));
 
   sec.append(el("h3", { textContent: "With an API key" }));
   const keyPara = isAdmin
     ? el("p", { className: "meta" },
-        "Or use a static Bearer API key. Issue one from ",
+        "For clients (or CI) that don't do OAuth, use a static Bearer key. Issue one from ",
         el("a", { href: "#admin", textContent: "Admin" }),
-        ", open a tenant, then \"Issue key\" — send it as ",
-        el("code", { textContent: "Authorization: Bearer <key>" }),
-        ".")
+        " → a tenant → \"Issue key\", then drop it into the ", el("code", { textContent: "Authorization" }), " header:")
     : el("p", { className: "meta" },
-        "Or use a static Bearer API key sent as ",
-        el("code", { textContent: "Authorization: Bearer <key>" }),
-        ". Ask an admin to issue you a key.");
+        "For clients (or CI) that don't do OAuth, use a static Bearer key (ask an admin to issue one) in the ",
+        el("code", { textContent: "Authorization" }), " header:");
   sec.append(keyPara);
+  sec.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(url, true) }));
 
   view.append(sec);
 }
