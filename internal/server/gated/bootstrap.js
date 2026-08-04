@@ -1,10 +1,19 @@
-// bootstrap.js — pre-auth /bootstrap provisioning form (design D3/D4). This
+// bootstrap.js — pre-auth /bootstrap provisioning form (design D1/D2). This
 // page is served in place of a real front-end while the instance is
 // un-bootstrapped (see internal/server/bootstrap.go: bootstrapGate /
 // bootstrapPageHandler), so it is deliberately standalone: no sessionStorage
 // token, no vendor libs (nothing here is untrusted markdown), just a form that
-// fetches whether OAuth is configured (to show/hide the admin-email field)
-// and posts to the pre-auth POST /bootstrap endpoint.
+// fetches whether OAuth is configured and posts to the pre-auth POST
+// /bootstrap endpoint.
+//
+// Everything on the page is derived from one signal — oauth_configured from
+// GET /bootstrap/config.json. An always-visible status block reports it, and a
+// pair of CSP-safe mode tabs ("MCP tokens" / "OAuth") present the same request
+// two ways. The admin key is always issued; admin_email is sent only when the
+// operator supplied it AND OAuth is configured. There is exactly ONE
+// #bootstrap-admin-email input in the DOM: it lives in the OAuth panel and is
+// physically relocated into the tokens panel when the "also enable OAuth"
+// toggle is on, so there is never a duplicate id or a second submitted value.
 
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -16,15 +25,60 @@ function el(tag, attrs = {}, ...kids) {
 const form = document.getElementById("bootstrap-form");
 const submitBtn = document.getElementById("bootstrap-submit");
 const resultEl = document.getElementById("bootstrap-result");
+
+const statusEl = document.getElementById("bootstrap-status");
+const tokensBtn = document.getElementById("tab-tokens");
+const oauthBtn = document.getElementById("tab-oauth");
+const panelTokens = document.getElementById("panel-tokens");
+const panelOauth = document.getElementById("panel-oauth");
+const enableOAuthCheckbox = document.getElementById("bootstrap-enable-oauth");
+const enableOAuthNote = document.getElementById("bootstrap-enable-oauth-note");
+const oauthInfo = document.getElementById("bootstrap-oauth-info");
 const emailField = document.getElementById("bootstrap-email-field");
-const oauthNote = document.getElementById("bootstrap-oauth-note");
+const oauthEmailSlot = document.getElementById("oauth-email-slot");
+const tokensEmailSlot = document.getElementById("tokens-email-slot");
 
 let oauthConfigured = false;
+let activeTab = "tokens";
+
+// placeEmailField keeps the single admin-email field in the right panel and
+// governs its visibility. When OAuth is configured it belongs in whichever
+// panel the operator is looking at (the OAuth panel, or the tokens panel when
+// the "also enable OAuth" toggle is on); otherwise it stays parked and hidden.
+function placeEmailField() {
+  if (!oauthConfigured) {
+    oauthEmailSlot.appendChild(emailField);
+    emailField.hidden = true;
+    return;
+  }
+  if (activeTab === "tokens" && enableOAuthCheckbox.checked) {
+    tokensEmailSlot.appendChild(emailField);
+    emailField.hidden = false;
+  } else {
+    oauthEmailSlot.appendChild(emailField);
+    emailField.hidden = activeTab !== "oauth";
+  }
+}
+
+// selectTab toggles the two panels and gives the active tab a primary-button
+// look. It is wired via addEventListener (no inline handlers) to stay CSP-safe.
+function selectTab(name) {
+  activeTab = name;
+  const onTokens = name === "tokens";
+  panelTokens.hidden = !onTokens;
+  panelOauth.hidden = onTokens;
+  tokensBtn.className = onTokens ? "sec-btn sec-btn-primary" : "sec-btn";
+  oauthBtn.className = onTokens ? "sec-btn" : "sec-btn sec-btn-primary";
+  tokensBtn.setAttribute("aria-selected", String(onTokens));
+  oauthBtn.setAttribute("aria-selected", String(!onTokens));
+  placeEmailField();
+}
 
 // loadConfig fetches whether OAuth login is configured on this instance
 // (GET /bootstrap/config.json, mirroring the authenticated UI's
-// /ui/config.json) and shows/hides the admin-email field accordingly — an
-// email is moot if there is no OAuth login to use it with.
+// /ui/config.json) and renders the whole page from that one boolean: the
+// status block copy, the tokens-panel toggle (enabled vs disabled-with-note),
+// the OAuth panel (admin-email field vs env-setup info), and the default tab.
 async function loadConfig() {
   try {
     const cfg = await (await fetch("/bootstrap/config.json")).json();
@@ -32,10 +86,38 @@ async function loadConfig() {
   } catch {
     oauthConfigured = false;
   }
-  // Show the admin-email field when OAuth is configured; otherwise show a note
-  // in its place explaining that /ui will be unavailable until OAuth is set up.
-  emailField.hidden = !oauthConfigured;
-  if (oauthNote) oauthNote.hidden = oauthConfigured;
+
+  statusEl.textContent = oauthConfigured
+    ? "OAuth is configured (via environment). The /ui web console and OAuth sign-in for MCP are available."
+    : "OAuth is not configured. The /ui web console and ACL management are unavailable until OAuth is set up.";
+
+  // Tokens panel: the "also enable OAuth" toggle only works when OAuth is
+  // actually configured; otherwise it is disabled with an explanatory note.
+  enableOAuthCheckbox.disabled = !oauthConfigured;
+  if (!oauthConfigured) enableOAuthCheckbox.checked = false;
+  enableOAuthNote.hidden = oauthConfigured;
+
+  // OAuth panel: the founding admin-email field when configured, otherwise
+  // informational copy on which env vars to set and restart.
+  if (oauthConfigured) {
+    oauthInfo.hidden = true;
+  } else {
+    oauthInfo.replaceChildren(
+      "OAuth is not configured. Set ",
+      el("code", { textContent: "MEMORY_MCP_GOOGLE_CLIENT_ID" }),
+      " and ",
+      el("code", { textContent: "MEMORY_MCP_GOOGLE_CLIENT_SECRET" }),
+      " (plus ",
+      el("code", { textContent: "AUTHLET_MASTER_KEY" }),
+      " and ",
+      el("code", { textContent: "PUBLIC_BASE_URL" }),
+      ") on the server and restart to enable the /ui console. In-app OAuth setup is coming in a future release.",
+    );
+    oauthInfo.hidden = false;
+  }
+
+  // Default tab: OAuth when configured, else MCP tokens.
+  selectTab(oauthConfigured ? "oauth" : "tokens");
 }
 
 function showError(msg) {
@@ -85,13 +167,19 @@ function showSuccess(resp) {
   resultEl.replaceChildren(wrap);
 }
 
+tokensBtn.addEventListener("click", () => selectTab("tokens"));
+oauthBtn.addEventListener("click", () => selectTab("oauth"));
+enableOAuthCheckbox.addEventListener("change", placeEmailField);
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   submitBtn.disabled = true;
   resultEl.replaceChildren();
 
   const body = { token: document.getElementById("bootstrap-token").value };
-  if (oauthConfigured) {
+  // Send admin_email only when the single field is present, visible, and
+  // non-empty AND OAuth is configured — matching shouldSeedAdminEmail server-side.
+  if (oauthConfigured && !emailField.hidden) {
     const email = document.getElementById("bootstrap-admin-email").value.trim();
     if (email) body.admin_email = email;
   }

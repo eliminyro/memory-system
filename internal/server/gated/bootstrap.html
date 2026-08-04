@@ -18,14 +18,45 @@
         <label class="setup-label" for="bootstrap-token">Bootstrap token</label>
         <input id="bootstrap-token" class="admin-input" type="password" autocomplete="off" required>
 
-        <div id="bootstrap-email-field" hidden>
-          <label class="setup-label" for="bootstrap-admin-email">Admin email <span class="meta">(optional)</span></label>
-          <input id="bootstrap-admin-email" class="admin-input" type="email" autocomplete="off">
+        <!-- OAuth status block: always visible; copy filled by bootstrap.js. -->
+        <p id="bootstrap-status" class="meta"></p>
+
+        <!-- Mode tabs (CSP-safe: buttons wired via addEventListener). -->
+        <div id="bootstrap-tabs" role="tablist" aria-label="Bootstrap mode">
+          <button id="tab-tokens" class="sec-btn" type="button" role="tab">MCP tokens</button>
+          <button id="tab-oauth" class="sec-btn" type="button" role="tab">OAuth</button>
         </div>
 
-        <p id="bootstrap-oauth-note" class="meta" hidden>OAuth login is not configured, so the web
-        console (/ui) will be unavailable. Set MEMORY_MCP_GOOGLE_CLIENT_ID and
-        MEMORY_MCP_GOOGLE_CLIENT_SECRET on the server to enable it.</p>
+        <!-- MCP tokens panel -->
+        <div id="panel-tokens" role="tabpanel" aria-labelledby="tab-tokens" hidden>
+          <p class="meta">Provision an admin API key — a Bearer token for MCP and
+          the HTTP API. OAuth is required for the /ui web console and ACL
+          management.</p>
+          <label class="setup-label">
+            <input id="bootstrap-enable-oauth" type="checkbox"> Also enable OAuth for /ui
+          </label>
+          <p id="bootstrap-enable-oauth-note" class="meta" hidden>OAuth isn't
+          configured — set it via environment for now (in-app setup is coming).</p>
+          <!-- The single admin-email field is moved here when the toggle is on. -->
+          <div id="tokens-email-slot"></div>
+        </div>
+
+        <!-- OAuth panel -->
+        <div id="panel-oauth" role="tabpanel" aria-labelledby="tab-oauth" hidden>
+          <!-- Informational copy shown only when OAuth is not configured. -->
+          <p id="bootstrap-oauth-info" class="meta" hidden></p>
+          <!-- Home slot for the single admin-email field (shown when configured). -->
+          <div id="oauth-email-slot">
+            <div id="bootstrap-email-field">
+              <label class="setup-label" for="bootstrap-admin-email">Founding admin email <span class="meta">(optional)</span></label>
+              <input id="bootstrap-admin-email" class="admin-input" type="email" autocomplete="off">
+              <p class="meta">The Google account that will sign in to /ui as the
+              first administrator — full control over tenants, users, and ACLs.
+              Leave blank to administer via the admin API key only; you can grant
+              an admin later with <code>memory-admin user grant</code>.</p>
+            </div>
+          </div>
+        </div>
 
         <button id="bootstrap-submit" class="sec-btn sec-btn-primary" type="submit">Bootstrap</button>
       </form>

@@ -189,6 +189,40 @@ func TestLoadPublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsUIClientID(t *testing.T) {
+	cases := []struct {
+		name     string
+		authlet  bool
+		envValue string
+		want     string
+	}{
+		{name: "authlet on, unset -> defaulted", authlet: true, envValue: "", want: DefaultUIClientID},
+		{name: "authlet on, explicit value kept", authlet: true, envValue: "custom-ui", want: "custom-ui"},
+		{name: "authlet off, unset stays empty", authlet: false, envValue: "", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.authlet {
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_ID", "id")
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_SECRET", "sec")
+				t.Setenv("PUBLIC_BASE_URL", "https://mem.example.org")
+			} else {
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_ID", "")
+				t.Setenv("MEMORY_MCP_GOOGLE_CLIENT_SECRET", "")
+			}
+			t.Setenv("MEMORY_UI_CLIENT_ID", tc.envValue)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.UIClientID != tc.want {
+				t.Fatalf("UIClientID = %q, want %q", cfg.UIClientID, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadProviderRequiredFields(t *testing.T) {
 	cases := []struct {
 		name     string

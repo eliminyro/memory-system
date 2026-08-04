@@ -77,12 +77,20 @@ application logs.
 ### Over HTTP
 
 While the instance is un-bootstrapped, `GET /bootstrap` serves a dedicated,
-self-contained setup page (styled like `/ui` but with no vendor JS): paste in
-the token logged at boot, optionally an admin email, and submit. It calls
-`POST /bootstrap` below and displays the returned key once. Once an admin
-exists, every route under `/bootstrap` — the page, `POST /bootstrap`, and
-`GET /bootstrap/config.json` — returns **404**; bootstrap is one-shot and the
-whole surface vanishes once armed.
+self-contained setup page (styled like `/ui` but with no vendor JS). It always
+shows OAuth status and offers two modes: **MCP tokens** (just provision the
+admin Bearer key) and **OAuth** (additionally seed a founding admin email so a
+human can sign in to `/ui`). Paste the token logged at boot, pick a mode, and
+submit; it calls `POST /bootstrap` below and displays the returned key once.
+Once an admin exists, every route under `/bootstrap` — the page,
+`POST /bootstrap`, and `GET /bootstrap/config.json` — returns **404**; bootstrap
+is one-shot and the whole surface vanishes once armed.
+
+When OAuth is enabled, the server auto-registers the public PKCE `/ui` OAuth
+client on boot (from `MEMORY_UI_CLIENT_ID`, defaulting to `memory-ui`, and
+`PUBLIC_BASE_URL`), so browser login works with no manual `oauth_clients`
+insert. (Configuring the OAuth provider credentials from the page itself,
+persisted to the DB, is planned; today the provider is set via the environment.)
 
 Equivalently, call the endpoint directly:
 

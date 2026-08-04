@@ -209,13 +209,17 @@ A fresh instance can bootstrap itself instead of requiring direct database acces
 first boot, while no admin exists yet, the server generates a one-time bootstrap token
 and logs it at `WARN` (read it with `docker logs`; it is regenerated every boot until an
 admin exists and is never persisted or logged again afterward). `GET /bootstrap` serves
-a dedicated setup page — paste the logged token plus an optional admin email — and
-`POST /bootstrap` provisions the first tenant and admin, returning the plaintext admin
-key exactly once; the whole `/bootstrap` surface **404s** once an admin exists. When
-OAuth is configured, that optional admin email is granted `system:memory#admin` (the
-same authority as the founding key), so the operator can sign in at `/ui` via OAuth with
-full admin rights; the page shows the email field only when OAuth is wired up, and
-otherwise notes that `/ui` stays unavailable until it is.
+a dedicated setup page: paste the logged token and pick a mode. The page always shows
+OAuth status and offers two modes — **MCP tokens** (provision the admin Bearer key) and
+**OAuth** (additionally seed a founding admin email). `POST /bootstrap` provisions the
+first tenant and admin, returning the plaintext admin key exactly once (always, in
+either mode); the whole `/bootstrap` surface **404s** once an admin exists. When OAuth
+is configured, the optional founding admin email is granted `system:memory#admin` (the
+same authority as the founding key), so the operator signs in at `/ui` via OAuth with
+full admin rights. With OAuth enabled the server also **auto-registers the `/ui` OAuth
+client on boot** (from `MEMORY_UI_CLIENT_ID`, defaulting to `memory-ui`, and
+`PUBLIC_BASE_URL`), so browser login works with no manual database access. (Configuring
+the OAuth provider from the page itself, persisted to the DB, is planned.)
 `memory-admin bootstrap` provisions the same way straight from the CLI with no token
 needed (it talks to the database directly and is inherently privileged). An
 operator-only `MEMORY_RESET=1` boot flag re-arms bootstrap by clearing the admin key(s)

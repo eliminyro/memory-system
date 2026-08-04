@@ -11,6 +11,12 @@ import (
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
+// DefaultUIClientID is the client_id assigned to the web UI's public PKCE OAuth
+// client when MEMORY_UI_CLIENT_ID is unset on an OAuth-enabled instance. It
+// keeps /ui/config.json from ever advertising an empty client and gives the
+// boot-time seed (internal/authletstore.SeedUIClient) a stable id to register.
+const DefaultUIClientID = "memory-ui"
+
 type Config struct {
 	DatabaseURL string `env:"DATABASE_URL" envDefault:"postgres://memory:memory@localhost:5432/memory?sslmode=disable"`
 	ServerAddr  string `env:"SERVER_ADDR" envDefault:":8080"`
@@ -192,6 +198,12 @@ func Load() (*Config, error) {
 	if cfg.AuthletEnabled() {
 		if err := validatePublicBaseURL(cfg.PublicBaseURL); err != nil {
 			return nil, err
+		}
+		// Default the UI client id so /ui/config.json never advertises an empty
+		// client on an OAuth instance and the boot-time UI-client seed has a
+		// stable id to register.
+		if cfg.UIClientID == "" {
+			cfg.UIClientID = DefaultUIClientID
 		}
 	}
 
