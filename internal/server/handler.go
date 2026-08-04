@@ -117,22 +117,29 @@ func NewHandler(d Deps) http.Handler {
 	return handler
 }
 
-// importUploadPath is the sole route exempted from the global body-size cap
-// (see bypassGlobalBodyCap).
-const importUploadPath = "/api/admin/import"
+// importUploadPath is the admin-scoped import upload route exempted from the
+// global body-size cap (see bypassGlobalBodyCap); relationalImportUploadPath
+// is its non-admin, relationally-authorized counterpart (design.md §8, the
+// ACL-management import refactor) — both need the same exemption.
+const (
+	importUploadPath           = "/api/admin/import"
+	relationalImportUploadPath = "/api/import"
+)
 
 // bypassGlobalBodyCap reports whether a request should skip the global
 // MaxRequestBytes wrapper and rely solely on its own, purpose-built body-size
-// enforcement. Only POST /api/admin/import qualifies: MaxRequestBytes is DoS
-// hardening for the general surface, including unauthenticated routes (health
-// probes, UI shell, bootstrap); this route, by contrast, is admin-authenticated
-// and already enforces its own larger ImportMaxUploadBytes ceiling via
-// http.MaxBytesReader inside enqueueImport. Wrapping it in the smaller global
-// cap too would nest MaxBytesReaders, silently shrinking the effective limit to
-// min(MaxRequestBytes, ImportMaxUploadBytes) instead of the intended, larger
-// upload ceiling — so it is exempted here and governed solely by its own cap.
+// enforcement. Only POST importUploadPath / relationalImportUploadPath
+// qualify: MaxRequestBytes is DoS hardening for the general surface, including
+// unauthenticated routes (health probes, UI shell, bootstrap); these routes,
+// by contrast, are authenticated (admin, or a relationally-authorized manager)
+// and already enforce their own larger ImportMaxUploadBytes ceiling via
+// http.MaxBytesReader inside enqueueImportShared. Wrapping them in the smaller
+// global cap too would nest MaxBytesReaders, silently shrinking the effective
+// limit to min(MaxRequestBytes, ImportMaxUploadBytes) instead of the intended,
+// larger upload ceiling — so both are exempted here and governed solely by
+// their own cap.
 func bypassGlobalBodyCap(method, path string) bool {
-	return method == http.MethodPost && path == importUploadPath
+	return method == http.MethodPost && (path == importUploadPath || path == relationalImportUploadPath)
 }
 
 // withGlobalBodyCap wraps next with the global MaxRequestBytes cap, except for

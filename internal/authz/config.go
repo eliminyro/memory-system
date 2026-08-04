@@ -73,16 +73,23 @@ func from(tupleset, computedRelation string) Rewrite {
 //
 //	type user
 //	type system
-//	  admin:  [user]
+//	  admin:   [user]
 //	type tenant
-//	  system: [system]                       # parent edge (seeded at tenant create)
-//	  admin:  [user] or admin from system     # tenant admins ∪ global admins
-//	  member: [user] or admin                 # admins are members
-//	  viewer: [user:*] or member              # wildcard enables public read
+//	  system:  [system]                        # parent edge (seeded at tenant create)
+//	  admin:   [user] or admin from system      # tenant admins ∪ global admins
+//	  manager: [user] or admin                  # admins are managers
+//	  member:  [user] or manager                # managers are members
+//	  viewer:  [user:*] or member               # wildcard enables public read
 //	type document
-//	  tenant: [tenant]                        # parent edge (set at document create)
-//	  viewer: [user] or viewer from tenant
-//	  editor: [user] or member from tenant
+//	  tenant:  [tenant]                         # parent edge (set at document create)
+//	  viewer:  [user] or editor or viewer from tenant  # editors read too
+//	  editor:  [user] or member from tenant
+//
+// Inclusion chains: system#admin ⊆ tenant#admin ⊆ tenant#manager ⊆ tenant#member
+// ⊆ tenant#viewer; document#editor ⊆ document#viewer. No rewrite cycle
+// (viewer → editor → member-from-tenant → …#admin → system#admin; no back-edge to
+// viewer). Deepest Check chain (system admin reading a doc) is depth 5, well under
+// DefaultMaxDepth (16).
 func DefaultNamespace() Namespace {
 	return Namespace{
 		Types: map[string]TypeDef{
@@ -115,11 +122,17 @@ func DefaultNamespace() Namespace {
 						DirectSubjects: []string{TypeUser},
 						Rewrites:       []Rewrite{thisRewrite(), from(RelSystem, RelAdmin)},
 					},
-					// Direct members ∪ admins.
+					// Direct managers ∪ admins (admins are managers).
+					RelManager: {
+						Name:           RelManager,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelAdmin)},
+					},
+					// Direct members ∪ managers.
 					RelMember: {
 						Name:           RelMember,
 						DirectSubjects: []string{TypeUser},
-						Rewrites:       []Rewrite{thisRewrite(), computed(RelAdmin)},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelManager)},
 					},
 					// Public wildcard read ∪ members. this allows user:*.
 					RelViewer: {
@@ -138,11 +151,12 @@ func DefaultNamespace() Namespace {
 						DirectSubjects: []string{TypeTenant},
 						Rewrites:       []Rewrite{thisRewrite()},
 					},
-					// Direct viewers ∪ viewers of the owning tenant.
+					// Direct viewers ∪ editors ∪ viewers of the owning tenant.
+					// computed(editor) makes every editor a viewer (editor ⇒ viewer).
 					RelViewer: {
 						Name:           RelViewer,
 						DirectSubjects: []string{TypeUser},
-						Rewrites:       []Rewrite{thisRewrite(), from(RelTenant, RelViewer)},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelEditor), from(RelTenant, RelViewer)},
 					},
 					// Direct editors ∪ members of the owning tenant.
 					RelEditor: {

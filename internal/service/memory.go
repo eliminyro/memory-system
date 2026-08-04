@@ -947,6 +947,366 @@ func (s *MemoryService) RevokeTenantUser(ctx context.Context, email string) erro
 	return nil
 }
 
+// --- ACL: delegated tenant/document access management ---
+//
+// These methods let a tenant#manager (not just a system admin) grant/revoke
+// membership and per-document guest access, subject to the grant-ceiling
+// matrix (design.md §6): a manager may grant/revoke viewer/member on tenants
+// they manage and viewer/editor on documents owned by tenants they manage,
+// but may NOT appoint or remove tenant#manager/tenant#admin — that requires
+// tenant#admin or system admin.
+
+// CanManageTenant reports whether the caller may administer tenantID's
+// membership: system admin OR tenant#manager (which itself includes
+// tenant#admin, since the manager relation's rewrite is this ∪ computed(admin)).
+func (s *MemoryService) CanManageTenant(ctx context.Context, tenantID uuid.UUID) bool {
+	return s.isAdmin(ctx) || s.authorize(ctx, authz.TypeTenant, tenantID.String(), authz.RelManager)
+}
+
+// TenantAccess pairs a tenant with the caller's effective relation on it, so
+// the UI can label the caller's role (design.md §5).
+type TenantAccess struct {
+	Tenant   models.Tenant `json:"tenant"`
+	Relation string        `json:"relation"`
+}
+
+// WritableTenants lists the tenants the caller may administer: every tenant
+// for a system admin (labeled RelAdmin), else the tenants where a direct
+// tuple on the caller's subject resolves to tenant#manager once confirmed by
+// Check. ReadBySubject returns only DIRECT tuples, so a member/viewer tuple on
+// a tenant the caller does not otherwise manage is a candidate that Check
+// then correctly excludes, while a direct tenant#admin tuple is correctly
+// included via the manager<-admin rewrite (design.md §4).
+func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, error) {
+	if s.isAdmin(ctx) {
+		tenants, err := s.tenants.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]TenantAccess, len(tenants))
+		for i, t := range tenants {
+			result[i] = TenantAccess{Tenant: t, Relation: authz.RelAdmin}
+		}
+		return result, nil
+	}
+	if s.authz == nil {
+		return nil, nil
+	}
+	subj, ok := auth.SubjectFromContext(ctx)
+	if !ok || subj.ID == "" {
+		return nil, nil
+	}
+	tuples, err := s.authz.ReadBySubject(ctx, subj.Type, subj.ID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]struct{}, len(tuples))
+	var result []TenantAccess
+	for _, t := range tuples {
+		if t.ObjectType != authz.TypeTenant {
+			continue
+		}
+		tid, err := uuid.Parse(t.ObjectID)
+		if err != nil {
+			continue
+		}
+		if _, dup := seen[tid]; dup {
+			continue
+		}
+		seen[tid] = struct{}{}
+		if !s.authorize(ctx, authz.TypeTenant, tid.String(), authz.RelManager) {
+			continue
+		}
+		tenant, err := s.tenants.GetByID(ctx, tid)
+		if err != nil {
+			// Stale tuple pointing at a deleted tenant; skip rather than fail the list.
+			continue
+		}
+		result = append(result, TenantAccess{Tenant: *tenant, Relation: authz.RelManager})
+	}
+	return result, nil
+}
+
+// resolveSubjectByEmail looks up the tenant_users row for email — the ACL
+// subject-id convention is tenant_user.ID.String() (design.md §3). Email is
+// globally unique. Not found is an error; the ACL surface never auto-creates
+// tenant_users rows (that's GrantTenantUser's job).
+func (s *MemoryService) resolveSubjectByEmail(ctx context.Context, email string) (*models.TenantUser, error) {
+	var tu models.TenantUser
+	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&tu).Error; err != nil {
+		return nil, fmt.Errorf("%w: no user mapping for %s", apperr.ErrNotFound, email)
+	}
+	return &tu, nil
+}
+
+// subjectEmail resolves an authz subject id back to its tenant_users email for
+// display (Grant.Email). Non-UUID subjects (e.g. "svc:<tenant>" service
+// principals) and ids with no matching row are reported not-found; list
+// callers skip rather than fail the whole list on these.
+func (s *MemoryService) subjectEmail(ctx context.Context, subjectID string) (string, error) {
+	id, err := uuid.Parse(subjectID)
+	if err != nil {
+		return "", fmt.Errorf("%w: subject %s is not email-mapped", apperr.ErrNotFound, subjectID)
+	}
+	var tu models.TenantUser
+	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&tu).Error; err != nil {
+		return "", fmt.Errorf("%w: no tenant_user for subject %s", apperr.ErrNotFound, subjectID)
+	}
+	return tu.Email, nil
+}
+
+// documentTenantID resolves a document's owning tenant by ID alone (no tenant
+// scoping), so ACL grant checks can authorize CanManageTenant(doc.TenantID)
+// without first knowing the caller's own tenant context — a manager may
+// administer a tenant that isn't the tenant their own request happens to be
+// scoped to. Deliberately archived-INCLUSIVE (unlike the read-path repo
+// methods): GrantDocumentAccess/RevokeDocumentAccess/ListDocumentGrants must
+// still reach an archived document's guest tuples, or a manager loses the
+// ability to list/revoke lingering document#viewer/#editor grants once a doc
+// is archived — those tuples would then silently reactivate if the doc is
+// later un-archived. Granting on an archived doc is harmless (the tuple just
+// sits dormant), so one archived-inclusive lookup suits all three callers.
+func (s *MemoryService) documentTenantID(ctx context.Context, docID uuid.UUID) (uuid.UUID, error) {
+	var doc models.Document
+	if err := s.db.WithContext(ctx).
+		Select("tenant_id").
+		Where("id = ?", docID).
+		First(&doc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return uuid.Nil, fmt.Errorf("%w: document %s", apperr.ErrNotFound, docID)
+		}
+		return uuid.Nil, err
+	}
+	return doc.TenantID, nil
+}
+
+// validTenantGrantRelations is the accepted relation set for
+// GrantTenantAccess/RevokeTenantAccess (design.md §5).
+var validTenantGrantRelations = map[string]struct{}{
+	authz.RelViewer:  {},
+	authz.RelMember:  {},
+	authz.RelManager: {},
+}
+
+// canGrantTenantRelation enforces the grant-ceiling matrix (design.md §6):
+// viewer/member require the caller already manage the tenant (manager+);
+// manager requires tenant#admin or system admin — a manager may never appoint
+// another manager or admin. relation is expected to already be validated
+// against validTenantGrantRelations; an unrecognized value denies.
+func (s *MemoryService) canGrantTenantRelation(ctx context.Context, tenantID uuid.UUID, relation string) bool {
+	switch relation {
+	case authz.RelManager:
+		return s.isAdmin(ctx) || s.authorize(ctx, authz.TypeTenant, tenantID.String(), authz.RelAdmin)
+	case authz.RelViewer, authz.RelMember:
+		return s.CanManageTenant(ctx, tenantID)
+	default:
+		return false
+	}
+}
+
+// tenantGrantTuple builds the authz tuple for relation on tenantID/subjectID
+// via the authzseed constructors. relation must already be validated.
+func tenantGrantTuple(tenantID uuid.UUID, subjectID, relation string) authz.Tuple {
+	switch relation {
+	case authz.RelViewer:
+		return authzseed.TenantViewer(tenantID, subjectID)
+	case authz.RelManager:
+		return authzseed.TenantManager(tenantID, subjectID)
+	default: // authz.RelMember
+		return authzseed.TenantMember(tenantID, subjectID)
+	}
+}
+
+// GrantTenantAccess grants email the given relation (viewer, member, or
+// manager) on tenantID, enforcing the grant-ceiling matrix (design.md §6).
+// email must already have a tenant_users row; the ACL surface does not
+// auto-create one.
+func (s *MemoryService) GrantTenantAccess(ctx context.Context, tenantID uuid.UUID, email, relation string) error {
+	if _, ok := validTenantGrantRelations[relation]; !ok {
+		return fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidInput)
+	}
+	if !s.canGrantTenantRelation(ctx, tenantID, relation) {
+		return fmt.Errorf("%w: not authorized to grant %s on tenant %s", apperr.ErrInvalidInput, relation, tenantID)
+	}
+	tu, err := s.resolveSubjectByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if s.authz == nil {
+		return fmt.Errorf("grant tenant access: authz store not configured")
+	}
+	if err := s.authz.Write(ctx, tenantGrantTuple(tenantID, tu.ID.String(), relation)); err != nil {
+		return fmt.Errorf("grant tenant access: %w", err)
+	}
+	return nil
+}
+
+// RevokeTenantAccess removes email's relation grant on tenantID, subject to
+// the same grant-ceiling matrix as GrantTenantAccess.
+func (s *MemoryService) RevokeTenantAccess(ctx context.Context, tenantID uuid.UUID, email, relation string) error {
+	if _, ok := validTenantGrantRelations[relation]; !ok {
+		return fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidInput)
+	}
+	if !s.canGrantTenantRelation(ctx, tenantID, relation) {
+		return fmt.Errorf("%w: not authorized to revoke %s on tenant %s", apperr.ErrInvalidInput, relation, tenantID)
+	}
+	tu, err := s.resolveSubjectByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if s.authz == nil {
+		return fmt.Errorf("revoke tenant access: authz store not configured")
+	}
+	if err := s.authz.Delete(ctx, tenantGrantTuple(tenantID, tu.ID.String(), relation)); err != nil {
+		return fmt.Errorf("revoke tenant access: %w", err)
+	}
+	return nil
+}
+
+// validDocumentGrantRelations is the accepted relation set for
+// GrantDocumentAccess/RevokeDocumentAccess (design.md §5).
+var validDocumentGrantRelations = map[string]struct{}{
+	authz.RelViewer: {},
+	authz.RelEditor: {},
+}
+
+// documentGrantTuple builds the authz tuple for relation on docID/subjectID
+// via the authzseed constructors. relation must already be validated.
+func documentGrantTuple(docID uuid.UUID, subjectID, relation string) authz.Tuple {
+	if relation == authz.RelEditor {
+		return authzseed.DocumentEditor(docID, subjectID)
+	}
+	return authzseed.DocumentViewer(docID, subjectID)
+}
+
+// GrantDocumentAccess grants email per-document guest access (viewer or
+// editor) to docID. The caller must manage the document's owning tenant
+// (CanManageTenant(doc.TenantID)) — document guest sharing is bounded by
+// tenant management, not by holding a grant on the document itself.
+func (s *MemoryService) GrantDocumentAccess(ctx context.Context, docID uuid.UUID, email, relation string) error {
+	if _, ok := validDocumentGrantRelations[relation]; !ok {
+		return fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidInput)
+	}
+	tenantID, err := s.documentTenantID(ctx, docID)
+	if err != nil {
+		return err
+	}
+	if !s.CanManageTenant(ctx, tenantID) {
+		return fmt.Errorf("%w: not authorized to manage document %s", apperr.ErrInvalidInput, docID)
+	}
+	tu, err := s.resolveSubjectByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if s.authz == nil {
+		return fmt.Errorf("grant document access: authz store not configured")
+	}
+	if err := s.authz.Write(ctx, documentGrantTuple(docID, tu.ID.String(), relation)); err != nil {
+		return fmt.Errorf("grant document access: %w", err)
+	}
+	return nil
+}
+
+// RevokeDocumentAccess removes email's per-document guest grant on docID,
+// subject to the same tenant-management requirement as GrantDocumentAccess.
+func (s *MemoryService) RevokeDocumentAccess(ctx context.Context, docID uuid.UUID, email, relation string) error {
+	if _, ok := validDocumentGrantRelations[relation]; !ok {
+		return fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidInput)
+	}
+	tenantID, err := s.documentTenantID(ctx, docID)
+	if err != nil {
+		return err
+	}
+	if !s.CanManageTenant(ctx, tenantID) {
+		return fmt.Errorf("%w: not authorized to manage document %s", apperr.ErrInvalidInput, docID)
+	}
+	tu, err := s.resolveSubjectByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if s.authz == nil {
+		return fmt.Errorf("revoke document access: authz store not configured")
+	}
+	if err := s.authz.Delete(ctx, documentGrantTuple(docID, tu.ID.String(), relation)); err != nil {
+		return fmt.Errorf("revoke document access: %w", err)
+	}
+	return nil
+}
+
+// Grant is one relation-tuple rendered for display: SubjectID resolved to
+// Email via tenant_users (design.md §5).
+type Grant struct {
+	Email     string `json:"email"`
+	SubjectID string `json:"subject_id"`
+	Relation  string `json:"relation"`
+}
+
+// ListTenantGrants lists every direct viewer/member/manager grant on tenantID
+// (tenant#admin is out of scope here — that's the GrantTenantUser admin
+// flow). Caller must CanManageTenant(tenantID). Wildcard/userset subjects and
+// subjects with no resolvable email (stale tenant_users, service principals)
+// are skipped rather than failing the whole list.
+func (s *MemoryService) ListTenantGrants(ctx context.Context, tenantID uuid.UUID) ([]Grant, error) {
+	if !s.CanManageTenant(ctx, tenantID) {
+		return nil, fmt.Errorf("%w: not authorized to list grants for tenant %s", apperr.ErrInvalidInput, tenantID)
+	}
+	if s.authz == nil {
+		return nil, nil
+	}
+	var grants []Grant
+	for _, rel := range []string{authz.RelViewer, authz.RelMember, authz.RelManager} {
+		tuples, err := s.authz.ReadByObjectRelation(ctx, authz.TypeTenant, tenantID.String(), rel)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tuples {
+			if t.SubjectType != authz.TypeUser || t.IsUserset() || t.IsWildcard() {
+				continue
+			}
+			email, err := s.subjectEmail(ctx, t.SubjectID)
+			if err != nil {
+				continue
+			}
+			grants = append(grants, Grant{Email: email, SubjectID: t.SubjectID, Relation: rel})
+		}
+	}
+	return grants, nil
+}
+
+// ListDocumentGrants lists every direct per-document guest viewer/editor grant
+// on docID (tenant-inherited access is out of scope — only explicit guest
+// shares). Caller must CanManageTenant(doc.TenantID).
+func (s *MemoryService) ListDocumentGrants(ctx context.Context, docID uuid.UUID) ([]Grant, error) {
+	tenantID, err := s.documentTenantID(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.CanManageTenant(ctx, tenantID) {
+		return nil, fmt.Errorf("%w: not authorized to list grants for document %s", apperr.ErrInvalidInput, docID)
+	}
+	if s.authz == nil {
+		return nil, nil
+	}
+	var grants []Grant
+	for _, rel := range []string{authz.RelViewer, authz.RelEditor} {
+		tuples, err := s.authz.ReadByObjectRelation(ctx, authz.TypeDocument, docID.String(), rel)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tuples {
+			if t.SubjectType != authz.TypeUser || t.IsUserset() || t.IsWildcard() {
+				continue
+			}
+			email, err := s.subjectEmail(ctx, t.SubjectID)
+			if err != nil {
+				continue
+			}
+			grants = append(grants, Grant{Email: email, SubjectID: t.SubjectID, Relation: rel})
+		}
+	}
+	return grants, nil
+}
+
 // UpdateTenantFields bundles the optional patches admin/self tools may apply.
 // Any nil pointer leaves the corresponding column unchanged.
 type UpdateTenantFields struct {

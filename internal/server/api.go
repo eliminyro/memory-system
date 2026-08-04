@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -36,11 +37,65 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
 	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 
+	// GET /tenants/writable backs the delegated-manager UI probe (design.md
+	// §7/§9): every tenant for a system admin, else the tenants the caller
+	// manages. Not adminOnly — a manager who isn't a system admin needs this.
+	m.HandleFunc("GET /tenants/writable", h.listWritableTenants)
+
+	// Relational import surface (design.md §8): sysadmin may target any
+	// tenant, otherwise the caller must manage the target tenant
+	// (CanManageTenant). Not adminOnly — mechanics shared with the admin
+	// surface below via enqueueImportShared/importStatusShared.
+	m.HandleFunc("POST /import", h.enqueueImport)
+	m.HandleFunc("GET /import/{id}", h.importStatus)
+
+	// ACL surface /acl/* (i.e. /api/acl/*): NOT adminOnly, since a delegated
+	// tenant#manager (not a system admin) must reach it too. Authorization is
+	// enforced by the service methods themselves (design.md §7).
+	acl := &aclAPIHandler{memory: h.memory}
+	m.Handle("/acl/", http.StripPrefix("/acl", acl.mux()))
+
 	// Admin surface /admin/* (i.e. /api/admin/*), gated by adminOnly so non-admins
 	// get a clean 403; the shared bearer + UserContextBridge stack set the subject.
 	admin := &adminAPIHandler{memory: h.memory, importJobs: h.importJobs, maxUploadBytes: h.maxUploadBytes}
 	m.Handle("/admin/", adminOnly(h.memory)(http.StripPrefix("/admin", admin.mux())))
 	return m
+}
+
+// listWritableTenants returns the tenants the caller may administer, each
+// paired with the caller's effective relation (design.md §5): every tenant
+// (labeled admin) for a system admin, else the tenants where the caller holds
+// tenant#manager.
+func (h *apiHandler) listWritableTenants(w http.ResponseWriter, r *http.Request) {
+	tenants, err := h.memory.WritableTenants(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, jsonList(tenants))
+}
+
+// enqueueImport is the relational (non-admin) counterpart of
+// adminAPIHandler.enqueueImport (design.md §8): same upload/enqueue
+// mechanics (enqueueImportShared), but the resolved target tenant is
+// authorized via canImportInto instead of being trusted unconditionally.
+func (h *apiHandler) enqueueImport(w http.ResponseWriter, r *http.Request) {
+	enqueueImportShared(w, r, h.importJobs, h.maxUploadBytes, h.canImportInto)
+}
+
+// importStatus is the relational counterpart of adminAPIHandler.importStatus
+// (design.md §8): same status-lookup mechanics (importStatusShared), gated by
+// canImportInto on the resolved target tenant.
+func (h *apiHandler) importStatus(w http.ResponseWriter, r *http.Request) {
+	importStatusShared(w, r, h.importJobs, h.canImportInto)
+}
+
+// canImportInto authorizes the relational import surface (design.md §8): a
+// system admin may target any tenant; otherwise the caller must manage the
+// target tenant (tenant#manager, which includes tenant#admin via the manager
+// relation's rewrite — design.md §1a). Everyone else is refused: 403, no job.
+func (h *apiHandler) canImportInto(ctx context.Context, tenantID uuid.UUID) bool {
+	return h.memory.IsAdmin(ctx) || h.memory.CanManageTenant(ctx, tenantID)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
