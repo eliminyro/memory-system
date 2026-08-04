@@ -136,6 +136,18 @@ function showError(msg) {
   resultEl.replaceChildren(el("p", { className: "state-msg state-err", textContent: msg }));
 }
 
+// mcpConfigJSON returns a generic `mcpServers` config block for an MCP client.
+// Most coding agents (Claude Code, Cursor, Windsurf, …) share this shape; field
+// names vary slightly (type/transport), but the URL — and, for key auth, the
+// Authorization header — are the constants. withKey uses a placeholder, never
+// the real key (which is offered via the Copy button).
+function mcpConfigJSON(url, withKey) {
+  const server = withKey
+    ? { type: "http", url, headers: { Authorization: "Bearer <admin key>" } }
+    : { type: "http", url };
+  return JSON.stringify({ mcpServers: { memory: server } }, null, 2);
+}
+
 // keyCopyControls offers the one-time admin key via a Copy button rather than
 // printing it to the screen. On success it confirms "Copied"; if the Clipboard
 // API is unavailable or blocked it reveals the key inline as a fallback, so a
@@ -176,17 +188,22 @@ function showSuccess(resp, adminEmail) {
       " to browse memory and manage tenants, users, and ACLs."));
     wrap.append(el("p", { className: "meta" },
       "To connect an MCP client, point it at ", el("code", { textContent: origin + "/mcp" }),
-      " — clients that support OAuth need only the URL, no token."));
+      " — clients that support OAuth need only the URL, no token (field names vary by client):"));
+    wrap.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(origin + "/mcp", false) }));
     // Secondary path: the break-glass key.
     wrap.append(el("h3", { textContent: "Break-glass admin key" }));
     wrap.append(el("p", { className: "meta" },
       "A root credential for recovery if OAuth login ever fails, and for CI or MCP clients that don't use OAuth. Issued once and never retrievable again — copy it somewhere safe now, or discard it."));
     wrap.append(keyCopyControls(resp.api_key || ""));
+    wrap.append(el("p", { className: "meta", textContent: "To use it, add an Authorization header instead of the OAuth flow:" }));
+    wrap.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(origin + "/mcp", true) }));
   } else {
     // No OAuth: the key is the only way in.
     wrap.append(el("p", { className: "modal-warn" },
       "Your admin API key — a Bearer token for the MCP and HTTP API. Issued once and never retrievable again; copy it now."));
     wrap.append(keyCopyControls(resp.api_key || ""));
+    wrap.append(el("p", { className: "meta", textContent: "Then drop it into your MCP client config (field names vary by client):" }));
+    wrap.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(origin + "/mcp", true) }));
   }
 
   wrap.append(el("p", {
