@@ -296,6 +296,9 @@ main {
 .setup-form .admin-input { width: 100%; }
 .setup-form .sec-btn { margin-top: 1rem; align-self: flex-start; }
 .setup-result-ok h2 { font-size: 1.1rem; margin: 1rem 0 0.5rem; }
+.setup-result-ok h3 { font-size: 0.95rem; margin: 1.25rem 0 0.25rem; }
+.keybox { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin: 0.5rem 0; }
+.keybox .modal-key { flex-basis: 100%; }
 
 /* Bootstrap mode tabs — a tab strip, not action buttons. */
 #bootstrap-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid #ddd; margin-top: 1rem; }

@@ -136,46 +136,63 @@ function showError(msg) {
   resultEl.replaceChildren(el("p", { className: "state-msg state-err", textContent: msg }));
 }
 
-// showSuccess replaces the form with the one-time admin key display. The key
-// lives only in this response object and the visible <code> element — it is
-// never written to storage, matching the authenticated UI's key modal
-// (app.js showKeyModal). The follow-up copy depends on whether OAuth login is
-// available: when it is, the key is an MCP/API Bearer credential, /ui is a
-// usable console, and MCP clients may connect via key OR OAuth; when it is not,
-// the key is the only way in (Bearer token against MCP/API).
-function showSuccess(resp) {
+// keyCopyControls offers the one-time admin key via a Copy button rather than
+// printing it to the screen. On success it confirms "Copied"; if the Clipboard
+// API is unavailable or blocked it reveals the key inline as a fallback, so a
+// credential that is issued exactly once is never lost.
+function keyCopyControls(key) {
+  const box = el("div", { className: "keybox" });
+  const btn = el("button", { className: "sec-btn sec-btn-primary", type: "button", textContent: "Copy admin key" });
+  const status = el("span", { className: "meta" });
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(key);
+      status.textContent = "Copied ✓";
+    } catch {
+      status.textContent = "Copy unavailable — select and copy manually:";
+      box.append(el("code", { className: "modal-key", textContent: key }));
+    }
+  });
+  box.append(btn, status);
+  return box;
+}
+
+// showSuccess replaces the form with the bootstrap result. The admin key is
+// issued exactly once; it is offered via a Copy button (keyCopyControls), not
+// printed, and never stored. When OAuth is configured the screen LEADS with the
+// /ui login and frames the key as a secondary break-glass credential; without
+// OAuth the key is the primary way in.
+function showSuccess(resp, adminEmail) {
   form.hidden = true;
+  const origin = window.location.origin;
   const wrap = el("div", { className: "setup-result-ok" });
   wrap.append(el("h2", { textContent: "Bootstrap complete" }));
-  wrap.append(el("p", {
-    className: "modal-warn",
-    textContent: "Copy this key now — it is shown only once and cannot be retrieved again.",
-  }));
-  wrap.append(el("p", {
-    className: "meta",
-    textContent: oauthConfigured ? "This is your admin MCP/API Bearer key:" : "This is your admin API key:",
-  }));
-  wrap.append(el("code", { className: "modal-key", textContent: resp.api_key || "" }));
+
+  if (oauthConfigured) {
+    // Primary path: sign in via OAuth.
+    const who = adminEmail ? ` as ${adminEmail}` : "";
+    wrap.append(el("p", {},
+      "Sign in to ", el("a", { href: "/ui/", textContent: "the web console" }), who,
+      " to browse memory and manage tenants, users, and ACLs."));
+    wrap.append(el("p", { className: "meta" },
+      "To connect an MCP client, point it at ", el("code", { textContent: origin + "/mcp" }),
+      " — clients that support OAuth need only the URL, no token."));
+    // Secondary path: the break-glass key.
+    wrap.append(el("h3", { textContent: "Break-glass admin key" }));
+    wrap.append(el("p", { className: "meta" },
+      "A root credential for recovery if OAuth login ever fails, and for CI or MCP clients that don't use OAuth. Issued once and never retrievable again — copy it somewhere safe now, or discard it."));
+    wrap.append(keyCopyControls(resp.api_key || ""));
+  } else {
+    // No OAuth: the key is the only way in.
+    wrap.append(el("p", { className: "modal-warn" },
+      "Your admin API key — a Bearer token for the MCP and HTTP API. Issued once and never retrievable again; copy it now."));
+    wrap.append(keyCopyControls(resp.api_key || ""));
+  }
+
   wrap.append(el("p", {
     className: "meta",
     textContent: `tenant ${resp.tenant_id || ""} · key ${resp.key_id || ""}`,
   }));
-
-  if (oauthConfigured) {
-    const origin = window.location.origin;
-    wrap.append(el("p", {},
-      "Log in to ", el("a", { href: "/ui/", textContent: "the web console" }),
-      " — browse memory and manage tenants, users, and ACLs."));
-    wrap.append(el("p", { className: "meta" },
-      "To connect an MCP client, point it at ", el("code", { textContent: origin + "/mcp" }), " and either:"));
-    const ways = el("ul");
-    ways.append(el("li", { textContent: "use this key as a Bearer token, or" }));
-    ways.append(el("li", { textContent: "complete the OAuth login — no static token to manage." }));
-    wrap.append(ways);
-  } else {
-    wrap.append(el("p", {}, "Store the key somewhere safe, then use it as a Bearer token against the MCP/API endpoints."));
-  }
-
   resultEl.replaceChildren(wrap);
 }
 
@@ -214,7 +231,7 @@ form.addEventListener("submit", async (e) => {
       submitBtn.disabled = false;
       return;
     }
-    showSuccess(data);
+    showSuccess(data, body.admin_email);
   } catch (err) {
     showError("Bootstrap request failed: " + err.message);
     submitBtn.disabled = false;
