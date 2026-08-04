@@ -89,9 +89,19 @@ async function loadConfig() {
     oauthConfigured = false;
   }
 
-  statusEl.textContent = oauthConfigured
-    ? "OAuth is configured (via environment). The /ui web console and OAuth sign-in for MCP are available."
-    : "OAuth is not configured. The /ui web console and ACL management are unavailable until OAuth is set up.";
+  // OAuth status is a compact green/red badge, not a paragraph. The
+  // consequence (OAuth gates /ui + ACL management) is stated in the tokens
+  // panel copy, so the status block itself stays minimal. Reuses the shared
+  // badge classes already in style.css (import-status-succeeded/-failed).
+  statusEl.replaceChildren(
+    "OAuth ",
+    el("span", {
+      className: oauthConfigured
+        ? "import-status-badge import-status-succeeded"
+        : "import-status-badge import-status-failed",
+      textContent: oauthConfigured ? "enabled" : "disabled",
+    }),
+  );
 
   // Tokens panel: the "also enable OAuth" toggle only works when OAuth is
   // actually configured; otherwise it is disabled with an explanatory note.
