@@ -110,9 +110,13 @@ var bootstrapHTML string
 //go:embed gated/bootstrap.js
 var bootstrapJS string
 
-// bootstrapPageHandler renders the bootstrap page.
+// bootstrapPageHandler renders the bootstrap page. It is served no-store: the
+// bootstrap surface is one-shot and version-coupled, and any CDN/browser caching
+// it (an upstream edge cache was observed pinning a stale bootstrap.js for hours)
+// leaves an operator on a broken mix of fresh HTML and stale script.
 func bootstrapPageHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(bootstrapHTML))
 }
@@ -121,6 +125,7 @@ func bootstrapPageHandler(w http.ResponseWriter, _ *http.Request) {
 // GET /bootstrap/bootstrap.js — the only place it is reachable.
 func bootstrapJSHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(bootstrapJS))
 }
@@ -131,6 +136,7 @@ func bootstrapJSHandler(w http.ResponseWriter, _ *http.Request) {
 // handler.go uses to mount the /api bearer stack (d.AuthletWiring != nil).
 func bootstrapConfigHandler(oauthConfigured bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, map[string]bool{"oauth_configured": oauthConfigured})
 	}
 }
@@ -197,9 +203,12 @@ func bootstrapRoutes(memory *service.MemoryService, hasAdmin hasAnyAdminFunc, oa
 //go:embed gated/no-oauth.html
 var noOAuthHTML string
 
-// serveNoOAuthView renders the no-oauth page.
+// serveNoOAuthView renders the no-oauth page. No-store for the same reason as
+// the bootstrap page: it is a setup-state-dependent surface that must never be
+// served stale from a cache after OAuth is configured.
 func serveNoOAuthView(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(noOAuthHTML))
 }

@@ -297,6 +297,22 @@ main {
 .setup-form .sec-btn { margin-top: 1rem; align-self: flex-start; }
 .setup-result-ok h2 { font-size: 1.1rem; margin: 1rem 0 0.5rem; }
 
+/* Bootstrap mode tabs — a tab strip, not action buttons. */
+#bootstrap-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid #ddd; margin-top: 1rem; }
+.tab {
+  padding: 0.5rem 0.9rem;
+  font-size: 13px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: #666;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.tab:hover:not([aria-selected="true"]) { color: #333; }
+.tab[aria-selected="true"] { color: #0066cc; border-bottom-color: #0066cc; font-weight: 600; }
+#panel-tokens, #panel-oauth { padding-top: 0.75rem; }
+
 /* Import view (admin) */
 .import-progress { margin-top: 0.75rem; }
 .import-counts { display: flex; gap: 1rem; font-size: 13px; color: #444; margin-top: 0.4rem; }
