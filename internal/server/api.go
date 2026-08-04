@@ -49,6 +49,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// jsonList coerces a nil slice to a non-nil empty slice so list endpoints always
+// marshal to a JSON array ([]), never null. A null body breaks the /ui client on an
+// empty corpus (design D2); this keeps the "a list endpoint always returns an array"
+// contract at the HTTP boundary.
+func jsonList[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 // writeErr maps apperr sentinels to HTTP status + JSON {error}. Only the safe
 // sentinels (ErrNotFound / ErrInvalidInput) put their message on the wire; any
 // other error is logged and returns a generic body so internal strings (SQL,
@@ -88,7 +99,7 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, results)
+	writeJSON(w, http.StatusOK, jsonList(results))
 }
 
 func (h *apiHandler) getDocument(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +130,7 @@ func (h *apiHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, docs)
+	writeJSON(w, http.StatusOK, jsonList(docs))
 }
 
 func (h *apiHandler) getIndex(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +147,7 @@ func (h *apiHandler) getIndex(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, jsonList(entries))
 }
 
 func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {

@@ -101,9 +101,12 @@ the tenant name and key label are **not** configurable over HTTP and always
 default to `"admin"`; use `memory-admin bootstrap` or the manual CLI flow
 further down for custom naming or a key TTL. When `admin_email` is set **and**
 OAuth login is configured (`MEMORY_MCP_GOOGLE_CLIENT_ID` /
-`MEMORY_MCP_GOOGLE_CLIENT_SECRET`), that email is seeded as admin on the new
-tenant so the operator can sign in at `/ui` and is already an admin; the field
-is ignored (and the setup page hides it) when OAuth isn't configured.
+`MEMORY_MCP_GOOGLE_CLIENT_SECRET`), that email is granted `system:memory#admin`
+— the same authority as the founding API key — so the operator can sign in at
+`/ui` over OAuth and immediately reach every admin function (tenant, user/ACL,
+and key management). The field is ignored when OAuth isn't configured; the setup
+page then hides it and shows a note that `/ui` stays unavailable until OAuth is
+set up.
 
 ### From the CLI
 

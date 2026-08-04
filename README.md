@@ -211,7 +211,11 @@ and logs it at `WARN` (read it with `docker logs`; it is regenerated every boot 
 admin exists and is never persisted or logged again afterward). `GET /bootstrap` serves
 a dedicated setup page — paste the logged token plus an optional admin email — and
 `POST /bootstrap` provisions the first tenant and admin, returning the plaintext admin
-key exactly once; the whole `/bootstrap` surface **404s** once an admin exists.
+key exactly once; the whole `/bootstrap` surface **404s** once an admin exists. When
+OAuth is configured, that optional admin email is granted `system:memory#admin` (the
+same authority as the founding key), so the operator can sign in at `/ui` via OAuth with
+full admin rights; the page shows the email field only when OAuth is wired up, and
+otherwise notes that `/ui` stays unavailable until it is.
 `memory-admin bootstrap` provisions the same way straight from the CLI with no token
 needed (it talks to the database directly and is inherently privileged). An
 operator-only `MEMORY_RESET=1` boot flag re-arms bootstrap by clearing the admin key(s)
@@ -232,7 +236,14 @@ memory-admin setup --url https://mem.example.org --token mmcp_your_token_here
 # or: MEMORY_URL=... MEMORY_TOKEN=... memory-admin setup
 ```
 
-Paste the emitted block into any MCP client that supports HTTP transport. See
+Paste the emitted block into any MCP client that supports HTTP transport.
+
+When OAuth is configured, a static key is optional: an MCP client that supports OAuth can
+connect with **just the server `/mcp` URL** — it discovers the authorization server from
+the protected-resource metadata, registers dynamically, and completes the PKCE login
+flow, so there is no token to mint or store. Use a static `mmcp_...` key as a Bearer
+token for clients (or CI) that don't do OAuth. The `/ui` "Connect an MCP client" panel
+shows both paths. See
 [`docs/connecting-clients.md`](docs/connecting-clients.md) for client examples, and
 [`docs/memory-usage-prompt.md`](docs/memory-usage-prompt.md) for a persona-free,
 ready-to-paste system-prompt block that teaches an assistant to recall before acting,
