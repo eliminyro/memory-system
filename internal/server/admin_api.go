@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -253,22 +254,23 @@ func (h *adminAPIHandler) revokeUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // enqueueImport accepts a zip archive upload (multipart form file field
-// "archive"), persists it as a queued import_jobs row for the authenticated
-// admin's tenant, and returns the job id (202). The in-process worker ingests it
-// off the request path (design D7). Oversized uploads are rejected 413 via
-// http.MaxBytesReader; a missing tenant or malformed form is 400. Non-admins
-// never reach here — adminOnly returns 403 before dispatch.
+// "archive"), persists it as a queued import_jobs row, and returns the job id
+// (202). The in-process worker ingests it off the request path (design D7).
+// Oversized uploads are rejected 413 via http.MaxBytesReader; a missing tenant
+// or malformed form is 400. Non-admins never reach here — adminOnly returns 403
+// before dispatch.
+//
+// The target tenant defaults to the caller's own (auth.TenantIDFromContext) but
+// may be overridden with an optional "tenant_id" form field: the whole
+// /api/admin surface is adminOnly, so a system admin may direct an import at any
+// tenant (the /ui Import page's tenant picker sends this). The worker ingests
+// into job.TenantID regardless of who enqueued it.
 func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) {
-	tenantID := auth.TenantIDFromContext(r.Context())
-	if tenantID == uuid.Nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no tenant in context"})
-		return
-	}
-
 	// Cap the whole request body: MaxBytesReader makes reads past the limit fail
 	// with *http.MaxBytesError, surfaced below as 413. Passing the same cap as
 	// ParseMultipartForm's maxMemory keeps the file part in memory (no temp-file
-	// spill — the image runs on a read-only rootfs).
+	// spill — the image runs on a read-only rootfs). Parsing the form here also
+	// makes the optional tenant_id field readable via r.FormValue below.
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadBytes)
 	archive, err := readArchiveUpload(r, h.maxUploadBytes)
 	if err != nil {
@@ -281,6 +283,20 @@ func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	tenantID := auth.TenantIDFromContext(r.Context())
+	if v := strings.TrimSpace(r.FormValue("tenant_id")); v != "" {
+		parsed, perr := uuid.Parse(v)
+		if perr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+			return
+		}
+		tenantID = parsed
+	}
+	if tenantID == uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no target tenant: pass tenant_id or authenticate with a tenant-scoped key"})
+		return
+	}
+
 	job := &models.ImportJob{
 		TenantID: tenantID,
 		Status:   models.ImportJobStatusQueued,
@@ -290,7 +306,9 @@ func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status})
+	// tenant_id is echoed so a client that targeted another tenant can poll its
+	// status: importStatus scopes GetByID by tenant (see its ?tenant_id handling).
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "tenant_id": job.TenantID})
 }
 
 // readArchiveUpload extracts the uploaded archive bytes from the "archive"
@@ -308,17 +326,25 @@ func readArchiveUpload(r *http.Request, maxMemory int64) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-// importStatus returns an import job's state and progress counters. A job is
-// visible only within the tenant that owns it (GetByID is tenant-scoped), so an
-// unknown or cross-tenant id yields 404 via writeErr. The archive bytes never
-// leave the server (json:"-" on the model).
+// importStatus returns an import job's state and progress counters. GetByID is
+// tenant-scoped, so the archive bytes never leave the server (json:"-") and an
+// unknown or wrong-tenant id yields 404 via writeErr. The owning tenant defaults
+// to the caller's own but may be given as an optional "tenant_id" query param —
+// echoed by enqueueImport — so a job an admin sent to another tenant is
+// pollable. Trusting the param leaks nothing: this surface is adminOnly.
 func (h *adminAPIHandler) importStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job id"})
 		return
 	}
-	job, err := h.importJobs.GetByID(r.Context(), id, auth.TenantIDFromContext(r.Context()))
+	tenantID := auth.TenantIDFromContext(r.Context())
+	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
+		if parsed, perr := uuid.Parse(v); perr == nil {
+			tenantID = parsed
+		}
+	}
+	job, err := h.importJobs.GetByID(r.Context(), id, tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return
