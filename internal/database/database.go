@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -19,7 +21,20 @@ import (
 
 func Connect(databaseURL string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(databaseURL), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		// Match logger.Default, but ignore ErrRecordNotFound: it is control flow
+		// here (callers check errors.Is(err, gorm.ErrRecordNotFound)), not an
+		// error worth logging. Without this the import worker's empty-queue poll
+		// — SELECT ... FOR UPDATE SKIP LOCKED via First() — spams a "record not
+		// found" line on every tick.
+		Logger: logger.New(
+			log.New(os.Stdout, "\r\n", log.LstdFlags),
+			logger.Config{
+				SlowThreshold:             200 * time.Millisecond,
+				LogLevel:                  logger.Warn,
+				IgnoreRecordNotFoundError: true,
+				Colorful:                  true,
+			},
+		),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("connect to database: %w", err)
