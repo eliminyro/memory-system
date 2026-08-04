@@ -559,6 +559,7 @@ async function checkAdmin() {
   }
   isAdmin = true;
   mountAdminEntry();
+  mountImportEntry();
   return true;
 }
 
@@ -573,6 +574,8 @@ function route() {
   const h = location.hash;
   if (h === "#admin") {
     (isAdmin ? renderAdmin() : renderBrowse()).catch(showError);
+  } else if (h === "#import") {
+    (isAdmin ? renderImport() : renderBrowse()).catch(showError);
   } else if (h === "#connect") {
     renderConnect();
   } else {
@@ -587,6 +590,18 @@ function mountAdminEntry() {
   if (!header || document.getElementById("admin-link")) return;
   const link = el("button", { id: "admin-link", className: "admin-link", textContent: "Admin", type: "button" });
   link.addEventListener("click", () => { location.hash = "admin"; });
+  header.append(link);
+}
+
+// mountImportEntry adds an "Import" button to the header (admins only, mounted
+// beside Admin in checkAdmin). Import writes documents into a chosen tenant, so
+// it is a system-admin affordance. Navigation goes through the shared hash
+// router (route), so the button only sets the hash.
+function mountImportEntry() {
+  const header = document.querySelector("header");
+  if (!header || document.getElementById("import-link")) return;
+  const link = el("button", { id: "import-link", className: "admin-link", textContent: "Import", type: "button" });
+  link.addEventListener("click", () => { location.hash = "import"; });
   header.append(link);
 }
 
@@ -681,7 +696,6 @@ async function renderAdmin() {
   hdr.append(browseBtn, el("h2", { textContent: "Admin · Tenants" }));
   view.append(hdr);
 
-  view.append(importSection());
   view.append(newTenantForm());
 
   if (!tenants || !tenants.length) {
@@ -701,21 +715,36 @@ async function renderAdmin() {
   view.append(list);
 }
 
-// ── Import (Task 8.2) ─────────────────────────────────────────────────────────
-// Upload a .zip archive -> POST /admin/import (multipart, field "archive") ->
-// 202 {id, status}; poll GET /admin/import/{id} on an interval until a
-// terminal state (succeeded/failed), rendering the running counts. Import
-// always targets the caller's own tenant (resolved server-side from the
-// bearer token via auth.TenantIDFromContext) — there is no tenant picker —
-// so this panel lives on the admin root page rather than under a specific
-// tenant's detail view.
+// ── Import (own page, #import) ────────────────────────────────────────────────
+// A dedicated admin page (header "Import" button → "#import"). Upload a .zip
+// archive -> POST /admin/import (multipart: field "archive" + the chosen
+// "tenant_id") -> 202 {id, status, tenant_id}; poll GET /admin/import/{id}
+// ?tenant_id=<t> on an interval until a terminal state (succeeded/failed),
+// rendering the running counts. A system admin picks the TARGET tenant from a
+// dropdown (labels are name (email), never the raw UUID), so an admin can seed
+// any tenant — not just the one their key is scoped to.
 
 const IMPORT_POLL_MS = 1500;
 
-// importSection builds the upload form + progress area shown on the admin root.
-function importSection() {
+// renderImport draws the Import page: a target-tenant picker, the upload form,
+// and a progress area. Reachable only for admins — route() falls back to browse
+// for everyone else, and the header entry is mounted only in checkAdmin.
+async function renderImport() {
+  navStack.length = 0; // top-level view — clear browse/search history
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let tenants;
+  try {
+    tenants = await apiFetch("/admin/tenants");
+  } catch (err) { showError(err); return; }
+  view.replaceChildren();
+
+  const hdr = el("div", { className: "cat-hdr" });
+  const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
+  back.addEventListener("click", () => { location.hash = ""; });
+  hdr.append(back, el("h2", { textContent: "Import documents" }));
+  view.append(hdr);
+
   const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "Import documents" }));
   sec.append(el("p", {
     className: "meta",
     textContent: "Upload a .zip archive of memory files. Files must sit at the archive's " +
@@ -724,9 +753,27 @@ function importSection() {
   }));
 
   const form = el("form", { className: "admin-form-fields" });
+
+  // Target tenant: which tenant the archive imports into. Option labels are
+  // name (email) for humans; the option value carries the tenant UUID sent to
+  // the API.
+  const tenantSel = el("select", { className: "admin-input" });
+  if (!tenants || !tenants.length) {
+    tenantSel.append(el("option", { value: "", textContent: "(no tenants)" }));
+    tenantSel.disabled = true;
+  } else {
+    for (const t of tenants) {
+      const name = t.name || "(unnamed)";
+      tenantSel.append(el("option", { value: t.id, textContent: t.email ? `${name} (${t.email})` : name }));
+    }
+  }
+
   const fileInput = el("input", { className: "admin-input", type: "file", accept: ".zip", required: true });
   const submit = el("button", { textContent: "Upload", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(fileInput, submit);
+  form.append(
+    el("span", { className: "admin-form-label", textContent: "Target tenant:" }), tenantSel,
+    fileInput, submit,
+  );
 
   const progress = el("div", { className: "import-progress" });
   let activeTimer = null; // guards against overlapping polls if a second file is uploaded before the first job finishes
@@ -735,18 +782,24 @@ function importSection() {
     e.preventDefault();
     const file = fileInput.files[0];
     if (!file) return;
+    const tenantID = tenantSel.value;
+    if (!tenantID) {
+      progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Select a target tenant first." }));
+      return;
+    }
     if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
     submit.disabled = true;
     progress.replaceChildren();
     try {
       const body = new FormData();
       body.append("archive", file);
-      // No Content-Type header here on purpose: the browser sets the
-      // multipart boundary itself. apiFetch only adds Authorization.
+      body.append("tenant_id", tenantID);
+      // No Content-Type header here on purpose: the browser sets the multipart
+      // boundary itself. apiFetch only adds Authorization.
       const job = await apiFetch("/admin/import", { method: "POST", body });
       fileInput.value = "";
       renderImportProgress(progress, job);
-      activeTimer = pollImportJob(progress, job.id, () => { activeTimer = null; });
+      activeTimer = pollImportJob(progress, job.id, job.tenant_id || tenantID, () => { activeTimer = null; });
     } catch (err) {
       progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Upload failed: " + err.message }));
     } finally {
@@ -755,7 +808,7 @@ function importSection() {
   });
 
   sec.append(form, progress);
-  return sec;
+  view.append(sec);
 }
 
 // renderImportProgress renders one job's state + counts into `container`,
@@ -778,15 +831,18 @@ function renderImportProgress(container, job) {
   }
 }
 
-// pollImportJob polls GET /admin/import/{id} on an interval until the job
-// reaches a terminal state (succeeded/failed), then stops polling and calls
-// onDone. Returns the interval id so the caller can cancel it early (e.g. a
-// new upload superseding this one).
-function pollImportJob(container, id, onDone) {
+// pollImportJob polls GET /admin/import/{id}?tenant_id=<t> on an interval until
+// the job reaches a terminal state (succeeded/failed), then stops polling and
+// calls onDone. tenantID scopes the lookup to the tenant the job was targeted at
+// (an admin may import into a tenant other than their key's own). Returns the
+// interval id so the caller can cancel it early (e.g. a new upload superseding
+// this one).
+function pollImportJob(container, id, tenantID, onDone) {
   const timer = setInterval(async () => {
     let job;
     try {
-      job = await apiFetch("/admin/import/" + id);
+      const q = tenantID ? "?tenant_id=" + encodeURIComponent(tenantID) : "";
+      job = await apiFetch("/admin/import/" + id + q);
     } catch (err) {
       clearInterval(timer);
       onDone();

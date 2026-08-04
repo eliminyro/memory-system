@@ -23,6 +23,9 @@ type fakeImportJobs struct {
 	createErr error
 	getJob    *models.ImportJob
 	getErr    error
+	// getByIDTenant records the tenant the handler scoped the last GetByID to,
+	// so a test can assert importStatus honored the tenant_id query param.
+	getByIDTenant uuid.UUID
 }
 
 func (f *fakeImportJobs) Create(ctx context.Context, job *models.ImportJob) error {
@@ -35,6 +38,7 @@ func (f *fakeImportJobs) Create(ctx context.Context, job *models.ImportJob) erro
 }
 
 func (f *fakeImportJobs) GetByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error) {
+	f.getByIDTenant = tenantID
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -200,5 +204,108 @@ func TestImportStatus_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for malformed id", rec.Code)
+	}
+}
+
+// multipartArchiveWithTenant is multipartArchive plus a "tenant_id" form field,
+// exercising the admin's target-tenant override.
+func multipartArchiveWithTenant(t *testing.T, body []byte, tenantID string) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("archive", "import.zip")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := fw.Write(body); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := mw.WriteField("tenant_id", tenantID); err != nil {
+		t.Fatalf("write tenant_id field: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	return &buf, mw.FormDataContentType()
+}
+
+// A system admin may direct an import at a tenant other than their key's own via
+// the tenant_id form field: the job is created for that tenant (not the context
+// tenant) and the 202 echoes tenant_id so status can be polled cross-tenant.
+func TestImportEnqueue_TargetTenant(t *testing.T) {
+	fake := &fakeImportJobs{}
+	h := &adminAPIHandler{importJobs: fake, maxUploadBytes: 1 << 20}
+	ctxTenant := uuid.New()
+	target := uuid.New()
+
+	body, ct := multipartArchiveWithTenant(t, []byte("PK\x03\x04 payload"), target.String())
+	req := httptest.NewRequest(http.MethodPost, "/import", body)
+	req.Header.Set("Content-Type", ct)
+	req = req.WithContext(auth.WithTenantID(req.Context(), ctxTenant))
+	rec := httptest.NewRecorder()
+
+	h.enqueueImport(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.created == nil {
+		t.Fatal("expected a job to be created")
+	}
+	if fake.created.TenantID != target {
+		t.Errorf("job tenant = %s, want %s (the tenant_id override, not context %s)", fake.created.TenantID, target, ctxTenant)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if resp["tenant_id"] != target.String() {
+		t.Errorf("response tenant_id = %v, want %s", resp["tenant_id"], target)
+	}
+}
+
+// A malformed tenant_id is a 400, never a silent fallback to the context tenant:
+// importing into the wrong tenant is worse than a rejected request.
+func TestImportEnqueue_InvalidTargetTenant(t *testing.T) {
+	fake := &fakeImportJobs{}
+	h := &adminAPIHandler{importJobs: fake, maxUploadBytes: 1 << 20}
+
+	body, ct := multipartArchiveWithTenant(t, []byte("payload"), "not-a-uuid")
+	req := httptest.NewRequest(http.MethodPost, "/import", body)
+	req.Header.Set("Content-Type", ct)
+	req = req.WithContext(auth.WithTenantID(req.Context(), uuid.New()))
+	rec := httptest.NewRecorder()
+
+	h.enqueueImport(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for malformed tenant_id", rec.Code)
+	}
+	if fake.created != nil {
+		t.Error("no job should be created for a malformed tenant_id")
+	}
+}
+
+// importStatus scopes GetByID to the tenant_id query param (echoed by enqueue),
+// so a job an admin sent to another tenant is pollable even though the caller's
+// own context tenant differs.
+func TestImportStatus_TargetTenantQuery(t *testing.T) {
+	id := uuid.New()
+	target := uuid.New()
+	fake := &fakeImportJobs{getJob: &models.ImportJob{ID: id, TenantID: target, Status: models.ImportJobStatusRunning}}
+	h := &adminAPIHandler{importJobs: fake}
+
+	req := httptest.NewRequest(http.MethodGet, "/import/"+id.String()+"?tenant_id="+target.String(), nil)
+	req.SetPathValue("id", id.String())
+	req = req.WithContext(auth.WithTenantID(req.Context(), uuid.New())) // caller's own tenant differs
+	rec := httptest.NewRecorder()
+
+	h.importStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.getByIDTenant != target {
+		t.Errorf("GetByID tenant = %s, want %s (from the query param, not context)", fake.getByIDTenant, target)
 	}
 }
