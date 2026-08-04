@@ -67,8 +67,10 @@ function selectTab(name) {
   const onTokens = name === "tokens";
   panelTokens.hidden = !onTokens;
   panelOauth.hidden = onTokens;
-  tokensBtn.className = onTokens ? "sec-btn sec-btn-primary" : "sec-btn";
-  oauthBtn.className = onTokens ? "sec-btn" : "sec-btn sec-btn-primary";
+  // Active state is driven purely by aria-selected (styled in style.css .tab);
+  // keep the tab class stable so they render as a tab strip, not buttons.
+  tokensBtn.className = "tab";
+  oauthBtn.className = "tab";
   tokensBtn.setAttribute("aria-selected", String(onTokens));
   oauthBtn.setAttribute("aria-selected", String(!onTokens));
   placeEmailField();
