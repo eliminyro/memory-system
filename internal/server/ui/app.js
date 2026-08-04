@@ -563,19 +563,45 @@ async function checkAdmin() {
   return true;
 }
 
+// writableTenants caches the last /tenants/writable result (design.md §9):
+// empty for a caller with no delegated tenant, non-empty for a system admin
+// (every tenant) or a tenant#manager (their managed tenants). route() uses its
+// length to gate #import/#acl for non-admins the same way isAdmin gates #admin.
+let writableTenants = [];
+
+// checkWritable probes GET /tenants/writable — not adminOnly, so every
+// logged-in caller can reach it. When the caller is a system admin OR manages
+// at least one tenant, it mounts the ACL and Import header entries. Both mount
+// functions already guard on element id, so calling this after checkAdmin
+// (which mounts Import for admins) never double-mounts.
+async function checkWritable() {
+  try {
+    writableTenants = (await apiFetch("/tenants/writable")) || [];
+  } catch (err) {
+    writableTenants = [];
+    return;
+  }
+  if (isAdmin || writableTenants.length) {
+    mountImportEntry();
+    mountAclEntry();
+  }
+}
+
 // route renders the top-level view for the current hash: #admin (admins only),
-// #connect, or browse for anything else. It is the single source of truth for
-// view switching — registered once on hashchange (see init) for every logged-in
-// user, so the Admin/Connect buttons and every back control just set the hash.
-// (Previously Connect rendered directly without touching the hash, which left a
-// stale #admin in the URL and made the Admin button a no-op — same hash, no
-// hashchange event.)
+// #import/#acl (admins + delegated managers), #connect, or browse for anything
+// else. It is the single source of truth for view switching — registered once
+// on hashchange (see init) for every logged-in user, so the header buttons and
+// every back control just set the hash. (Previously Connect rendered directly
+// without touching the hash, which left a stale #admin in the URL and made the
+// Admin button a no-op — same hash, no hashchange event.)
 function route() {
   const h = location.hash;
   if (h === "#admin") {
     (isAdmin ? renderAdmin() : renderBrowse()).catch(showError);
   } else if (h === "#import") {
-    (isAdmin ? renderImport() : renderBrowse()).catch(showError);
+    (isAdmin || writableTenants.length ? renderImport() : renderBrowse()).catch(showError);
+  } else if (h === "#acl") {
+    (isAdmin || writableTenants.length ? renderAcl() : renderBrowse()).catch(showError);
   } else if (h === "#connect") {
     renderConnect();
   } else {
@@ -593,15 +619,28 @@ function mountAdminEntry() {
   header.append(link);
 }
 
-// mountImportEntry adds an "Import" button to the header (admins only, mounted
-// beside Admin in checkAdmin). Import writes documents into a chosen tenant, so
-// it is a system-admin affordance. Navigation goes through the shared hash
-// router (route), so the button only sets the hash.
+// mountImportEntry adds an "Import" button to the header — for system admins
+// (mounted beside Admin in checkAdmin) and, since design.md §8, for any
+// delegated tenant#manager too (mounted by checkWritable once /tenants/writable
+// is non-empty). Navigation goes through the shared hash router (route), so
+// the button only sets the hash.
 function mountImportEntry() {
   const header = document.querySelector("header");
   if (!header || document.getElementById("import-link")) return;
   const link = el("button", { id: "import-link", className: "admin-link", textContent: "Import", type: "button" });
   link.addEventListener("click", () => { location.hash = "import"; });
+  header.append(link);
+}
+
+// mountAclEntry adds an "ACL" button to the header — for system admins and for
+// delegated tenant managers (design.md §9), mounted by checkWritable alongside
+// mountImportEntry. Navigation goes through the shared hash router (route), so
+// the button only sets the hash.
+function mountAclEntry() {
+  const header = document.querySelector("header");
+  if (!header || document.getElementById("acl-link")) return;
+  const link = el("button", { id: "acl-link", className: "admin-link", textContent: "ACL", type: "button" });
+  link.addEventListener("click", () => { location.hash = "acl"; });
   header.append(link);
 }
 
@@ -715,26 +754,54 @@ async function renderAdmin() {
   view.append(list);
 }
 
+// ── ACL/Import shared helper ─────────────────────────────────────────────────
+
+// aclTenantOptions resolves the tenant picker source shared by the Import and
+// ACL pages (design.md §8/§9): admins see every tenant via /admin/tenants
+// (bare Tenant objects), while delegated managers see only the tenants they
+// manage via /tenants/writable ({tenant, relation} pairs). Returns a flat list
+// of tenant objects ({id, name, email, ...}) either way.
+async function aclTenantOptions() {
+  if (isAdmin) return await apiFetch("/admin/tenants");
+  const writable = await apiFetch("/tenants/writable");
+  return (writable || []).map((w) => w.tenant);
+}
+
+// canGrantManager gates the "manager" option in a tenant grant-relation
+// <select> (design.md §6 ceiling: appointing a manager requires tenant#admin
+// or system admin). /tenants/writable cannot tell a real tenant#admin apart
+// from a plain tenant#manager for a non-system-admin caller — WritableTenants
+// labels both relations "manager" — so the UI conservatively offers this
+// option only to system admins. A genuine tenant#admin can still grant it
+// directly against the API; the backend enforces the real ceiling regardless
+// of what this UI offers.
+function canGrantManager() {
+  return isAdmin;
+}
+
 // ── Import (own page, #import) ────────────────────────────────────────────────
-// A dedicated admin page (header "Import" button → "#import"). Upload a .zip
-// archive -> POST /admin/import (multipart: field "archive" + the chosen
-// "tenant_id") -> 202 {id, status, tenant_id}; poll GET /admin/import/{id}
-// ?tenant_id=<t> on an interval until a terminal state (succeeded/failed),
-// rendering the running counts. A system admin picks the TARGET tenant from a
-// dropdown (labels are name (email), never the raw UUID), so an admin can seed
-// any tenant — not just the one their key is scoped to.
+// A page for system admins AND delegated tenant managers (header "Import"
+// button → "#import"; design.md §8). Upload a .zip archive -> POST /import
+// (multipart: field "archive" + the chosen "tenant_id") -> 202
+// {id, status, tenant_id}; poll GET /import/{id}?tenant_id=<t> on an interval
+// until a terminal state (succeeded/failed), rendering the running counts. The
+// caller picks the TARGET tenant from a dropdown (labels are name (email),
+// never the raw UUID) — a system admin sees every tenant, a manager only the
+// ones they manage; the relational endpoint authorizes the target in-handler
+// either way.
 
 const IMPORT_POLL_MS = 1500;
 
 // renderImport draws the Import page: a target-tenant picker, the upload form,
-// and a progress area. Reachable only for admins — route() falls back to browse
-// for everyone else, and the header entry is mounted only in checkAdmin.
+// and a progress area. Reachable for admins and delegated managers — route()
+// falls back to browse for everyone else, and the header entry is mounted by
+// checkAdmin (admins) / checkWritable (managers).
 async function renderImport() {
   navStack.length = 0; // top-level view — clear browse/search history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   let tenants;
   try {
-    tenants = await apiFetch("/admin/tenants");
+    tenants = await aclTenantOptions();
   } catch (err) { showError(err); return; }
   view.replaceChildren();
 
@@ -796,7 +863,7 @@ async function renderImport() {
       body.append("tenant_id", tenantID);
       // No Content-Type header here on purpose: the browser sets the multipart
       // boundary itself. apiFetch only adds Authorization.
-      const job = await apiFetch("/admin/import", { method: "POST", body });
+      const job = await apiFetch("/import", { method: "POST", body });
       fileInput.value = "";
       renderImportProgress(progress, job);
       activeTimer = pollImportJob(progress, job.id, job.tenant_id || tenantID, () => { activeTimer = null; });
@@ -831,7 +898,7 @@ function renderImportProgress(container, job) {
   }
 }
 
-// pollImportJob polls GET /admin/import/{id}?tenant_id=<t> on an interval until
+// pollImportJob polls GET /import/{id}?tenant_id=<t> on an interval until
 // the job reaches a terminal state (succeeded/failed), then stops polling and
 // calls onDone. tenantID scopes the lookup to the tenant the job was targeted at
 // (an admin may import into a tenant other than their key's own). Returns the
@@ -842,7 +909,7 @@ function pollImportJob(container, id, tenantID, onDone) {
     let job;
     try {
       const q = tenantID ? "?tenant_id=" + encodeURIComponent(tenantID) : "";
-      job = await apiFetch("/admin/import/" + id + q);
+      job = await apiFetch("/import/" + id + q);
     } catch (err) {
       clearInterval(timer);
       onDone();
@@ -856,6 +923,281 @@ function pollImportJob(container, id, tenantID, onDone) {
     }
   }, IMPORT_POLL_MS);
   return timer;
+}
+
+// ── ACL management (#acl) ─────────────────────────────────────────────────────
+// A page for system admins and delegated tenant managers (design.md §9): tenant
+// membership (viewer/member/manager grants on a chosen tenant) and per-document
+// guest sharing (viewer/editor "read or write" grants on one document at a
+// time). Reachable via the header "ACL" button (mounted by checkAdmin /
+// checkWritable) or the "#acl" hash; route() falls back to browse for anyone
+// without at least one writable tenant.
+
+async function renderAcl() {
+  navStack.length = 0; // top-level view — clear browse/search history
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let tenants;
+  try {
+    tenants = await aclTenantOptions();
+  } catch (err) { showError(err); return; }
+  view.replaceChildren();
+
+  const hdr = el("div", { className: "cat-hdr" });
+  const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
+  back.addEventListener("click", () => { location.hash = ""; });
+  hdr.append(back, el("h2", { textContent: "ACL management" }));
+  view.append(hdr);
+
+  view.append(aclTenantSection(tenants || []));
+  view.append(aclDocumentSection());
+}
+
+// aclTenantSection renders the tenant-membership half of the ACL page: a
+// tenant picker, the current viewer/member/manager grants for the selected
+// tenant (GET /acl/tenants/{id}/grants), and a grant form. Reloads the grants
+// list whenever the tenant selection changes or a grant/revoke succeeds.
+function aclTenantSection(tenants) {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "Tenant membership" }));
+
+  const tenantSel = el("select", { className: "admin-input" });
+  if (!tenants.length) {
+    tenantSel.append(el("option", { value: "", textContent: "(no tenants)" }));
+    tenantSel.disabled = true;
+  } else {
+    for (const t of tenants) {
+      const name = t.name || "(unnamed)";
+      tenantSel.append(el("option", { value: t.id, textContent: t.email ? `${name} (${t.email})` : name }));
+    }
+  }
+  sec.append(el("div", { className: "admin-form-fields" },
+    el("span", { className: "admin-form-label", textContent: "Tenant:" }), tenantSel,
+  ));
+
+  const body = el("div");
+  sec.append(body);
+
+  async function load() {
+    const tenantID = tenantSel.value;
+    if (!tenantID) { body.replaceChildren(); return; }
+    body.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+    let grants;
+    try {
+      grants = await apiFetch(`/acl/tenants/${tenantID}/grants`);
+    } catch (err) {
+      body.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Failed to load grants: " + err.message }));
+      return;
+    }
+    body.replaceChildren();
+    body.append(tenantGrantsTable(tenantID, grants || [], load));
+    body.append(tenantGrantForm(tenantID, load));
+  }
+
+  tenantSel.addEventListener("change", () => load().catch(showError));
+  if (tenants.length) load().catch(showError);
+
+  return sec;
+}
+
+function tenantGrantsTable(tenantID, grants, onRevoked) {
+  const table = el("table", { className: "admin-table" });
+  const thead = el("thead", {}, el("tr", {},
+    el("th", { textContent: "Email" }),
+    el("th", { textContent: "Relation" }),
+    el("th", { textContent: "" }),
+  ));
+  const tbody = el("tbody");
+  for (const g of grants) tbody.append(tenantGrantRow(tenantID, g, onRevoked));
+  table.append(thead, tbody);
+  return grants.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no grants" });
+}
+
+function tenantGrantRow(tenantID, g, onRevoked) {
+  const tr = el("tr");
+  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
+  revoke.addEventListener("click", async () => {
+    if (!confirm(`Revoke ${g.relation} for ${g.email}?`)) return;
+    revoke.disabled = true;
+    try {
+      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: g.email, relation: g.relation }),
+      });
+      await onRevoked();
+    } catch (err) {
+      revoke.disabled = false;
+      alert("Revoke failed: " + err.message);
+    }
+  });
+  tr.append(
+    el("td", { textContent: g.email || "" }),
+    el("td", { textContent: g.relation || "" }),
+    el("td", { className: "admin-actions" }, revoke),
+  );
+  return tr;
+}
+
+// tenantGrantForm — grant viewer/member/manager on tenantID. The "manager"
+// option is only offered to system admins (canGrantManager) — the grant-
+// ceiling matrix (design.md §6) forbids a plain manager from appointing
+// another manager, and the backend would 403 the attempt anyway.
+function tenantGrantForm(tenantID, onGranted) {
+  const form = el("form", { className: "admin-form-fields" });
+  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
+  const relation = el("select", { className: "admin-input" },
+    el("option", { value: "viewer", textContent: "viewer" }),
+    el("option", { value: "member", textContent: "member" }),
+  );
+  if (canGrantManager()) relation.append(el("option", { value: "manager", textContent: "manager" }));
+  const submit = el("button", { textContent: "Grant", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(el("span", { className: "admin-form-label", textContent: "Grant:" }), email, relation, submit);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    try {
+      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.value.trim(), relation: relation.value }),
+      });
+      email.value = "";
+      await onGranted();
+    } catch (err) {
+      alert("Grant failed: " + err.message);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  return form;
+}
+
+// aclDocumentSection renders the per-document guest-sharing half of the ACL
+// page (design.md §9): a document-id picker, the doc's current guest
+// viewer/editor grants (GET /acl/documents/{id}/grants), and a "share with
+// user, read or write" form.
+//
+// Document-selection UX choice: an id input rather than a list picker.
+// GET /documents/{id} (used here to resolve/display the doc's title) resolves
+// the document's tenant from the CALLER's own request context — there is no
+// cross-tenant document-list or document-lookup endpoint, so a picker scoped
+// to the tenant chosen in aclTenantSection above isn't something the backend
+// can serve. This matches how the rest of this app (browse/search) is already
+// single-tenant-per-session, so a plain id input (paste the UUID from the
+// doc's URL or the API) is the simplest picker that doesn't imply a
+// cross-tenant capability the backend doesn't have.
+function aclDocumentSection() {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "Document sharing" }));
+  sec.append(el("p", {
+    className: "meta",
+    textContent: "Share one document with a specific user, read or write — independent of tenant membership. Enter the document's id (from its URL or the API); lookup is scoped to your own tenant.",
+  }));
+
+  const idInput = el("input", { className: "admin-input", type: "text", placeholder: "document id" });
+  const loadBtn = el("button", { textContent: "Load", className: "sec-btn", type: "button" });
+  sec.append(el("div", { className: "admin-form-fields" },
+    el("span", { className: "admin-form-label", textContent: "Document:" }), idInput, loadBtn,
+  ));
+
+  const body = el("div");
+  sec.append(body);
+
+  async function load() {
+    const docID = idInput.value.trim();
+    if (!docID) return;
+    body.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+    let doc, grants;
+    try {
+      [doc, grants] = await Promise.all([
+        apiFetch(`/documents/${docID}`),
+        apiFetch(`/acl/documents/${docID}/grants`),
+      ]);
+    } catch (err) {
+      body.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Failed to load document: " + err.message }));
+      return;
+    }
+    body.replaceChildren();
+    const path = [doc.category, doc.subcategory, doc.slug].filter(Boolean).join("/");
+    body.append(el("div", { className: "meta", textContent: `${doc.title || doc.slug}  ·  ${path}` }));
+    body.append(documentGrantsTable(docID, grants || [], load));
+    body.append(documentGrantForm(docID, load));
+  }
+
+  loadBtn.addEventListener("click", () => load().catch(showError));
+  idInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); load().catch(showError); }
+  });
+
+  return sec;
+}
+
+function documentGrantsTable(docID, grants, onRevoked) {
+  const table = el("table", { className: "admin-table" });
+  const thead = el("thead", {}, el("tr", {},
+    el("th", { textContent: "Email" }),
+    el("th", { textContent: "Relation" }),
+    el("th", { textContent: "" }),
+  ));
+  const tbody = el("tbody");
+  for (const g of grants) tbody.append(documentGrantRow(docID, g, onRevoked));
+  table.append(thead, tbody);
+  return grants.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no guest grants" });
+}
+
+function documentGrantRow(docID, g, onRevoked) {
+  const tr = el("tr");
+  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
+  revoke.addEventListener("click", async () => {
+    if (!confirm(`Revoke ${g.relation} for ${g.email}?`)) return;
+    revoke.disabled = true;
+    try {
+      await apiFetch(`/acl/documents/${docID}/grants`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: g.email, relation: g.relation }),
+      });
+      await onRevoked();
+    } catch (err) {
+      revoke.disabled = false;
+      alert("Revoke failed: " + err.message);
+    }
+  });
+  tr.append(
+    el("td", { textContent: g.email || "" }),
+    el("td", { textContent: g.relation || "" }),
+    el("td", { className: "admin-actions" }, revoke),
+  );
+  return tr;
+}
+
+function documentGrantForm(docID, onGranted) {
+  const form = el("form", { className: "admin-form-fields" });
+  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
+  const relation = el("select", { className: "admin-input" },
+    el("option", { value: "viewer", textContent: "read (viewer)" }),
+    el("option", { value: "editor", textContent: "write (editor)" }),
+  );
+  const submit = el("button", { textContent: "Share", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(el("span", { className: "admin-form-label", textContent: "Share with:" }), email, relation, submit);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    try {
+      await apiFetch(`/acl/documents/${docID}/grants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.value.trim(), relation: relation.value }),
+      });
+      email.value = "";
+      await onGranted();
+    } catch (err) {
+      alert("Share failed: " + err.message);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  return form;
 }
 
 // newTenantForm — collapsed create-tenant form (name + email).
@@ -1157,6 +1499,7 @@ function showKeyModal(result) {
     wireSearch();
     mountConnectEntry();
     await checkAdmin();
+    await checkWritable();
     // Single hash router for all top-level views; also renders the initial view.
     window.addEventListener("hashchange", route);
     route();
