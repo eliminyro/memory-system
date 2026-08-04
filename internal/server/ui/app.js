@@ -562,20 +562,32 @@ async function checkAdmin() {
   return true;
 }
 
-// mountAdminEntry adds an "Admin" button to the header and wires hash routing.
-// The element is created only for admins, so non-admins never receive it.
+// route renders the top-level view for the current hash: #admin (admins only),
+// #connect, or browse for anything else. It is the single source of truth for
+// view switching — registered once on hashchange (see init) for every logged-in
+// user, so the Admin/Connect buttons and every back control just set the hash.
+// (Previously Connect rendered directly without touching the hash, which left a
+// stale #admin in the URL and made the Admin button a no-op — same hash, no
+// hashchange event.)
+function route() {
+  const h = location.hash;
+  if (h === "#admin") {
+    (isAdmin ? renderAdmin() : renderBrowse()).catch(showError);
+  } else if (h === "#connect") {
+    renderConnect();
+  } else {
+    renderBrowse().catch(showError);
+  }
+}
+
+// mountAdminEntry adds an "Admin" button to the header (admins only). Navigation
+// goes through the shared hash router (route), so the button only sets the hash.
 function mountAdminEntry() {
   const header = document.querySelector("header");
   if (!header || document.getElementById("admin-link")) return;
   const link = el("button", { id: "admin-link", className: "admin-link", textContent: "Admin", type: "button" });
   link.addEventListener("click", () => { location.hash = "admin"; });
   header.append(link);
-
-  window.addEventListener("hashchange", () => {
-    if (!isAdmin) return;
-    if (location.hash === "#admin") renderAdmin().catch(showError);
-    else renderBrowse().catch(showError);
-  });
 }
 
 // ── Connect an MCP client (Task 5 / D5) ───────────────────────────────────────
@@ -603,13 +615,13 @@ function mcpConfigJSON(url, withKey) {
 }
 
 // mountConnectEntry adds a "Connect" button to the header for every logged-in
-// user. It renders the panel directly on click (no hash routing) so it never
-// races the admin hash router in mountAdminEntry.
+// user. Navigation goes through the shared hash router (route), so the button
+// only sets the hash.
 function mountConnectEntry() {
   const header = document.querySelector("header");
   if (!header || document.getElementById("connect-link")) return;
   const link = el("button", { id: "connect-link", className: "admin-link", textContent: "Connect", type: "button" });
-  link.addEventListener("click", () => renderConnect());
+  link.addEventListener("click", () => { location.hash = "connect"; });
   header.append(link);
 }
 
@@ -622,7 +634,7 @@ function renderConnect() {
 
   const hdr = el("div", { className: "cat-hdr" });
   const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
-  back.addEventListener("click", () => renderBrowse().catch(showError));
+  back.addEventListener("click", () => { location.hash = ""; });
   hdr.append(back, el("h2", { textContent: "Connect an MCP client" }));
   view.append(hdr);
 
@@ -1088,12 +1100,10 @@ function showKeyModal(result) {
     }
     wireSearch();
     mountConnectEntry();
-    const admin = await checkAdmin();
-    if (admin && location.hash === "#admin") {
-      await renderAdmin().catch(showError);
-    } else {
-      await renderBrowse().catch(showError);
-    }
+    await checkAdmin();
+    // Single hash router for all top-level views; also renders the initial view.
+    window.addEventListener("hashchange", route);
+    route();
   } catch (err) {
     // beginLogin() throws "redirecting to login" — that's expected; ignore it.
     if (err.message !== "redirecting to login") showError(err);
