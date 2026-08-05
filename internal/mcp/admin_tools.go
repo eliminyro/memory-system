@@ -22,12 +22,14 @@ type ListTenantsInput struct{}
 type CreateTenantInput struct {
 	Name  string `json:"name" jsonschema:"Tenant name (required, max 200 chars)"`
 	Email string `json:"email,omitempty" jsonschema:"Tenant email (optional)"`
+	Type  string `json:"type,omitempty" jsonschema:"Display-only type: personal or shared (default shared)"`
 }
 
 type UpdateTenantInput struct {
 	TenantID           string  `json:"tenant_id" jsonschema:"Tenant UUID to update"`
 	Name               *string `json:"name,omitempty" jsonschema:"New tenant name (max 200 chars)"`
 	Email              *string `json:"email,omitempty" jsonschema:"New tenant email"`
+	Type               *string `json:"type,omitempty" jsonschema:"Display-only type: personal or shared"`
 	StalenessMode      *string `json:"staleness_mode,omitempty" jsonschema:"Staleness enforcement: off, advisory, or hard"`
 	DuplicateGuard     *bool   `json:"duplicate_guard,omitempty" jsonschema:"Refuse store_memory on near-duplicate content (default false)"`
 	CleanupScanEnabled *bool   `json:"cleanup_scan_enabled,omitempty" jsonschema:"Include this tenant in the nightly near-duplicate scan (default false)"`
@@ -154,7 +156,9 @@ func (s *Server) CreateTenant(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if input.Name == "" || len(input.Name) > maxAdminFieldLen {
 		return errorResult("name is required and must be <= 200 characters"), nil, nil
 	}
-	tenant, err := s.memory.CreateTenant(ctx, input.Name, input.Email)
+	// input.Type is passed unconditionally; the service treats "" as the default
+	// (shared) and owns type validation — nothing is reimplemented here.
+	tenant, err := s.memory.CreateTenant(ctx, input.Name, input.Email, input.Type)
 	if err != nil {
 		return handleAdminError(err)
 	}
@@ -172,6 +176,7 @@ func (s *Server) UpdateTenant(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	tenant, err := s.memory.UpdateTenant(ctx, id, service.UpdateTenantFields{
 		Name:               input.Name,
 		Email:              input.Email,
+		Type:               input.Type,
 		StalenessMode:      input.StalenessMode,
 		DuplicateGuard:     input.DuplicateGuard,
 		CleanupScanEnabled: input.CleanupScanEnabled,

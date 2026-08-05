@@ -64,9 +64,11 @@ func grantReq(method, path, body string) *http.Request {
 }
 
 // TestACLGrantTenant_BadRelation proves a relation outside {viewer, member,
-// manager} is rejected 400 before ever reaching the service (design.md §7).
+// manager} is rejected 400. Relation validation now lives solely in the
+// service (which returns apperr.ErrInvalidRelation); the handler delegates and
+// writeACLErr maps that distinct sentinel to 400 (design.md §7).
 func TestACLGrantTenant_BadRelation(t *testing.T) {
-	fake := &fakeACLService{err: fmt.Errorf("should not be called")}
+	fake := &fakeACLService{err: fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidRelation)}
 	h := &aclAPIHandler{memory: fake}
 	tid := uuid.New()
 
@@ -77,8 +79,8 @@ func TestACLGrantTenant_BadRelation(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if fake.lastRelation != "" {
-		t.Error("service must not be invoked for a bad relation")
+	if fake.lastRelation != "owner" {
+		t.Errorf("handler must delegate the relation to the service, got %q", fake.lastRelation)
 	}
 }
 
@@ -167,9 +169,11 @@ func TestACLRevokeTenant_Success(t *testing.T) {
 }
 
 // TestACLGrantDocument_BadRelation proves the document surface's own relation
-// set (viewer/editor only) is enforced independently of the tenant set.
+// set (viewer/editor only) is enforced independently of the tenant set — the
+// service rejects "manager" with apperr.ErrInvalidRelation and the handler
+// maps it to 400.
 func TestACLGrantDocument_BadRelation(t *testing.T) {
-	fake := &fakeACLService{err: fmt.Errorf("should not be called")}
+	fake := &fakeACLService{err: fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidRelation)}
 	h := &aclAPIHandler{memory: fake}
 	did := uuid.New()
 

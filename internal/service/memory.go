@@ -1323,7 +1323,7 @@ func tenantGrantTuple(tenantID uuid.UUID, subjectID, relation string) authz.Tupl
 // auto-create one.
 func (s *MemoryService) GrantTenantAccess(ctx context.Context, tenantID uuid.UUID, email, relation string) error {
 	if _, ok := validTenantGrantRelations[relation]; !ok {
-		return fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidInput)
+		return fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidRelation)
 	}
 	if !s.canGrantTenantRelation(ctx, tenantID, relation) {
 		return fmt.Errorf("%w: not authorized to grant %s on tenant %s", apperr.ErrInvalidInput, relation, tenantID)
@@ -1345,7 +1345,7 @@ func (s *MemoryService) GrantTenantAccess(ctx context.Context, tenantID uuid.UUI
 // the same grant-ceiling matrix as GrantTenantAccess.
 func (s *MemoryService) RevokeTenantAccess(ctx context.Context, tenantID uuid.UUID, email, relation string) error {
 	if _, ok := validTenantGrantRelations[relation]; !ok {
-		return fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidInput)
+		return fmt.Errorf("%w: relation must be viewer, member, or manager", apperr.ErrInvalidRelation)
 	}
 	if !s.canGrantTenantRelation(ctx, tenantID, relation) {
 		return fmt.Errorf("%w: not authorized to revoke %s on tenant %s", apperr.ErrInvalidInput, relation, tenantID)
@@ -1385,7 +1385,7 @@ func documentGrantTuple(docID uuid.UUID, subjectID, relation string) authz.Tuple
 // tenant management, not by holding a grant on the document itself.
 func (s *MemoryService) GrantDocumentAccess(ctx context.Context, docID uuid.UUID, email, relation string) error {
 	if _, ok := validDocumentGrantRelations[relation]; !ok {
-		return fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidInput)
+		return fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidRelation)
 	}
 	tenantID, err := s.documentTenantID(ctx, docID)
 	if err != nil {
@@ -1411,7 +1411,7 @@ func (s *MemoryService) GrantDocumentAccess(ctx context.Context, docID uuid.UUID
 // subject to the same tenant-management requirement as GrantDocumentAccess.
 func (s *MemoryService) RevokeDocumentAccess(ctx context.Context, docID uuid.UUID, email, relation string) error {
 	if _, ok := validDocumentGrantRelations[relation]; !ok {
-		return fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidInput)
+		return fmt.Errorf("%w: relation must be viewer or editor", apperr.ErrInvalidRelation)
 	}
 	tenantID, err := s.documentTenantID(ctx, docID)
 	if err != nil {
@@ -1706,19 +1706,68 @@ func (s *MemoryService) GenerateIndex(ctx context.Context, depth string, categor
 	return s.docs.GenerateIndex(ctx, tid, repository.IndexDepth(depth), category)
 }
 
-// GetRelated returns documents semantically related to the target. Viewer Check
-// on the caller-supplied target (finding #9, IDOR) blocks probing another tenant's
-// docs; viewer-level is deliberate — denies private cross-tenant targets but
-// allows relating over world-readable common-pool docs.
+// GetRelated returns documents semantically related to the target, aggregated
+// across the caller's readable tenant SET (home + common pool + directly-granted
+// tenants) exactly like search/list/get, and labels each result by its owning
+// tenant. A related document is returned only when its owning tenant is in that
+// set — the same no-leak guarantee as the other reads. The optional tenant_id
+// filter narrows to one readable tenant; a non-readable filter yields an empty
+// scope -> empty result (no existence leak), consistent with the other reads.
+//
+// The viewer Check on the caller-supplied target (finding #9, IDOR) still blocks
+// probing another tenant's docs; viewer-level is deliberate — denies private
+// cross-tenant targets but allows relating over world-readable common-pool docs.
 func (s *MemoryService) GetRelated(ctx context.Context, documentID uuid.UUID, limit int, overrideID *uuid.UUID) ([]repository.RelatedResult, error) {
-	tid, err := s.resolveTenant(ctx, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
+	}
+	if len(scope) == 0 {
+		return []repository.RelatedResult{}, nil // non-readable filter target
 	}
 	if !s.authorize(ctx, authz.TypeDocument, documentID.String(), authz.RelViewer) {
 		return nil, fmt.Errorf("%w: not authorized for document %s", apperr.ErrInvalidInput, documentID)
 	}
-	return s.sections.GetRelated(ctx, tid, documentID, limit)
+	results, err := s.sections.GetRelated(ctx, scope, documentID, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.labelRelatedResults(ctx, results)
+	return results, nil
+}
+
+// labelRelatedResults fills each related result's owning-tenant name/type in ONE
+// lookup over the distinct result tenants (mirrors resolveResultTenants without
+// the staleness overlay — no N+1). Fail-safe: on a lookup miss labels are simply
+// absent, never failing the read on a glitch.
+func (s *MemoryService) labelRelatedResults(ctx context.Context, results []repository.RelatedResult) {
+	if len(results) == 0 || s.tenants == nil {
+		return
+	}
+	seen := make(map[uuid.UUID]struct{})
+	ids := make([]uuid.UUID, 0)
+	for i := range results {
+		id := results[i].TenantID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	tenants, err := s.tenants.GetByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
+	for _, t := range tenants {
+		byID[t.ID] = t
+	}
+	for i := range results {
+		if t, ok := byID[results[i].TenantID]; ok {
+			results[i].TenantName = t.Name
+			results[i].TenantType = t.Type
+		}
+	}
 }
 
 func (s *MemoryService) LintMemory(ctx context.Context, checks []string, thresholds *repository.LintThresholds, overrideID *uuid.UUID) ([]repository.LintFinding, error) {
