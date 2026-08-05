@@ -54,6 +54,13 @@ manual tenant/key dance further down. This is unrelated to
 at every startup): first-run bootstrap creates the tenant and key from
 nothing.
 
+The tenant provisioned this way is the founding admin's **personal tenant** —
+their own private shelf, created with `type=personal` — not the shared `default`
+common pool (which stays the shared/public shelf). Bootstrap accepts an optional
+**name** for this founding tenant: supply it from the setup page's name field or
+the CLI's `--tenant-name` flag. When omitted it defaults to a sensible value
+(derived from the admin email), so an unnamed bootstrap still works.
+
 There is no environment variable to set for this. Instead, on every boot
 where no admin exists yet, the server generates a random one-time token
 and logs it at `WARN` — read it with `docker logs` (or your log aggregator).
@@ -104,10 +111,11 @@ curl -X POST https://mem.example.org/bootstrap \
 (`POST /bootstrap` also accepts a form-encoded body with `token` and
 `admin_email` fields, for a plain `curl -d` without `Content-Type: application/json`.)
 
-`admin_email` is optional and is the only other field this endpoint reads —
-the tenant name and key label are **not** configurable over HTTP and always
-default to `"admin"`; use `memory-admin bootstrap` or the manual CLI flow
-further down for custom naming or a key TTL. When `admin_email` is set **and**
+`admin_email` is optional. The setup page and the `POST /bootstrap` body also
+accept an optional **founding tenant name** (see above), which defaults sensibly
+when omitted; the key label and a key TTL stay CLI-only, so use `memory-admin
+bootstrap` or the manual CLI flow further down for a custom key label or a key
+expiry. When `admin_email` is set **and**
 OAuth login is configured (`MEMORY_MCP_GOOGLE_CLIENT_ID` /
 `MEMORY_MCP_GOOGLE_CLIENT_SECRET`), that email is granted `system:memory#admin`
 — the same authority as the founding API key — so the operator can sign in at
@@ -132,6 +140,93 @@ already exists. Unlike the HTTP path it does **not** take an admin-email flag
 "Managing users" below). (`memory-admin setup` is a different, unrelated
 command that emits an `mcpServers` client config — see
 [`connecting-clients.md`](connecting-clients.md).)
+
+---
+
+## Self-serve signup and the domain gate
+
+Once an instance has OAuth configured (`MEMORY_MCP_GOOGLE_CLIENT_ID` /
+`MEMORY_MCP_GOOGLE_CLIENT_SECRET`), it provisions users **on demand**. The first
+time a verified OAuth/OIDC identity logs in with no existing tenant membership,
+the server auto-creates a **personal tenant** for that email and grants the user
+`tenant#admin` on it — their own private shelf. The `email → one home tenant`
+invariant holds: later logins with the same verified email always resolve to
+that same tenant, never a second one. An unverified or empty email is refused
+(403) and nothing is provisioned.
+
+> **Warning — signup is PUBLIC by default.** When `SIGNUP_ALLOWED_DOMAINS` is
+> unset or empty, **any** verified identity your IdP will authenticate can
+> self-provision a tenant. With Google as the provider that means *any Google
+> account on the internet*. An OAuth-enabled instance with no allow-list is an
+> open-signup instance.
+
+To lock signup to your organization, set `SIGNUP_ALLOWED_DOMAINS` to a
+comma-separated list of email domains:
+
+```bash
+SIGNUP_ALLOWED_DOMAINS=example.com,corp.example.com
+```
+
+With a non-empty list, only verified emails whose domain matches an entry may
+provision — matching is case-insensitive, and Google's `hd` hosted-domain claim
+is honored when present. The gate **fails closed**: a disallowed identity is
+refused with `403` and nothing is created.
+
+Two things the gate does **not** do:
+
+- It never touches **already-provisioned** users. Existing members keep logging
+  in regardless of the allow-list, so tightening it later locks out only *new*
+  signups.
+- It is not the first-admin gate. The founding admin is provisioned separately
+  and is gated by the one-time
+  [bootstrap token](#first-run-bootstrap-http-or-cli-one-step); auto-provision
+  only applies to post-bootstrap logins.
+
+Instances with no OAuth configured (API-key-only) have no self-serve signup at
+all — users are created only by an admin.
+
+---
+
+## Retention defaults for new tenants
+
+Every newly created tenant — the bootstrap founding tenant, an auto-provisioned
+personal tenant, and any tenant an admin creates — is initialized with a
+**safe-by-default retention bundle**:
+
+- **`staleness_mode=hard`** — a recalled record that has gone stale *and*
+  references something that can change (a code path, a version, a config) is
+  **withheld** from results until it is re-verified. Hard is also the mode the
+  retention sweep acts on.
+- **`cleanup_scan_enabled=true`** — the nightly scanner walks this tenant,
+  archiving records whose staleness has passed the retention window
+  (`RETENTION_MULTIPLIER` × the per-`doc_type` threshold) and hard-deleting them
+  after the `RETENTION_DELETE_GRACE_DAYS` grace period.
+- **`duplicate_guard=true`** — a `store_memory` that is a near-duplicate of an
+  existing record is refused, steering the client to `update_section` the
+  existing record instead of accumulating competing copies.
+
+These defaults come from `MEMORY_DEFAULT_OPTS`; override that variable at server
+start to change what *new* tenants get (see
+[Configuration](../README.md#configuration)). They apply **only at
+tenant-create time** — existing tenants keep whatever settings they already
+have.
+
+### This bundle depends on the client verifying on recall
+
+Hard staleness plus the cleanup sweep will archive, and eventually delete,
+documents that go stale and are never re-verified. That is the point — dead
+knowledge gets swept — but it means **an actively-used document survives only if
+the assistant re-verifies or updates it when it reads it**. The memory tools
+support this directly: `mark_verified` after confirming a record still holds,
+`update_section` when it has drifted. Each verify or update resets the record's
+staleness clock.
+
+So the safe bundle is only half a server-side setting; the other half is a
+client-side habit. Make sure the assistant that talks to this instance is told
+to verify-on-recall. The ready-to-paste
+[memory usage prompt](memory-usage-prompt.md) already includes exactly this
+guidance — drop it into your agent's system prompt so good documents stay alive
+instead of being swept.
 
 ---
 

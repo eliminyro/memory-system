@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eliminyro/authlet/pkg/idp"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
@@ -305,6 +307,27 @@ func main() {
 		if err != nil {
 			slog.Error("authlet setup failed", "error", err)
 			os.Exit(1)
+		}
+		// Self-serve signup: on a verified-email login with no tenant_users row,
+		// auto-provision a personal tenant, gated by SIGNUP_ALLOWED_DOMAINS. The
+		// service owns the gate + creation (leaf authletas can't reach it); we
+		// translate its not-allowed sentinel into the authletas one so the
+		// resolver maps it to a 403. hd is best-effort from Raw (idp.Claims has
+		// no typed field); empty ⇒ email-domain match only.
+		authletWiring.Resolver.Provision = func(ctx context.Context, c idp.Claims) (string, error) {
+			hd, _ := c.Raw["hd"].(string)
+			tid, provErr := memorySvc.ProvisionPersonalTenant(ctx, c.Email, c.Name, hd, cfg.SignupAllowedDomains)
+			if errors.Is(provErr, service.ErrSignupNotAllowed) {
+				return "", authletas.ErrProvisionNotAllowed
+			}
+			return tid, provErr
+		}
+		// Loud operator safety net: an empty allow-list means ANY verified
+		// identity can self-provision. A garbled restrictive value also
+		// normalizes to empty, so warn rather than fail closed here.
+		if len(cfg.SignupAllowedDomains) == 0 {
+			slog.Warn("self-serve signup is PUBLIC: any verified OAuth identity can provision a tenant — set SIGNUP_ALLOWED_DOMAINS to restrict",
+				"event", "signup.public")
 		}
 		// AS cleanup goroutine: expires codes/tokens/DCR clients, rotates signing
 		// keys. Returns a channel closed on ctx cancel; we don't wait on it

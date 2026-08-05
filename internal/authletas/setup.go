@@ -69,6 +69,13 @@ type Wiring struct {
 	// /token, /register, /idp/callback, /revoke, /userinfo).
 	AS *as.AS
 
+	// Resolver is the MemoryUserResolver wired into the AS. The composition
+	// root sets wiring.Resolver.Provision post-Setup to enable auto-provisioning
+	// on a tenant_users miss (nil Provision preserves the reject-by-default
+	// behavior). Exposed so the callback can be injected without changing
+	// Setup's signature.
+	Resolver *MemoryUserResolver
+
 	// BearerMW wraps protected handlers (the MCP endpoint): enforces iss/aud,
 	// rejects with 401 + WWW-Authenticate challenge pointing at prmURL.
 	BearerMW func(http.Handler) http.Handler
@@ -184,11 +191,15 @@ func Setup(
 		return map[string]any{"email": e}
 	}
 
+	// Construct the resolver as a local so it can be exposed on Wiring; the
+	// composition root sets .Provision on it after Setup returns.
+	resolver := &MemoryUserResolver{DB: db, Logger: logger}
+
 	server, err := as.New(as.Config{
 		Issuer:              urls.issuer,
 		PathPrefix:          PathPrefix,
 		Upstream:            upstream,
-		UserResolver:        &MemoryUserResolver{DB: db, Logger: logger},
+		UserResolver:        resolver,
 		Storage:             store,
 		KeyManager:          mgr,
 		AdditionalClaimsCtx: additionalClaims,
@@ -216,6 +227,7 @@ func Setup(
 
 	return &Wiring{
 		AS:         server,
+		Resolver:   resolver,
 		BearerMW:   bearer,
 		PRMHandler: prm,
 		RunCleanup: func(ctx context.Context) <-chan struct{} {

@@ -42,6 +42,12 @@ func (h *apiHandler) mux() *http.ServeMux {
 	// manages. Not adminOnly — a manager who isn't a system admin needs this.
 	m.HandleFunc("GET /tenants/writable", h.listWritableTenants)
 
+	// GET /tenants?type=<t>&q=<filter> lists/searches tenants by display type
+	// (design.md §5), reusing the WritableTenants authz shape: all tenants of
+	// that type for a system admin, else only the tenants the caller manages.
+	// Not adminOnly — delegated managers use it too.
+	m.HandleFunc("GET /tenants", h.listTenants)
+
 	// Relational import surface (design.md §8): sysadmin may target any
 	// tenant, otherwise the caller must manage the target tenant
 	// (CanManageTenant). Not adminOnly — mechanics shared with the admin
@@ -73,6 +79,13 @@ func (h *apiHandler) listWritableTenants(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, jsonList(tenants))
+}
+
+// listTenants serves GET /tenants (design.md §5). It delegates to
+// listTenantsByType with the real service; the type/q filtering and authz shape
+// live in the service, the response projection in listTenantsByType.
+func (h *apiHandler) listTenants(w http.ResponseWriter, r *http.Request) {
+	listTenantsByType(w, r, h.memory)
 }
 
 // enqueueImport is the relational (non-admin) counterpart of

@@ -26,7 +26,7 @@ func newTenantCmd() *cobra.Command {
 }
 
 func newTenantCreateCmd() *cobra.Command {
-	var name, email string
+	var name, email, tenantType string
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a tenant",
@@ -35,16 +35,23 @@ func newTenantCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, err := svc.CreateTenant(ctx, name, email)
+			// An empty --type is omitted so the service default (shared)
+			// applies; a supplied value is validated in-service.
+			var opts []string
+			if tenantType != "" {
+				opts = append(opts, tenantType)
+			}
+			t, err := svc.CreateTenant(ctx, name, email, opts...)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created tenant\n  id:   %s\n  name: %s\n", t.ID, t.Name)
+			fmt.Printf("Created tenant\n  id:   %s\n  name: %s\n  type: %s\n", t.ID, t.Name, t.Type)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Tenant name (required)")
 	cmd.Flags().StringVar(&email, "email", "", "Tenant contact email")
+	cmd.Flags().StringVar(&tenantType, "type", "", "Tenant type: personal|shared (default shared)")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
@@ -74,8 +81,8 @@ func newTenantListCmd() *cobra.Command {
 
 func newTenantUpdateCmd() *cobra.Command {
 	var (
-		idStr, name, email, staleness string
-		dupGuard, cleanupScan         bool
+		idStr, name, email, tenantType, staleness string
+		dupGuard, cleanupScan                     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -96,6 +103,9 @@ func newTenantUpdateCmd() *cobra.Command {
 			if cmd.Flags().Changed("email") {
 				fields.Email = &email
 			}
+			if cmd.Flags().Changed("type") {
+				fields.Type = &tenantType
+			}
 			if cmd.Flags().Changed("staleness") {
 				fields.StalenessMode = &staleness
 			}
@@ -109,14 +119,15 @@ func newTenantUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Updated tenant\n  id:              %s\n  name:            %s\n  email:           %s\n  staleness:       %s\n  duplicate_guard: %t\n  cleanup_scan:    %t\n",
-				t.ID, t.Name, t.Email, t.StalenessMode, t.DuplicateGuard, t.CleanupScanEnabled)
+			fmt.Printf("Updated tenant\n  id:              %s\n  name:            %s\n  email:           %s\n  type:            %s\n  staleness:       %s\n  duplicate_guard: %t\n  cleanup_scan:    %t\n",
+				t.ID, t.Name, t.Email, t.Type, t.StalenessMode, t.DuplicateGuard, t.CleanupScanEnabled)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&idStr, "id", "", "Tenant UUID (required)")
 	cmd.Flags().StringVar(&name, "name", "", "New tenant name")
 	cmd.Flags().StringVar(&email, "email", "", "New contact email")
+	cmd.Flags().StringVar(&tenantType, "type", "", "Tenant type: personal|shared")
 	cmd.Flags().StringVar(&staleness, "staleness", "", "Staleness mode: off|advisory|hard")
 	cmd.Flags().BoolVar(&dupGuard, "duplicate-guard", false, "Enable/disable near-duplicate write guard")
 	cmd.Flags().BoolVar(&cleanupScan, "cleanup-scan", false, "Enable/disable nightly cleanup scan")

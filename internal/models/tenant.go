@@ -20,10 +20,37 @@ var ValidStalenessModes = map[string]struct{}{
 	StalenessModeHard:     {},
 }
 
+// Tenant type constants. A display/visibility classifier only — see Tenant.Type.
+const (
+	TenantTypePersonal = "personal"
+	TenantTypeShared   = "shared"
+)
+
+// ValidTenantTypes is the accepted set for Tenant.Type.
+var ValidTenantTypes = map[string]struct{}{
+	TenantTypePersonal: {},
+	TenantTypeShared:   {},
+}
+
+// IsValidTenantType reports whether t is an accepted tenant type
+// (personal or shared).
+func IsValidTenantType(t string) bool {
+	_, ok := ValidTenantTypes[t]
+	return ok
+}
+
 type Tenant struct {
 	ID    uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	Name  string    `gorm:"size:200;not null;uniqueIndex" json:"name"`
 	Email string    `gorm:"size:200" json:"email,omitempty"`
+
+	// Type is a DISPLAY-ONLY classifier ("personal" | "shared") for grouping
+	// tenants in the UI. It MUST NOT be read by authorization: internal/authz
+	// and authorize/Check never import or inspect this field, and access
+	// decisions are identical regardless of its value. New tenants default to
+	// "shared"; the NOT NULL DEFAULT backfills existing rows (incl. the default
+	// pool) to "shared" on AutoMigrate.
+	Type string `gorm:"type:text;not null;default:'shared'" json:"type"`
 
 	// Per-tenant feature toggles. All default to the safest behavior so a tenant
 	// upgrading from pre-tightening infra sees no change unless it opts in.
