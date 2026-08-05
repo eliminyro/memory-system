@@ -15,10 +15,10 @@ header {
   top: 0;
   background: #fff;
   border-bottom: 1px solid #e0e0e0;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 1rem 0;
   z-index: 10;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
 }
 
@@ -46,6 +46,7 @@ main {
   background: none;
   color: #666;
   border-bottom: 2px solid transparent;
+  margin-bottom: -1px; /* overlap the header's 1px bottom border so the active underline sits on that single line */
   cursor: pointer;
 }
 .tab-link:hover:not(.active) { color: #333; }
