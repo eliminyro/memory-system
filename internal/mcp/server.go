@@ -61,13 +61,17 @@ Admin users can pass tenant_id to any tool to target a specific tenant (includin
 
 Admin tools: list_tenants, create_tenant, update_tenant, delete_tenant, create_api_key, list_api_keys, revoke_api_key.`
 
-	// Regular server — memory tools only
+	// Regular server — memory tools + delegated-ACL tools (not admin-only: a
+	// tenant#manager who is not a system admin manages grants here; the service
+	// enforces the ceiling).
 	s.mcp = mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{Instructions: regularInstructions})
 	s.registerTools(s.mcp)
+	s.registerACLTools(s.mcp)
 
-	// Admin server — memory tools + admin tools
+	// Admin server — memory tools + delegated-ACL tools + admin tools
 	s.adminMcp = mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{Instructions: adminInstructions})
 	s.registerTools(s.adminMcp)
+	s.registerACLTools(s.adminMcp)
 	s.registerAdminTools(s.adminMcp)
 
 	return s

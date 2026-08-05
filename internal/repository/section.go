@@ -242,14 +242,22 @@ type RelatedResult struct {
 	Slug        string    `json:"slug"`
 	DocTitle    string    `json:"doc_title"`
 	Similarity  float64   `json:"similarity"`
+
+	// Owning-tenant label (cross-tenant reads). TenantID comes from SQL; Name and
+	// Type are resolved by the service layer for the distinct result tenants.
+	TenantID   uuid.UUID `json:"tenant_id"`
+	TenantName string    `json:"tenant_name,omitempty"`
+	TenantType string    `json:"tenant_type,omitempty"`
 }
 
-func (r *SectionRepository) GetRelated(ctx context.Context, tenantID uuid.UUID, documentID uuid.UUID, limit int) ([]RelatedResult, error) {
+// GetRelated returns documents semantically related to documentID, restricted to
+// the caller's readable tenant set (tenant_id IN tenantIDs) so no result can
+// leak a tenant outside that set. The service layer computes tenantIDs via
+// readScope/readableTenants and resolves the per-result tenant labels.
+func (r *SectionRepository) GetRelated(ctx context.Context, tenantIDs []uuid.UUID, documentID uuid.UUID, limit int) ([]RelatedResult, error) {
 	if limit <= 0 {
 		limit = 5
 	}
-
-	tenants := readTenants(tenantID)
 
 	sql := `
 		WITH target_avg AS (
@@ -268,16 +276,16 @@ func (r *SectionRepository) GetRelated(ctx context.Context, tenantID uuid.UUID, 
 			  AND d.archived_at IS NULL
 			  AND s.embedding IS NOT NULL
 		)
-		SELECT c.document_id, d.category, d.subcategory, d.slug, d.title AS doc_title,
+		SELECT c.document_id, d.tenant_id, d.category, d.subcategory, d.slug, d.title AS doc_title,
 			   AVG(c.similarity) AS similarity
 		FROM candidates c
 		JOIN documents d ON d.id = c.document_id
-		GROUP BY c.document_id, d.category, d.subcategory, d.slug, d.title
+		GROUP BY c.document_id, d.tenant_id, d.category, d.subcategory, d.slug, d.title
 		ORDER BY similarity DESC
 		LIMIT ?
 	`
 
-	args := []any{documentID, documentID, tenants, limit}
+	args := []any{documentID, documentID, tenantIDs, limit}
 
 	var results []RelatedResult
 	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&results).Error; err != nil {

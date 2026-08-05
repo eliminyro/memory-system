@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eliminyro/memory-system/internal/authz"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -37,25 +36,6 @@ type aclAPIHandler struct {
 	memory aclService
 }
 
-// tenantGrantRelations / documentGrantRelations are the accepted relation
-// values per surface (design.md §5-6), built from the same authz relation
-// constants the service validates against. Validating here lets the HTTP
-// layer distinguish "bad relation" (400) from "not authorized" (403) even
-// though the service wraps both outcomes in apperr.ErrInvalidInput: once a
-// relation string is known-good (checked here, before the service call), any
-// ErrInvalidInput the service still returns can only be the grant-ceiling /
-// CanManageTenant authorization failure.
-var tenantGrantRelations = map[string]bool{
-	authz.RelViewer:  true,
-	authz.RelMember:  true,
-	authz.RelManager: true,
-}
-
-var documentGrantRelations = map[string]bool{
-	authz.RelViewer: true,
-	authz.RelEditor: true,
-}
-
 func (h *aclAPIHandler) mux() *http.ServeMux {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /tenants/{id}/grants", h.listTenantGrants)
@@ -82,15 +62,17 @@ func decodeGrantBody(r *http.Request) (aclGrantBody, error) {
 }
 
 // writeACLErr maps a service error to the ACL surface's status codes
-// (design.md §7): apperr.ErrNotFound (unknown email, or a missing document
-// for the document routes) -> 404; apperr.ErrInvalidInput -> 403 (by
-// construction, every caller here has already validated the relation string
-// itself before invoking the service, so any ErrInvalidInput reaching this
-// point can only be the grant-ceiling / CanManageTenant authorization
-// failure); anything else falls through to the shared writeErr (500, logged,
-// generic body — never leaks internals).
+// (design.md §7). Relation validation lives solely in the service now, which
+// returns the distinct apperr.ErrInvalidRelation for a malformed relation;
+// that is checked first so a bad relation stays a 400 while a grant-ceiling /
+// CanManageTenant denial (a bare apperr.ErrInvalidInput) maps to 403.
+// apperr.ErrNotFound (unknown email, or a missing document for the document
+// routes) -> 404; anything else falls through to the shared writeErr (500,
+// logged, generic body — never leaks internals).
 func writeACLErr(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, apperr.ErrInvalidRelation):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	case errors.Is(err, apperr.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	case errors.Is(err, apperr.ErrInvalidInput):
@@ -125,10 +107,6 @@ func (h *aclAPIHandler) grantTenantAccess(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if !tenantGrantRelations[body.Relation] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "relation must be viewer, member, or manager"})
-		return
-	}
 	if err := h.memory.GrantTenantAccess(r.Context(), id, body.Email, body.Relation); err != nil {
 		writeACLErr(w, err)
 		return
@@ -145,10 +123,6 @@ func (h *aclAPIHandler) revokeTenantAccess(w http.ResponseWriter, r *http.Reques
 	body, err := decodeGrantBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	if !tenantGrantRelations[body.Relation] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "relation must be viewer, member, or manager"})
 		return
 	}
 	if err := h.memory.RevokeTenantAccess(r.Context(), id, body.Email, body.Relation); err != nil {
@@ -183,10 +157,6 @@ func (h *aclAPIHandler) grantDocumentAccess(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if !documentGrantRelations[body.Relation] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "relation must be viewer or editor"})
-		return
-	}
 	if err := h.memory.GrantDocumentAccess(r.Context(), id, body.Email, body.Relation); err != nil {
 		writeACLErr(w, err)
 		return
@@ -203,10 +173,6 @@ func (h *aclAPIHandler) revokeDocumentAccess(w http.ResponseWriter, r *http.Requ
 	body, err := decodeGrantBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	if !documentGrantRelations[body.Relation] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "relation must be viewer or editor"})
 		return
 	}
 	if err := h.memory.RevokeDocumentAccess(r.Context(), id, body.Email, body.Relation); err != nil {
