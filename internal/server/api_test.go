@@ -12,6 +12,7 @@ import (
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/service"
 )
 
 // Behavioral counterparts (handlers forwarding context tenant + params, marshaling
@@ -200,5 +201,115 @@ func TestJSONList_NilCoercesToArray(t *testing.T) {
 	// A populated slice passes through unchanged.
 	if got := jsonList([]int{1, 2}); len(got) != 2 {
 		t.Errorf("populated slice len = %d, want 2", len(got))
+	}
+}
+
+// tenantFilter is the parse-and-produce-overrideID logic the read handlers feed
+// straight into the service call, so testing it directly covers the ?tenant_id
+// pass-through: absent/empty ⇒ nil (aggregate), valid ⇒ &id, malformed ⇒ error.
+func TestTenantFilter(t *testing.T) {
+	// absent ⇒ nil, no error
+	if id, err := tenantFilter(httptest.NewRequest(http.MethodGet, "/search?q=x", nil)); err != nil || id != nil {
+		t.Fatalf("absent tenant_id: id=%v err=%v, want nil,nil", id, err)
+	}
+	// present-but-empty ⇒ nil, no error
+	if id, err := tenantFilter(httptest.NewRequest(http.MethodGet, "/search?q=x&tenant_id=", nil)); err != nil || id != nil {
+		t.Fatalf("empty tenant_id: id=%v err=%v, want nil,nil", id, err)
+	}
+	// valid ⇒ &id equal to the parsed UUID, no error
+	want := uuid.New()
+	id, err := tenantFilter(httptest.NewRequest(http.MethodGet, "/search?q=x&tenant_id="+want.String(), nil))
+	if err != nil {
+		t.Fatalf("valid tenant_id: unexpected err %v", err)
+	}
+	if id == nil || *id != want {
+		t.Fatalf("valid tenant_id: got %v, want &%v", id, want)
+	}
+	// malformed ⇒ error (handler turns this into 400; never a silent aggregate)
+	if _, err := tenantFilter(httptest.NewRequest(http.MethodGet, "/search?q=x&tenant_id=not-a-uuid", nil)); err == nil {
+		t.Fatal("malformed tenant_id: want error, got nil")
+	}
+}
+
+// A malformed ?tenant_id must 400 before the handler ever reaches the service —
+// so these run with a nil memory (parse failure short-circuits).
+func TestAPISearch_MalformedTenantID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/search?q=x&tenant_id=not-a-uuid", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed tenant_id = %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIListDocuments_MalformedTenantID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/documents?tenant_id=not-a-uuid", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed tenant_id = %d, want 400", rec.Code)
+	}
+}
+
+func TestAPIGetDocument_MalformedTenantID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	// Valid path id so parsing gets past the id check and reaches the tenant_id parse.
+	req := httptest.NewRequest(http.MethodGet, "/documents/"+uuid.NewString()+"?tenant_id=not-a-uuid", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed tenant_id = %d, want 400", rec.Code)
+	}
+}
+
+// The search response marshals repository.SearchResult directly (writeJSON →
+// json.Encode), so the owning-tenant labels must appear on the wire via the json tags.
+func TestSearchResult_TenantLabelsInResponse(t *testing.T) {
+	tid := uuid.New()
+	res := []repository.SearchResult{{TenantID: tid, TenantName: "acme", TenantType: "shared"}}
+	b, err := json.Marshal(jsonList(res))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0]["tenant_id"] != tid.String() {
+		t.Errorf("tenant_id = %v, want %s", got[0]["tenant_id"], tid)
+	}
+	if got[0]["tenant_name"] != "acme" {
+		t.Errorf("tenant_name = %v, want acme", got[0]["tenant_name"])
+	}
+	if got[0]["tenant_type"] != "shared" {
+		t.Errorf("tenant_type = %v, want shared", got[0]["tenant_type"])
+	}
+}
+
+// The get-document response marshals service.DocumentView directly, so its
+// owning-tenant labels must appear on the wire via the json tags.
+func TestDocumentView_TenantLabelsInResponse(t *testing.T) {
+	tid := uuid.New()
+	b, err := json.Marshal(service.DocumentView{TenantID: tid, TenantName: "acme", TenantType: "shared"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["tenant_id"] != tid.String() {
+		t.Errorf("tenant_id = %v, want %s", got["tenant_id"], tid)
+	}
+	if got["tenant_name"] != "acme" {
+		t.Errorf("tenant_name = %v, want acme", got["tenant_name"])
+	}
+	if got["tenant_type"] != "shared" {
+		t.Errorf("tenant_type = %v, want shared", got["tenant_type"])
 	}
 }

@@ -30,7 +30,9 @@ engine** — a single decision point backed by relation tuples rather than hard-
 rules. Two independent authentication paths feed that engine: long-lived **API keys**
 (ideal for headless agents and CI) and **OAuth 2.1 / OIDC** (for humans signing in
 through an upstream identity provider). All data is tenant-scoped, with an optional
-shared "common" pool for knowledge every tenant can read.
+shared "common" pool for knowledge every tenant can read; a caller's **reads
+aggregate** across their home tenant, the common pool, and any tenant they hold a
+direct grant on, while **writes stay scoped to a single tenant**.
 
 ## Features
 
@@ -44,6 +46,11 @@ shared "common" pool for knowledge every tenant can read.
   resolve to a unified `Subject` and are checked by the same relationship engine.
 - **Per-tenant isolation** — every document, key, and relation tuple is tenant-scoped,
   with a shared common pool for cross-tenant knowledge.
+- **Aggregated reads across your tenants** — `search_memory`, `list_documents`, and
+  `get` span the caller's readable tenant set (home tenant + common pool + any tenant
+  they hold a direct `viewer`/`member`/`manager`/`admin` grant on), with each result
+  labeled by its owning tenant and an optional `tenant_id` filter to narrow to one.
+  Admins are not expanded to every tenant, and writes stay single-tenant.
 - **Staleness & verification** — per-`doc_type` freshness thresholds with `off`,
   `advisory`, or `hard` modes; stale sections can be withheld until re-verified.
 - **Retention sweep** — archives documents left unverified past a configurable multiple

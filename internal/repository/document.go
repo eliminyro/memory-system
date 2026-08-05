@@ -36,14 +36,27 @@ func readTenants(tenantID uuid.UUID) []uuid.UUID {
 	return []uuid.UUID{tenantID, models.BootstrapTenantID}
 }
 
+// ReadTenants is the exported form of readTenants for service-layer WRITE-path
+// callers of the set-based read methods (GetByPath/GetByID/List): it preserves
+// the single-tenant + common-pool scope so writes and the guest-editor
+// common-pool path keep their exact pre-aggregation behavior. READ callers pass
+// the service-computed readable set instead.
+func ReadTenants(tenantID uuid.UUID) []uuid.UUID {
+	return readTenants(tenantID)
+}
+
 func (r *DocumentRepository) Create(ctx context.Context, doc *models.Document) error {
 	return r.db.WithContext(ctx).Create(doc).Error
 }
 
-func (r *DocumentRepository) GetByPath(ctx context.Context, tenantID uuid.UUID, category string, subcategory *string, slug string) (*models.Document, error) {
+// GetByPath resolves a document by path across the given tenant-id set. `home`
+// is the requesting tenant used only for ordering: a doc owned by `home` is
+// preferred over one in the common pool or another readable tenant when the
+// same path exists in several.
+func (r *DocumentRepository) GetByPath(ctx context.Context, tenantIDs []uuid.UUID, home uuid.UUID, category string, subcategory *string, slug string) (*models.Document, error) {
 	var doc models.Document
 	q := r.db.WithContext(ctx).
-		Where("tenant_id IN ?", readTenants(tenantID)).
+		Where("tenant_id IN ?", tenantIDs).
 		Where("archived_at IS NULL").
 		Where("category = ? AND slug = ?", category, slug)
 	if subcategory != nil {
@@ -51,8 +64,8 @@ func (r *DocumentRepository) GetByPath(ctx context.Context, tenantID uuid.UUID, 
 	} else {
 		q = q.Where("subcategory IS NULL")
 	}
-	// Prefer the requesting tenant's doc over the common pool
-	if err := q.Order(gorm.Expr("CASE WHEN tenant_id = ? THEN 0 ELSE 1 END", tenantID)).
+	// Prefer the requesting (home) tenant's doc over the common pool / others
+	if err := q.Order(gorm.Expr("CASE WHEN tenant_id = ? THEN 0 ELSE 1 END", home)).
 		Preload("Sections", func(db *gorm.DB) *gorm.DB {
 			return db.Order("ordinal ASC")
 		}).First(&doc).Error; err != nil {
@@ -64,10 +77,11 @@ func (r *DocumentRepository) GetByPath(ctx context.Context, tenantID uuid.UUID, 
 	return &doc, nil
 }
 
-func (r *DocumentRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id uuid.UUID) (*models.Document, error) {
+// GetByID resolves a document by primary key, scoped to the given tenant-id set.
+func (r *DocumentRepository) GetByID(ctx context.Context, tenantIDs []uuid.UUID, id uuid.UUID) (*models.Document, error) {
 	var doc models.Document
 	if err := r.db.WithContext(ctx).
-		Where("tenant_id IN ?", readTenants(tenantID)).
+		Where("tenant_id IN ?", tenantIDs).
 		Where("archived_at IS NULL").
 		Preload("Sections", func(db *gorm.DB) *gorm.DB {
 			return db.Order("ordinal ASC")
@@ -81,9 +95,10 @@ func (r *DocumentRepository) GetByID(ctx context.Context, tenantID uuid.UUID, id
 	return &doc, nil
 }
 
-func (r *DocumentRepository) List(ctx context.Context, tenantID uuid.UUID, category *string, subcategory *string) ([]models.Document, error) {
+// List returns documents across the given tenant-id set, optionally filtered.
+func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, category *string, subcategory *string) ([]models.Document, error) {
 	var docs []models.Document
-	q := r.db.WithContext(ctx).Where("tenant_id IN ?", readTenants(tenantID)).Where("archived_at IS NULL")
+	q := r.db.WithContext(ctx).Where("tenant_id IN ?", tenantIDs).Where("archived_at IS NULL")
 	if category != nil {
 		q = q.Where("category = ?", *category)
 	}

@@ -38,6 +38,12 @@ type SearchResult struct {
 	VerifiedAt     *time.Time `json:"verified_at,omitempty"`
 	SectionCreated time.Time  `json:"-"`
 
+	// Owning-tenant label (cross-tenant reads). TenantID comes from SQL; Name and
+	// Type are resolved by the service layer for the distinct result tenants.
+	TenantID   uuid.UUID `json:"tenant_id"`
+	TenantName string    `json:"tenant_name,omitempty"`
+	TenantType string    `json:"tenant_type,omitempty"`
+
 	// Staleness overlay (set by service layer after fetch, not by SQL).
 	Status        string   `json:"status,omitempty"`         // "needs_verification" when guarded
 	Preview       string   `json:"preview,omitempty"`        // short preview of withheld content
@@ -48,7 +54,7 @@ type SearchResult struct {
 
 // SearchParams groups the inputs for hybrid search.
 type SearchParams struct {
-	TenantID    uuid.UUID
+	TenantIDs   []uuid.UUID
 	Embedding   pgvector.Vector
 	Query       string
 	Category    *string
@@ -82,6 +88,7 @@ type hybridRow struct {
 	Slug           string     `gorm:"column:slug"`
 	DocTitle       string     `gorm:"column:doc_title"`
 	DocType        string     `gorm:"column:doc_type"`
+	TenantID       uuid.UUID  `gorm:"column:tenant_id"`
 	VerifiedAt     *time.Time `gorm:"column:verified_at"`
 	SectionCreated time.Time  `gorm:"column:section_created"`
 }
@@ -146,6 +153,7 @@ func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
 			Slug:           r.Slug,
 			DocTitle:       r.DocTitle,
 			DocType:        r.DocType,
+			TenantID:       r.TenantID,
 			VerifiedAt:     r.VerifiedAt,
 			SectionCreated: r.SectionCreated,
 		})
@@ -166,7 +174,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		p.Limit = 10
 	}
 
-	tenants := readTenants(p.TenantID)
+	tenants := p.TenantIDs
 	vec := p.Embedding.String()
 
 	sql := `
@@ -207,7 +215,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			   (sem.id IS NOT NULL)                          AS has_vec,
 			   (kw.id IS NOT NULL)                           AS has_lex,
 			   d.category, d.subcategory, d.slug, d.title    AS doc_title,
-			   d.doc_type,
+			   d.doc_type, d.tenant_id,
 			   COALESCE(sem.verified_at, kw.verified_at)     AS verified_at,
 			   COALESCE(sem.section_created, kw.section_created) AS section_created
 		FROM semantic sem

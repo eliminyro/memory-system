@@ -222,22 +222,171 @@ func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenan
 	return tenantSettings{StalenessMode: mode, DuplicateGuard: t.DuplicateGuard}
 }
 
+// readableTenants returns the set of tenant IDs the caller may READ across: the
+// caller's home tenant, the common (bootstrap) pool, and every tenant for which
+// the subject holds a DIRECT viewer/member/manager/admin tuple confirmed by an
+// authz viewer Check.
+//
+// The candidate tenants come from ReadBySubject (direct tuples only), so a
+// system admin is NOT expanded into every tenant — their system#admin tuple has
+// object type "system" and is skipped here, keeping aggregation bounded and
+// meaningful. This mirrors WritableTenants' candidate-then-Check shape but for
+// the viewer relation, and is used by the READ path only; writes keep
+// resolveTenant (single tenant, admin-only override).
+func (s *MemoryService) readableTenants(ctx context.Context) ([]uuid.UUID, error) {
+	home := auth.TenantIDFromContext(ctx)
+	if home == uuid.Nil {
+		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
+	}
+
+	seen := make(map[uuid.UUID]struct{}, 4)
+	var out []uuid.UUID
+	add := func(id uuid.UUID) {
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	// Home and the common pool are always readable.
+	add(home)
+	add(models.BootstrapTenantID)
+
+	if s.authz == nil {
+		return out, nil
+	}
+	subj, ok := auth.SubjectFromContext(ctx)
+	if !ok || subj.ID == "" {
+		return out, nil
+	}
+	tuples, err := s.authz.ReadBySubject(ctx, subj.Type, subj.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tuples {
+		if t.ObjectType != authz.TypeTenant {
+			continue // e.g. system#admin — never expanded into every tenant
+		}
+		tid, err := uuid.Parse(t.ObjectID)
+		if err != nil {
+			continue
+		}
+		if _, dup := seen[tid]; dup {
+			continue
+		}
+		// Confirm the direct tuple actually grants read (member/manager/admin all
+		// rewrite to viewer); excludes stale or insufficient tuples.
+		if !s.authorize(ctx, authz.TypeTenant, tid.String(), authz.RelViewer) {
+			continue
+		}
+		add(tid)
+	}
+	return out, nil
+}
+
+// readScope resolves the tenant-id SET a READ should span. This replaces the
+// admin-only tenant override on the read methods with two behaviors:
+//
+//   - overrideID == nil: aggregate over readableTenants (home + common + every
+//     directly-granted readable tenant).
+//   - overrideID != nil: narrow to that ONE tenant, but only when the caller may
+//     read it — it is home, the common pool, or a viewer Check passes. The viewer
+//     Check deliberately lets a system admin target ANY tenant (admin ⇒ viewer),
+//     preserving today's admin single-tenant read, while a non-admin may target
+//     only a tenant it can actually read. A non-readable target yields an EMPTY
+//     scope: an empty result, never that tenant's documents, and never an error
+//     that would reveal the tenant's existence.
+func (s *MemoryService) readScope(ctx context.Context, overrideID *uuid.UUID) ([]uuid.UUID, error) {
+	if overrideID == nil {
+		return s.readableTenants(ctx)
+	}
+	home := auth.TenantIDFromContext(ctx)
+	if home == uuid.Nil {
+		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
+	}
+	if *overrideID == home || *overrideID == models.BootstrapTenantID ||
+		s.authorize(ctx, authz.TypeTenant, overrideID.String(), authz.RelViewer) {
+		return []uuid.UUID{*overrideID}, nil
+	}
+	return nil, nil // not readable -> empty scope -> empty result, no leak
+}
+
+// resolveResultTenants fetches the distinct owning tenants present in a search
+// result set in ONE lookup, labels each result with its tenant's name/type, and
+// returns a per-tenant staleness-mode map (keyed by tenant id) so staleness can
+// be applied under each result's own tenant mode. Fail-safe: on a lookup miss,
+// labels are simply absent and modes default to off (never refuse content on a
+// glitch).
+func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repository.SearchResult) map[uuid.UUID]string {
+	modeByTenant := make(map[uuid.UUID]string)
+	if len(results) == 0 || s.tenants == nil {
+		return modeByTenant
+	}
+	seen := make(map[uuid.UUID]struct{})
+	ids := make([]uuid.UUID, 0)
+	for i := range results {
+		id := results[i].TenantID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	tenants, err := s.tenants.GetByIDs(ctx, ids)
+	if err != nil {
+		return modeByTenant
+	}
+	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
+	for _, t := range tenants {
+		byID[t.ID] = t
+		mode := t.StalenessMode
+		if _, ok := models.ValidStalenessModes[mode]; !ok {
+			mode = models.StalenessModeOff
+		}
+		modeByTenant[t.ID] = mode
+	}
+	for i := range results {
+		if t, ok := byID[results[i].TenantID]; ok {
+			results[i].TenantName = t.Name
+			results[i].TenantType = t.Type
+		}
+	}
+	return modeByTenant
+}
+
+// tenantLabel resolves a single tenant's display name/type for labeling a
+// document view. Fail-safe: an unreadable tenants repo or lookup miss yields
+// empty strings rather than failing the read.
+func (s *MemoryService) tenantLabel(ctx context.Context, id uuid.UUID) (name, typ string) {
+	if s.tenants == nil {
+		return "", ""
+	}
+	t, err := s.tenants.GetByID(ctx, id)
+	if err != nil {
+		return "", ""
+	}
+	return t.Name, t.Type
+}
+
 // Search performs hybrid semantic + keyword search, applying staleness filter.
 // When forceRead is true, Reason is required and the override is audited.
 func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, error) {
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
-	tid, err := s.resolveTenant(ctx, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
+	}
+	if len(scope) == 0 {
+		return []repository.SearchResult{}, nil // non-readable filter target
 	}
 	embedding, err := s.embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 	results, err := s.sections.HybridSearch(ctx, repository.SearchParams{
-		TenantID:    tid,
+		TenantIDs:   scope,
 		Embedding:   embedding,
 		Query:       query,
 		Category:    category,
@@ -247,16 +396,18 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if err != nil {
 		return nil, err
 	}
-	settings := s.tenantSettings(ctx, tid)
+	// Label each result by its owning tenant and resolve per-tenant staleness
+	// modes in one lookup, then apply staleness under each result's own mode.
+	modeByTenant := s.resolveResultTenants(ctx, results)
 	if s.thresholds != nil {
-		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, settings.StalenessMode, forceRead)
+		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, modeByTenant, forceRead)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if forceRead {
 		s.logOverride(ctx, repository.OverrideEvent{
-			TenantID:     tid,
+			TenantID:     auth.TenantIDFromContext(ctx),
 			Tool:         models.OverrideToolSearchMemory,
 			OverrideType: models.OverrideTypeForceRead,
 			Reason:       reason,
@@ -271,23 +422,28 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
-	tid, err := s.resolveTenant(ctx, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := s.docs.GetByPath(ctx, tid, category, subcategory, slug)
+	if len(scope) == 0 {
+		return nil, fmt.Errorf("%w: document %s/%s", apperr.ErrNotFound, category, slug)
+	}
+	doc, err := s.docs.GetByPath(ctx, scope, auth.TenantIDFromContext(ctx), category, subcategory, slug)
 	if err != nil {
 		return nil, err
 	}
-	settings := s.tenantSettings(ctx, tid)
+	// Staleness + labeling use the doc's OWNING tenant, not the caller's home.
+	settings := s.tenantSettings(ctx, doc.TenantID)
 	view, err := buildDocumentView(ctx, s.thresholds, doc, settings.StalenessMode, forceRead)
 	if err != nil {
 		return nil, err
 	}
+	view.TenantName, view.TenantType = s.tenantLabel(ctx, doc.TenantID)
 	if forceRead {
 		docID := doc.ID
 		s.logOverride(ctx, repository.OverrideEvent{
-			TenantID:     tid,
+			TenantID:     doc.TenantID,
 			Tool:         models.OverrideToolGetDocument,
 			TargetID:     &docID,
 			OverrideType: models.OverrideTypeForceRead,
@@ -304,23 +460,28 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
-	tid, err := s.resolveTenant(ctx, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := s.docs.GetByID(ctx, tid, id)
+	if len(scope) == 0 {
+		return nil, fmt.Errorf("%w: document %s", apperr.ErrNotFound, id)
+	}
+	doc, err := s.docs.GetByID(ctx, scope, id)
 	if err != nil {
 		return nil, err
 	}
-	settings := s.tenantSettings(ctx, tid)
+	// Staleness + labeling use the doc's OWNING tenant, not the caller's home.
+	settings := s.tenantSettings(ctx, doc.TenantID)
 	view, err := buildDocumentView(ctx, s.thresholds, doc, settings.StalenessMode, forceRead)
 	if err != nil {
 		return nil, err
 	}
+	view.TenantName, view.TenantType = s.tenantLabel(ctx, doc.TenantID)
 	if forceRead {
 		docID := doc.ID
 		s.logOverride(ctx, repository.OverrideEvent{
-			TenantID:     tid,
+			TenantID:     doc.TenantID,
 			Tool:         models.OverrideToolGetDocument,
 			TargetID:     &docID,
 			OverrideType: models.OverrideTypeForceRead,
@@ -429,8 +590,9 @@ func (s *MemoryService) StoreDocument(
 		txDocs := repository.NewDocumentRepository(tx)
 		txSections := repository.NewSectionRepository(tx)
 
-		// Check for existing document (only in this tenant, not common pool)
-		existing, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
+		// Check for existing document (write path stays single-tenant + common
+		// pool; the existing.TenantID == tid guard below rejects a common-pool hit).
+		existing, err := txDocs.GetByPath(ctx, repository.ReadTenants(tid), tid, category, subcategory, slug)
 		if err == nil && existing.TenantID == tid {
 			// Update existing: delete sections first, then the doc. Preserve doc_type —
 			// admin may have overridden the inferred default; don't silently revert.
@@ -544,7 +706,7 @@ func (s *MemoryService) UpdateDocumentTitle(ctx context.Context, docID uuid.UUID
 		return nil, fmt.Errorf("%w: title is required", apperr.ErrInvalidInput)
 	}
 
-	doc, err := s.docs.GetByID(ctx, tid, docID)
+	doc, err := s.docs.GetByID(ctx, repository.ReadTenants(tid), docID)
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
 	}
@@ -571,7 +733,7 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 		txDocs := repository.NewDocumentRepository(tx)
 		txSections := repository.NewSectionRepository(tx)
 
-		doc, err := txDocs.GetByPath(ctx, tid, category, subcategory, slug)
+		doc, err := txDocs.GetByPath(ctx, repository.ReadTenants(tid), tid, category, subcategory, slug)
 		if err != nil {
 			return err
 		}
@@ -590,13 +752,19 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 	})
 }
 
-// ListDocuments lists documents, optionally filtered.
+// ListDocuments lists documents across the caller's readable tenant set,
+// optionally filtered. Each returned document already carries its owning
+// TenantID; a nil overrideID aggregates, a set overrideID narrows to one
+// readable tenant (empty result if not readable — never a leak).
 func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string, overrideID *uuid.UUID) ([]models.Document, error) {
-	tid, err := s.resolveTenant(ctx, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
-	return s.docs.List(ctx, tid, category, subcategory)
+	if len(scope) == 0 {
+		return []models.Document{}, nil
+	}
+	return s.docs.List(ctx, scope, category, subcategory)
 }
 
 // --- Admin operations ---

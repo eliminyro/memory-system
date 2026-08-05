@@ -96,11 +96,11 @@ func (s *MemoryService) MergeDocuments(
 		txDocs := repository.NewDocumentRepository(tx)
 		txSections := repository.NewSectionRepository(tx)
 
-		winner, err := txDocs.GetByID(ctx, tid, winnerID)
+		winner, err := txDocs.GetByID(ctx, repository.ReadTenants(tid), winnerID)
 		if err != nil {
 			return fmt.Errorf("load winner: %w", err)
 		}
-		loser, err := txDocs.GetByID(ctx, tid, loserID)
+		loser, err := txDocs.GetByID(ctx, repository.ReadTenants(tid), loserID)
 		if err != nil {
 			return fmt.Errorf("load loser: %w", err)
 		}
@@ -159,7 +159,7 @@ func (s *MemoryService) MergeDocuments(
 	}
 
 	// Reload the winner for the response.
-	postMerge, err := s.docs.GetByID(ctx, tid, winnerID)
+	postMerge, err := s.docs.GetByID(ctx, repository.ReadTenants(tid), winnerID)
 	if err != nil {
 		return nil, fmt.Errorf("reload winner: %w", err)
 	}

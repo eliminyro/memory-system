@@ -15,7 +15,9 @@ import (
 )
 
 // apiHandler backs the JSON API. Every handler runs behind bearer + UserContextBridge,
-// so handlers pass overrideID = nil and let the service resolve the tenant from context.
+// so write handlers pass overrideID = nil and let the service resolve the tenant from
+// context. Read handlers additionally honor an optional ?tenant_id=<uuid> filter
+// (absent = aggregate across the caller's readable tenants; set = scope to that tenant).
 type apiHandler struct {
 	memory *service.MemoryService
 
@@ -144,6 +146,23 @@ func writeErr(w http.ResponseWriter, err error) {
 	}
 }
 
+// tenantFilter parses the optional ?tenant_id=<uuid> read filter (PR-A2
+// cross-tenant-reads). Absent/empty ⇒ nil (aggregate across the caller's
+// readable tenants); a valid UUID ⇒ &id (scope to that tenant if the caller can
+// read it); a malformed UUID ⇒ error, so the handler returns 400 rather than
+// silently falling back to the aggregate.
+func tenantFilter(r *http.Request) (*uuid.UUID, error) {
+	v := r.URL.Query().Get("tenant_id")
+	if v == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(v)
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
 func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := q.Get("q")
@@ -162,7 +181,12 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
 		limit = n
 	}
-	results, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", nil)
+	tenantID, err := tenantFilter(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	results, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -176,7 +200,12 @@ func (h *apiHandler) getDocument(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
 		return
 	}
-	doc, err := h.memory.GetDocumentByID(r.Context(), id, false, "", nil)
+	tenantID, err := tenantFilter(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	doc, err := h.memory.GetDocumentByID(r.Context(), id, false, "", tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -193,7 +222,12 @@ func (h *apiHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	if s := q.Get("subcategory"); s != "" {
 		subcategory = &s
 	}
-	docs, err := h.memory.ListDocuments(r.Context(), category, subcategory, nil)
+	tenantID, err := tenantFilter(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	docs, err := h.memory.ListDocuments(r.Context(), category, subcategory, tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return
