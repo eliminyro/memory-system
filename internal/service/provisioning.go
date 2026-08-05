@@ -162,6 +162,18 @@ func (s *MemoryService) ProvisionPersonalTenant(ctx context.Context, email, disp
 	if email == "" {
 		return "", fmt.Errorf("%w: email required for provisioning", apperr.ErrInvalidInput)
 	}
+	// Gate closed until the instance is bootstrapped: refuse auto-provision until a
+	// founding admin exists (HasAnyAdmin). A pre-bootstrap first login would
+	// otherwise create a tenant_users row that then collides with /bootstrap's
+	// GrantTenantUser (duplicate email -> 500, wedged instance). Fail closed with
+	// the same ErrSignupNotAllowed the domain gate uses (mapped to 403) and create
+	// nothing; auto-provision resumes once an admin exists. This precedes the domain
+	// gate and any DB write.
+	if hasAdmin, err := s.HasAnyAdmin(ctx); err != nil {
+		return "", err
+	} else if !hasAdmin {
+		return "", ErrSignupNotAllowed
+	}
 	if !signupDomainAllowed(email, hostedDomain, allowedDomains) {
 		return "", ErrSignupNotAllowed
 	}

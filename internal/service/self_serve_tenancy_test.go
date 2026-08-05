@@ -20,12 +20,28 @@ func strPtr(s string) *string { return &s }
 // TestProvisionPersonalTenantGateBlocks proves the signup gate rejects a
 // non-listed domain with ErrSignupNotAllowed BEFORE touching the database: the
 // service is wired with a nil db, so any DB access would panic. This is the 403
-// path the auth adapter maps from.
+// path the auth adapter maps from. A founding admin is seeded so the
+// bootstrap precondition passes and the DOMAIN gate is what does the rejecting.
 func TestProvisionPersonalTenantGateBlocks(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	store := authz.NewMemoryStore()
+	require.NoError(t, store.Write(context.Background(), authzseed.SystemAdmin("svc:founding-admin")))
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 	id, err := svc.ProvisionPersonalTenant(context.Background(), "bob@other.com", "Bob", "", []string{"example.com"})
 	require.ErrorIs(t, err, service.ErrSignupNotAllowed)
 	require.Empty(t, id, "a blocked signup must not return a tenant id")
+}
+
+// TestProvisionPersonalTenantRefusedBeforeBootstrap proves the bootstrap
+// precondition (PR-A4): on an un-bootstrapped instance (no system#admin tuple),
+// auto-provision fails closed with ErrSignupNotAllowed BEFORE any DB write. The
+// db is nil so a create would panic, and the allow-list is empty so the domain
+// gate would otherwise pass — proving the refusal comes from HasAnyAdmin, not
+// the domain gate. Nothing is created; this is the 403 path.
+func TestProvisionPersonalTenantRefusedBeforeBootstrap(t *testing.T) {
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
+	id, err := svc.ProvisionPersonalTenant(context.Background(), "alice@example.com", "Alice", "", nil)
+	require.ErrorIs(t, err, service.ErrSignupNotAllowed)
+	require.Empty(t, id, "no founding admin yet: nothing may be provisioned")
 }
 
 // TestProvisionPersonalTenantEmptyEmail rejects an empty email before any DB or
