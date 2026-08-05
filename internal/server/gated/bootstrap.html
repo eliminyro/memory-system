@@ -18,6 +18,14 @@
         <label class="setup-label" for="bootstrap-token">Bootstrap token</label>
         <input id="bootstrap-token" class="admin-input" type="password" autocomplete="off" required>
 
+        <!-- Founding-tenant name: always visible (the personal tenant is created
+        in every bootstrap flow, OAuth or not), sent as tenant_name. -->
+        <label class="setup-label" for="bootstrap-tenant-name">Founding tenant name <span class="meta">(optional)</span></label>
+        <input id="bootstrap-tenant-name" class="admin-input" type="text" autocomplete="off">
+        <p class="meta">Names your own personal tenant — your private shelf, kept
+        separate from the shared common pool. Optional: leave it blank and the
+        server derives a default name.</p>
+
         <!-- OAuth status block: always visible; copy filled by bootstrap.js. -->
         <p id="bootstrap-status" class="meta"></p>
 

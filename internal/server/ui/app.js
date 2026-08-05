@@ -382,20 +382,25 @@ function renderSearchResults(results) {
     view.append(el("p", { className: "state-msg", textContent: "no results" }));
     return;
   }
+  const legend = legendFor(results);
+  if (legend) view.append(legend);
   const list = el("ul", { className: "doc-list" });
   for (const r of results) {
     const path = [r.category, r.subcategory, r.slug].filter(Boolean).join("/");
     const tierClass = r.relevance ? `tier-${r.relevance}` : "";
+    const meta = el("div", { className: "doc-meta" },
+      el("span", { textContent: path }),
+      el("span", { textContent: r.doc_type ? ` · ${r.doc_type}` : "" }),
+      r.relevance ? el("span", { className: `relevance-badge tier-${r.relevance}`, textContent: ` · ${r.relevance}` }) : "",
+      r.verified_at ? el("span", { textContent: ` · verified ${fmtDate(r.verified_at)}` }) : "",
+      r.status === "needs_verification" ? el("span", { className: "stale-badge", textContent: " · stale" }) : "",
+    );
+    if (r.tenant_id) meta.append(tenantBadge(r.tenant_id, r.tenant_name));
     const item = el("li", { className: `doc-item ${tierClass}`.trim() },
       el("h3", { textContent: r.doc_title }),
-      el("div", { className: "doc-meta" },
-        el("span", { textContent: path }),
-        el("span", { textContent: r.doc_type ? ` · ${r.doc_type}` : "" }),
-        r.relevance ? el("span", { className: `relevance-badge tier-${r.relevance}`, textContent: ` · ${r.relevance}` }) : "",
-        r.verified_at ? el("span", { textContent: ` · verified ${fmtDate(r.verified_at)}` }) : "",
-        r.status === "needs_verification" ? el("span", { className: "stale-badge", textContent: " · stale" }) : "",
-      ),
+      meta,
     );
+    colorByTenant(item, r.tenant_id);
     item.addEventListener("click", () => {
       navStack.push(() => renderSearchResults(results));
       showDocument(r.document_id);
@@ -412,13 +417,14 @@ async function renderBrowse() {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   // A freshly-bootstrapped tenant with zero documents can yield JSON null here
   // (and older servers still do); coerce to [] so we never iterate a non-array.
-  const entries = (await apiFetch("/index?depth=summary")) || [];
+  const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
+  const entries = (await apiFetch(`/index?depth=summary${tf}`)) || [];
   view.replaceChildren();
 
   if (!entries.length) {
     view.append(el("p", {
       className: "state-msg",
-      textContent: "No memories yet — import a .zip from the Admin panel, or add memories via your MCP client / the API.",
+      textContent: "No memories yet — import an archive from a tenant's page (Tenants tab), or add memories via your MCP client / the API.",
     }));
     return;
   }
@@ -464,6 +470,7 @@ async function renderCategoryDocs(category, subcategory) {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const params = new URLSearchParams({ category });
   if (subcategory) params.set("subcategory", subcategory);
+  if (memFilter) params.set("tenant_id", memFilter.id);
   const docs = await apiFetch(`/documents?${params}`);
   view.replaceChildren();
 
@@ -476,13 +483,18 @@ async function renderCategoryDocs(category, subcategory) {
     view.append(el("p", { className: "state-msg", textContent: "no documents" }));
     return;
   }
+  const legend = legendFor(docs);
+  if (legend) view.append(legend);
   const list = el("ul", { className: "doc-list" });
   for (const doc of docs) {
     const meta = [doc.subcategory, doc.slug, doc.doc_type].filter(Boolean).join(" · ");
+    const metaRow = el("div", { className: "doc-meta", textContent: meta });
+    if (doc.tenant_id) metaRow.append(tenantBadge(doc.tenant_id, doc.tenant_name));
     const item = el("li", { className: "doc-item" },
       el("h3", { textContent: doc.title || doc.slug }),
-      el("div", { className: "doc-meta", textContent: meta }),
+      metaRow,
     );
+    colorByTenant(item, doc.tenant_id);
     item.addEventListener("click", () => {
       navStack.push(() => renderCategoryDocs(category, subcategory));
       showDocument(doc.id);
@@ -500,7 +512,8 @@ async function runSearch(q) {
   navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "searching…" }));
   try {
-    const results = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20`);
+    const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
+    const results = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20${tf}`);
     renderSearchResults(results);
   } catch (err) {
     view.replaceChildren(el("p", { className: "state-msg state-err", textContent: `search failed: ${err.message}` }));
@@ -519,6 +532,95 @@ function wireSearch() {
     }
     _searchTimer = setTimeout(() => runSearch(val).catch(showError), 250);
   });
+}
+
+// ── Memories tab (aggregated, color-coded, tenant-filterable) ─────────────────
+
+// memFilter narrows the Memories view to a single tenant via the read APIs'
+// ?tenant_id= filter. null = the aggregated view across all readable tenants.
+// The per-tenant panel's "view memories" link sets it; the chip's ✕ clears it.
+let memFilter = null;
+
+// tenantColor derives a stable color from a tenant id so the same tenant always
+// renders in the same hue across results, legend, chip and panel badge.
+function tenantColor(id) {
+  let h = 0;
+  const s = String(id || "");
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 60% 42%)`;
+}
+
+// tenantBadge is a small pill showing a result's owning tenant, colored by id.
+function tenantBadge(id, name) {
+  const b = el("span", { className: "tenant-badge", textContent: name || id || "?" });
+  const c = tenantColor(id);
+  b.style.color = c;
+  b.style.borderColor = c;
+  return b;
+}
+
+// tenantLegend maps colors → tenant names; shown when results span >1 tenant.
+function tenantLegend(items) {
+  const wrap = el("div", { className: "tenant-legend" });
+  for (const t of items) {
+    const sw = el("span", { className: "tenant-swatch" });
+    sw.style.background = tenantColor(t.id);
+    wrap.append(el("span", { className: "legend-item" }, sw, document.createTextNode(t.name || t.id)));
+  }
+  return wrap;
+}
+
+// colorByTenant paints a result row's left edge with its tenant color (no-op for
+// rows the read API didn't tag with a tenant id).
+function colorByTenant(node, id) {
+  if (id) node.style.borderLeft = `4px solid ${tenantColor(id)}`;
+}
+
+// legendFor collects the distinct tenants present in a result set and returns a
+// legend node when more than one tenant is represented, else null.
+function legendFor(rows) {
+  const seen = new Map();
+  for (const r of rows) if (r.tenant_id) seen.set(r.tenant_id, r.tenant_name || r.tenant_id);
+  if (seen.size <= 1) return null;
+  return tenantLegend([...seen].map(([id, name]) => ({ id, name })));
+}
+
+// renderMemFilterChip fills #mem-filter-chip with the "viewing: <tenant> ✕" chip
+// when a tenant filter is active, or clears it when viewing the aggregate.
+function renderMemFilterChip() {
+  const c = document.getElementById("mem-filter-chip");
+  if (!c) return;
+  c.replaceChildren();
+  if (!memFilter) return;
+  const sw = el("span", { className: "tenant-swatch" });
+  sw.style.background = tenantColor(memFilter.id);
+  const x = el("button", { type: "button", className: "chip-x", textContent: "✕", title: "Clear tenant filter" });
+  x.addEventListener("click", () => { memFilter = null; renderMemFilterChip(); renderMemories().catch(showError); });
+  c.append(el("span", { className: "tenant-chip" }, sw, document.createTextNode(`viewing: ${memFilter.name || memFilter.id} `), x));
+}
+
+// renderMemories is the default view: the live search sits in the persistent
+// #memsearch bar (shown by route only here); results render into #view as
+// browse (empty query) or search (non-empty), both color-coded by tenant.
+async function renderMemories() {
+  navStack.length = 0;
+  renderMemFilterChip();
+  const q = document.getElementById("q");
+  const term = q ? q.value.trim() : "";
+  if (term) await runSearch(term);
+  else await renderBrowse();
+}
+
+// slashFocus focuses the Memories search on "/" when Memories is active and the
+// user isn't already typing in a field.
+function slashFocus(e) {
+  if (e.key !== "/") return;
+  const h = location.hash;
+  if (!(h === "" || h === "#memories")) return;
+  const a = document.activeElement;
+  if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) return;
+  const q = document.getElementById("q");
+  if (q) { e.preventDefault(); q.focus(); }
 }
 
 // ── Error helper ──────────────────────────────────────────────────────────────
@@ -558,90 +660,77 @@ async function checkAdmin() {
     return false;
   }
   isAdmin = true;
-  mountAdminEntry();
-  mountImportEntry();
   return true;
 }
 
 // writableTenants caches the last /tenants/writable result (design.md §9):
 // empty for a caller with no delegated tenant, non-empty for a system admin
 // (every tenant) or a tenant#manager (their managed tenants). route() uses its
-// length to gate #import/#acl for non-admins the same way isAdmin gates #admin.
+// length to gate the Tenants tab / #tenants routes for non-admins the same way
+// isAdmin gates the Admin tab.
 let writableTenants = [];
 
 // checkWritable probes GET /tenants/writable — not adminOnly, so every
-// logged-in caller can reach it. When the caller is a system admin OR manages
-// at least one tenant, it mounts the ACL and Import header entries. Both mount
-// functions already guard on element id, so calling this after checkAdmin
-// (which mounts Import for admins) never double-mounts.
+// logged-in caller can reach it. Its result (empty for a plain user, non-empty
+// for a system admin or a delegated manager) gates the Tenants tab and the
+// #tenants routes the same way isAdmin gates the Admin tab.
 async function checkWritable() {
   try {
     writableTenants = (await apiFetch("/tenants/writable")) || [];
   } catch (err) {
     writableTenants = [];
-    return;
-  }
-  if (isAdmin || writableTenants.length) {
-    mountImportEntry();
-    mountAclEntry();
   }
 }
 
-// route renders the top-level view for the current hash: #admin (admins only),
-// #import/#acl (admins + delegated managers), #connect, or browse for anything
-// else. It is the single source of truth for view switching — registered once
-// on hashchange (see init) for every logged-in user, so the header buttons and
-// every back control just set the hash. (Previously Connect rendered directly
-// without touching the hash, which left a stale #admin in the URL and made the
-// Admin button a no-op — same hash, no hashchange event.)
+// route renders the top-level view for the current hash and refreshes the tab
+// bar's active state. Routes: #memories (default), #tenants, #tenants/<id>,
+// #admin, #connect. The superseded #acl/#import routes silently redirect to
+// #tenants. It is the single source of truth for view switching — registered
+// once on hashchange (see init), so every tab and back control just sets the hash.
 function route() {
   const h = location.hash;
+  if (h === "#acl" || h === "#import") { location.hash = "tenants"; return; } // redirect superseded routes
+  renderTabBar();
+  const memsearch = document.getElementById("memsearch");
+  const onMemories = h === "" || h === "#memories";
+  if (memsearch) memsearch.hidden = !onMemories;
   if (h === "#admin") {
-    (isAdmin ? renderAdmin() : renderBrowse()).catch(showError);
-  } else if (h === "#import") {
-    (isAdmin || writableTenants.length ? renderImport() : renderBrowse()).catch(showError);
-  } else if (h === "#acl") {
-    (isAdmin || writableTenants.length ? renderAcl() : renderBrowse()).catch(showError);
+    (isAdmin ? renderAdmin() : renderMemories()).catch(showError);
+  } else if (h === "#tenants") {
+    (isAdmin || writableTenants.length ? renderTenants() : renderMemories()).catch(showError);
+  } else if (h.startsWith("#tenants/")) {
+    const id = decodeURIComponent(h.slice("#tenants/".length));
+    (isAdmin || writableTenants.length ? renderTenantPanel(id) : renderMemories()).catch(showError);
   } else if (h === "#connect") {
     renderConnect();
   } else {
-    renderBrowse().catch(showError);
+    renderMemories().catch(showError);
   }
 }
 
-// mountAdminEntry adds an "Admin" button to the header (admins only). Navigation
-// goes through the shared hash router (route), so the button only sets the hash.
-function mountAdminEntry() {
-  const header = document.querySelector("header");
-  if (!header || document.getElementById("admin-link")) return;
-  const link = el("button", { id: "admin-link", className: "admin-link", textContent: "Admin", type: "button" });
-  link.addEventListener("click", () => { location.hash = "admin"; });
-  header.append(link);
-}
-
-// mountImportEntry adds an "Import" button to the header — for system admins
-// (mounted beside Admin in checkAdmin) and, since design.md §8, for any
-// delegated tenant#manager too (mounted by checkWritable once /tenants/writable
-// is non-empty). Navigation goes through the shared hash router (route), so
-// the button only sets the hash.
-function mountImportEntry() {
-  const header = document.querySelector("header");
-  if (!header || document.getElementById("import-link")) return;
-  const link = el("button", { id: "import-link", className: "admin-link", textContent: "Import", type: "button" });
-  link.addEventListener("click", () => { location.hash = "import"; });
-  header.append(link);
-}
-
-// mountAclEntry adds an "ACL" button to the header — for system admins and for
-// delegated tenant managers (design.md §9), mounted by checkWritable alongside
-// mountImportEntry. Navigation goes through the shared hash router (route), so
-// the button only sets the hash.
-function mountAclEntry() {
-  const header = document.querySelector("header");
-  if (!header || document.getElementById("acl-link")) return;
-  const link = el("button", { id: "acl-link", className: "admin-link", textContent: "ACL", type: "button" });
-  link.addEventListener("click", () => { location.hash = "acl"; });
-  header.append(link);
+// renderTabBar (re)builds the persistent centered tab bar into #tabbar and marks
+// the active tab from the current hash. Visibility reuses the existing role
+// signals: Memories always; Tenants when the caller is an admin or manages at
+// least one tenant; Admin for system admins only. Connect is a corner link for
+// everyone. Every tab just sets the hash — route() does the rendering.
+function renderTabBar() {
+  const bar = document.getElementById("tabbar");
+  if (!bar) return;
+  bar.replaceChildren();
+  const h = location.hash;
+  const tabs = [{ label: "Memories", hash: "memories", active: h === "" || h === "#memories" }];
+  if (isAdmin || writableTenants.length) {
+    tabs.push({ label: "Tenants", hash: "tenants", active: h === "#tenants" || h.startsWith("#tenants/") });
+  }
+  if (isAdmin) tabs.push({ label: "Admin", hash: "admin", active: h === "#admin" });
+  for (const t of tabs) {
+    const b = el("button", { className: "tab-link" + (t.active ? " active" : ""), type: "button", textContent: t.label });
+    b.addEventListener("click", () => { location.hash = t.hash; });
+    bar.append(b);
+  }
+  const connect = el("button", { className: "tab-link tab-connect" + (h === "#connect" ? " active" : ""), type: "button", textContent: "Connect" });
+  connect.addEventListener("click", () => { location.hash = "connect"; });
+  bar.append(connect);
 }
 
 // ── Connect an MCP client (Task 5 / D5) ───────────────────────────────────────
@@ -666,17 +755,6 @@ function mcpConfigJSON(url, withKey) {
     ? { type: "http", url, headers: { Authorization: "Bearer <admin key>" } }
     : { type: "http", url };
   return JSON.stringify({ mcpServers: { memory: server } }, null, 2);
-}
-
-// mountConnectEntry adds a "Connect" button to the header for every logged-in
-// user. Navigation goes through the shared hash router (route), so the button
-// only sets the hash.
-function mountConnectEntry() {
-  const header = document.querySelector("header");
-  if (!header || document.getElementById("connect-link")) return;
-  const link = el("button", { id: "connect-link", className: "admin-link", textContent: "Connect", type: "button" });
-  link.addEventListener("click", () => { location.hash = "connect"; });
-  header.append(link);
 }
 
 // renderConnect shows how to connect an MCP client: the server URL, the OAuth
@@ -719,6 +797,233 @@ function renderConnect() {
   view.append(sec);
 }
 
+// ── Tenants tab ───────────────────────────────────────────────────────────────
+// The Tenants tab lists the tenants the caller may manage, split into Shared and
+// Personal sub-tabs (GET /api/tenants?type=), with a client-side live filter and
+// an admin-only create affordance. Selecting a tenant opens its type-aware panel
+// (#tenants/<id>). This replaces the old standalone ACL and Import pages.
+
+let tenantsType = "shared"; // active sub-tab; Shared is the default
+const tenantCache = {}; // id → {id,name,type,relation}, populated as lists load
+
+async function renderTenants() {
+  navStack.length = 0;
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let rows;
+  try {
+    rows = (await apiFetch(`/tenants?type=${encodeURIComponent(tenantsType)}`)) || [];
+  } catch (err) { showError(err); return; }
+  for (const t of rows) tenantCache[t.id] = t;
+  view.replaceChildren();
+
+  view.append(el("div", { className: "cat-hdr" }, el("h2", { textContent: "Tenants" })));
+
+  const subtabs = el("div", { id: "tenant-subtabs" });
+  for (const ty of ["shared", "personal"]) {
+    const b = el("button", { className: "tab", type: "button", textContent: ty[0].toUpperCase() + ty.slice(1) });
+    b.setAttribute("aria-selected", ty === tenantsType ? "true" : "false");
+    b.addEventListener("click", () => { if (ty !== tenantsType) { tenantsType = ty; renderTenants().catch(showError); } });
+    subtabs.append(b);
+  }
+  view.append(subtabs);
+
+  if (isAdmin) view.append(newTenantTypeForm());
+
+  const filter = el("input", { className: "admin-input tenant-filter", type: "text", placeholder: "filter by name or UUID…", autocomplete: "off" });
+  view.append(el("div", { className: "admin-form-fields" }, filter));
+
+  const list = el("ul", { className: "doc-list" });
+  view.append(list);
+
+  // draw filters the already-fetched rows live (name substring, case-insensitive,
+  // or UUID substring) — no submit button, no re-fetch per keystroke.
+  function draw() {
+    const f = filter.value.trim().toLowerCase();
+    list.replaceChildren();
+    const shown = rows.filter((t) =>
+      !f || (t.name || "").toLowerCase().includes(f) || (t.id || "").toLowerCase().includes(f));
+    if (!shown.length) {
+      list.append(el("li", { className: "state-msg", textContent: tenantsType === "personal" ? "No personal tenants." : "No tenants." }));
+      return;
+    }
+    for (const t of shown) {
+      const sw = el("span", { className: "tenant-swatch" });
+      sw.style.background = tenantColor(t.id);
+      const item = el("li", { className: "doc-item" },
+        el("h3", {}, sw, document.createTextNode(t.name || "(unnamed)")),
+        el("div", { className: "doc-meta", textContent: [t.type, t.relation, t.id].filter(Boolean).join(" · ") }),
+      );
+      item.addEventListener("click", () => { location.hash = "tenants/" + t.id; });
+      list.append(item);
+    }
+  }
+  filter.addEventListener("input", draw);
+  draw();
+}
+
+// newTenantTypeForm — admin-only create affordance on the Tenants tab (name +
+// type → POST /api/admin/tenants). Distinct from the Admin tab's create form,
+// which also collects an owner email.
+function newTenantTypeForm() {
+  const wrap = el("div", { className: "admin-form" });
+  const toggle = el("button", { className: "sec-btn", type: "button", textContent: "+ New tenant" });
+  const form = el("form", { className: "admin-form-fields" });
+  form.hidden = true;
+  const name = el("input", { className: "admin-input", type: "text", placeholder: "name", required: true });
+  const type = el("select", { className: "admin-input" },
+    el("option", { value: "shared", textContent: "shared" }),
+    el("option", { value: "personal", textContent: "personal" }),
+  );
+  const submit = el("button", { className: "sec-btn sec-btn-primary", type: "submit", textContent: "Create" });
+  form.append(name, type, submit);
+  toggle.addEventListener("click", () => { form.hidden = !form.hidden; if (!form.hidden) name.focus(); });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    submit.disabled = true;
+    try {
+      await apiFetch("/admin/tenants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.value.trim(), type: type.value }),
+      });
+      renderTenants();
+    } catch (err) {
+      submit.disabled = false;
+      alert("Create tenant failed: " + err.message);
+    }
+  });
+  wrap.append(toggle, form);
+  return wrap;
+}
+
+// lookupTenant resolves a tenant by id — from the cache first, else by fetching
+// both type lists (a manager sees only their managed shared tenants; an admin
+// sees all of each type) and searching them. Returns null if not manageable.
+async function lookupTenant(id) {
+  if (tenantCache[id]) return tenantCache[id];
+  const lists = await Promise.all(
+    ["shared", "personal"].map((ty) => apiFetch(`/tenants?type=${ty}`).catch(() => [])),
+  );
+  for (const list of lists) for (const t of (list || [])) tenantCache[t.id] = t;
+  return tenantCache[id] || null;
+}
+
+// renderTenantPanel draws the type-aware per-tenant panel for #tenants/<id>. All
+// sections target the route tenant (never a picker). Shared tenants get
+// Members/ACL + per-doc sharing + Import; personal tenants get API keys + Import
+// (keys are refused for shared tenants; personal tenants have a single owner and
+// no members). Both get a "view this tenant's memories" link. No document browser.
+async function renderTenantPanel(id) {
+  navStack.length = 0;
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let t;
+  try { t = await lookupTenant(id); } catch (err) { showError(err); return; }
+  if (!t) {
+    view.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Tenant not found or not manageable." }));
+    return;
+  }
+  view.replaceChildren();
+
+  const hdr = el("div", { className: "doc-hdr" });
+  const back = el("button", { className: "back-btn", type: "button", textContent: "←", title: "Back to tenants" });
+  back.addEventListener("click", () => { location.hash = "tenants"; });
+  hdr.append(back, el("h1", { textContent: t.name || "(unnamed)" }), tenantBadge(t.id, t.type));
+  view.append(hdr);
+  view.append(el("div", { className: "meta", textContent: [t.type, t.relation, t.id].filter(Boolean).join(" · ") }));
+
+  const viewMem = el("button", { className: "sec-btn", type: "button", textContent: "View this tenant's memories" });
+  viewMem.addEventListener("click", () => { memFilter = { id: t.id, name: t.name, type: t.type }; location.hash = "memories"; });
+  view.append(el("div", { className: "admin-form-fields" }, viewMem));
+
+  if (t.type === "personal") {
+    // Personal: API keys + Import. No member management (single-owner tenant).
+    let keys;
+    try { keys = (await apiFetch(`/admin/tenants/${id}/keys`)) || []; }
+    catch (err) { view.append(el("p", { className: "state-msg state-err", textContent: "Failed to load keys: " + err.message })); }
+    if (keys) view.append(keysSection(t, keys, () => renderTenantPanel(id)));
+    view.append(importSection(id));
+  } else {
+    // Shared: Members/ACL + per-doc guest sharing + Import. No API keys (refused
+    // for shared tenants by the backend).
+    view.append(tenantMembersSection(id));
+    view.append(aclDocumentSection());
+    view.append(importSection(id));
+  }
+}
+
+// tenantMembersSection — the tenant-membership grants (viewer/member/manager)
+// for a fixed tenant id, extracted from the old renderAcl so it renders bound to
+// the route tenant with no dropdown. Same /acl/tenants/{id}/grants endpoints.
+function tenantMembersSection(tenantID) {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "Members" }));
+  const body = el("div");
+  sec.append(body);
+  async function load() {
+    body.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+    let grants;
+    try {
+      grants = await apiFetch(`/acl/tenants/${tenantID}/grants`);
+    } catch (err) {
+      body.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Failed to load grants: " + err.message }));
+      return;
+    }
+    body.replaceChildren();
+    body.append(tenantGrantsTable(tenantID, grants || [], load));
+    body.append(tenantGrantForm(tenantID, load));
+  }
+  load().catch(showError);
+  return sec;
+}
+
+// importSection — the upload/poll import flow with the target tenant fixed to a
+// passed id (extracted from the old renderImport; no tenant picker). Same
+// /import + /import/{id} endpoints.
+function importSection(tenantID) {
+  const sec = el("section", { className: "admin-section" });
+  sec.append(el("h2", { textContent: "Import" }));
+  sec.append(el("p", {
+    className: "meta",
+    textContent: "Upload a .zip archive of memory files. Files must sit at the archive's " +
+      "ROOT (category/subcategory/slug.md or category/slug.md) — a wrapping top-level " +
+      "directory makes every path parse as misc/<path> instead of its real category.",
+  }));
+
+  const form = el("form", { className: "admin-form-fields" });
+  const fileInput = el("input", { className: "admin-input", type: "file", accept: ".zip", required: true });
+  const submit = el("button", { textContent: "Upload", className: "sec-btn sec-btn-primary", type: "submit" });
+  form.append(fileInput, submit);
+
+  const progress = el("div", { className: "import-progress" });
+  let activeTimer = null; // guards against overlapping polls if a second file is uploaded before the first finishes
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
+    submit.disabled = true;
+    progress.replaceChildren();
+    try {
+      const body = new FormData();
+      body.append("archive", file);
+      body.append("tenant_id", tenantID);
+      // No Content-Type header: the browser sets the multipart boundary itself.
+      const job = await apiFetch("/import", { method: "POST", body });
+      fileInput.value = "";
+      renderImportProgress(progress, job);
+      activeTimer = pollImportJob(progress, job.id, job.tenant_id || tenantID, () => { activeTimer = null; });
+    } catch (err) {
+      progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Upload failed: " + err.message }));
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  sec.append(form, progress);
+  return sec;
+}
+
 // renderAdmin — admin root: list tenants + create-tenant form.
 async function renderAdmin() {
   navStack.length = 0; // admin root — clear browse/search history
@@ -754,18 +1059,7 @@ async function renderAdmin() {
   view.append(list);
 }
 
-// ── ACL/Import shared helper ─────────────────────────────────────────────────
-
-// aclTenantOptions resolves the tenant picker source shared by the Import and
-// ACL pages (design.md §8/§9): admins see every tenant via /admin/tenants
-// (bare Tenant objects), while delegated managers see only the tenants they
-// manage via /tenants/writable ({tenant, relation} pairs). Returns a flat list
-// of tenant objects ({id, name, email, ...}) either way.
-async function aclTenantOptions() {
-  if (isAdmin) return await apiFetch("/admin/tenants");
-  const writable = await apiFetch("/tenants/writable");
-  return (writable || []).map((w) => w.tenant);
-}
+// ── ACL grant helpers (shared by the per-tenant panel) ───────────────────────
 
 // canGrantManager gates the "manager" option in a tenant grant-relation
 // <select> (design.md §6 ceiling: appointing a manager requires tenant#admin
@@ -779,104 +1073,12 @@ function canGrantManager() {
   return isAdmin;
 }
 
-// ── Import (own page, #import) ────────────────────────────────────────────────
-// A page for system admins AND delegated tenant managers (header "Import"
-// button → "#import"; design.md §8). Upload a .zip archive -> POST /import
-// (multipart: field "archive" + the chosen "tenant_id") -> 202
-// {id, status, tenant_id}; poll GET /import/{id}?tenant_id=<t> on an interval
-// until a terminal state (succeeded/failed), rendering the running counts. The
-// caller picks the TARGET tenant from a dropdown (labels are name (email),
-// never the raw UUID) — a system admin sees every tenant, a manager only the
-// ones they manage; the relational endpoint authorizes the target in-handler
-// either way.
+// ── Import job progress (shared by importSection) ─────────────────────────────
+// Upload a .zip archive -> POST /import (multipart: "archive" + "tenant_id") ->
+// 202 {id, status, tenant_id}; poll GET /import/{id}?tenant_id=<t> until a
+// terminal state (succeeded/failed), rendering the running counts.
 
 const IMPORT_POLL_MS = 1500;
-
-// renderImport draws the Import page: a target-tenant picker, the upload form,
-// and a progress area. Reachable for admins and delegated managers — route()
-// falls back to browse for everyone else, and the header entry is mounted by
-// checkAdmin (admins) / checkWritable (managers).
-async function renderImport() {
-  navStack.length = 0; // top-level view — clear browse/search history
-  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  let tenants;
-  try {
-    tenants = await aclTenantOptions();
-  } catch (err) { showError(err); return; }
-  view.replaceChildren();
-
-  const hdr = el("div", { className: "cat-hdr" });
-  const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
-  back.addEventListener("click", () => { location.hash = ""; });
-  hdr.append(back, el("h2", { textContent: "Import documents" }));
-  view.append(hdr);
-
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("p", {
-    className: "meta",
-    textContent: "Upload a .zip archive of memory files. Files must sit at the archive's " +
-      "ROOT (category/subcategory/slug.md or category/slug.md) — a wrapping top-level " +
-      "directory makes every path parse as misc/<path> instead of its real category.",
-  }));
-
-  const form = el("form", { className: "admin-form-fields" });
-
-  // Target tenant: which tenant the archive imports into. Option labels are
-  // name (email) for humans; the option value carries the tenant UUID sent to
-  // the API.
-  const tenantSel = el("select", { className: "admin-input" });
-  if (!tenants || !tenants.length) {
-    tenantSel.append(el("option", { value: "", textContent: "(no tenants)" }));
-    tenantSel.disabled = true;
-  } else {
-    for (const t of tenants) {
-      const name = t.name || "(unnamed)";
-      tenantSel.append(el("option", { value: t.id, textContent: t.email ? `${name} (${t.email})` : name }));
-    }
-  }
-
-  const fileInput = el("input", { className: "admin-input", type: "file", accept: ".zip", required: true });
-  const submit = el("button", { textContent: "Upload", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(
-    el("span", { className: "admin-form-label", textContent: "Target tenant:" }), tenantSel,
-    fileInput, submit,
-  );
-
-  const progress = el("div", { className: "import-progress" });
-  let activeTimer = null; // guards against overlapping polls if a second file is uploaded before the first job finishes
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const file = fileInput.files[0];
-    if (!file) return;
-    const tenantID = tenantSel.value;
-    if (!tenantID) {
-      progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Select a target tenant first." }));
-      return;
-    }
-    if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
-    submit.disabled = true;
-    progress.replaceChildren();
-    try {
-      const body = new FormData();
-      body.append("archive", file);
-      body.append("tenant_id", tenantID);
-      // No Content-Type header here on purpose: the browser sets the multipart
-      // boundary itself. apiFetch only adds Authorization.
-      const job = await apiFetch("/import", { method: "POST", body });
-      fileInput.value = "";
-      renderImportProgress(progress, job);
-      activeTimer = pollImportJob(progress, job.id, job.tenant_id || tenantID, () => { activeTimer = null; });
-    } catch (err) {
-      progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Upload failed: " + err.message }));
-    } finally {
-      submit.disabled = false;
-    }
-  });
-
-  sec.append(form, progress);
-  view.append(sec);
-}
 
 // renderImportProgress renders one job's state + counts into `container`,
 // replacing whatever was there before — each poll tick calls this fresh.
@@ -925,79 +1127,7 @@ function pollImportJob(container, id, tenantID, onDone) {
   return timer;
 }
 
-// ── ACL management (#acl) ─────────────────────────────────────────────────────
-// A page for system admins and delegated tenant managers (design.md §9): tenant
-// membership (viewer/member/manager grants on a chosen tenant) and per-document
-// guest sharing (viewer/editor "read or write" grants on one document at a
-// time). Reachable via the header "ACL" button (mounted by checkAdmin /
-// checkWritable) or the "#acl" hash; route() falls back to browse for anyone
-// without at least one writable tenant.
-
-async function renderAcl() {
-  navStack.length = 0; // top-level view — clear browse/search history
-  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  let tenants;
-  try {
-    tenants = await aclTenantOptions();
-  } catch (err) { showError(err); return; }
-  view.replaceChildren();
-
-  const hdr = el("div", { className: "cat-hdr" });
-  const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
-  back.addEventListener("click", () => { location.hash = ""; });
-  hdr.append(back, el("h2", { textContent: "ACL management" }));
-  view.append(hdr);
-
-  view.append(aclTenantSection(tenants || []));
-  view.append(aclDocumentSection());
-}
-
-// aclTenantSection renders the tenant-membership half of the ACL page: a
-// tenant picker, the current viewer/member/manager grants for the selected
-// tenant (GET /acl/tenants/{id}/grants), and a grant form. Reloads the grants
-// list whenever the tenant selection changes or a grant/revoke succeeds.
-function aclTenantSection(tenants) {
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "Tenant membership" }));
-
-  const tenantSel = el("select", { className: "admin-input" });
-  if (!tenants.length) {
-    tenantSel.append(el("option", { value: "", textContent: "(no tenants)" }));
-    tenantSel.disabled = true;
-  } else {
-    for (const t of tenants) {
-      const name = t.name || "(unnamed)";
-      tenantSel.append(el("option", { value: t.id, textContent: t.email ? `${name} (${t.email})` : name }));
-    }
-  }
-  sec.append(el("div", { className: "admin-form-fields" },
-    el("span", { className: "admin-form-label", textContent: "Tenant:" }), tenantSel,
-  ));
-
-  const body = el("div");
-  sec.append(body);
-
-  async function load() {
-    const tenantID = tenantSel.value;
-    if (!tenantID) { body.replaceChildren(); return; }
-    body.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-    let grants;
-    try {
-      grants = await apiFetch(`/acl/tenants/${tenantID}/grants`);
-    } catch (err) {
-      body.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Failed to load grants: " + err.message }));
-      return;
-    }
-    body.replaceChildren();
-    body.append(tenantGrantsTable(tenantID, grants || [], load));
-    body.append(tenantGrantForm(tenantID, load));
-  }
-
-  tenantSel.addEventListener("change", () => load().catch(showError));
-  if (tenants.length) load().catch(showError);
-
-  return sec;
-}
+// ── Tenant membership grants (used by tenantMembersSection) ───────────────────
 
 function tenantGrantsTable(tenantID, grants, onRevoked) {
   const table = el("table", { className: "admin-table" });
@@ -1072,20 +1202,16 @@ function tenantGrantForm(tenantID, onGranted) {
   return form;
 }
 
-// aclDocumentSection renders the per-document guest-sharing half of the ACL
-// page (design.md §9): a document-id picker, the doc's current guest
-// viewer/editor grants (GET /acl/documents/{id}/grants), and a "share with
-// user, read or write" form.
+// aclDocumentSection renders the per-document guest-sharing section of the
+// shared-tenant panel (design.md §9): a document-id input, the doc's current
+// guest viewer/editor grants (GET /acl/documents/{id}/grants), and a "share
+// with user, read or write" form.
 //
-// Document-selection UX choice: an id input rather than a list picker.
-// GET /documents/{id} (used here to resolve/display the doc's title) resolves
-// the document's tenant from the CALLER's own request context — there is no
-// cross-tenant document-list or document-lookup endpoint, so a picker scoped
-// to the tenant chosen in aclTenantSection above isn't something the backend
-// can serve. This matches how the rest of this app (browse/search) is already
-// single-tenant-per-session, so a plain id input (paste the UUID from the
-// doc's URL or the API) is the simplest picker that doesn't imply a
-// cross-tenant capability the backend doesn't have.
+// Document-selection UX choice: an id input rather than a list picker. There is
+// no cross-tenant document-list endpoint; GET /documents/{id} resolves against
+// the caller's readable tenants. A plain id input (paste the UUID from the doc's
+// URL or the API) is the simplest picker that doesn't imply a capability the
+// backend doesn't have.
 function aclDocumentSection() {
   const sec = el("section", { className: "admin-section" });
   sec.append(el("h2", { textContent: "Document sharing" }));
@@ -1345,7 +1471,8 @@ function userRow(t, u) {
   return tr;
 }
 
-function keysSection(t, keys) {
+function keysSection(t, keys, refresh) {
+  refresh = refresh || (() => showTenant(t)); // Admin tab re-renders the tenant; the panel re-renders itself
   const sec = el("section", { className: "admin-section" });
   sec.append(el("h2", { textContent: "API keys" }));
 
@@ -1360,7 +1487,7 @@ function keysSection(t, keys) {
     el("th", { textContent: "" }),
   ));
   const tbody = el("tbody");
-  for (const k of keys) tbody.append(keyRow(t, k));
+  for (const k of keys) tbody.append(keyRow(t, k, refresh));
   table.append(thead, tbody);
   sec.append(keys.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no keys" }));
 
@@ -1381,7 +1508,7 @@ function keysSection(t, keys) {
         body: JSON.stringify(body),
       });
       showKeyModal(result); // plaintext shown once; modal outlives the view refresh below
-      showTenant(t);
+      refresh();
     } catch (err) {
       submit.disabled = false;
       alert("Issue key failed: " + err.message);
@@ -1391,7 +1518,8 @@ function keysSection(t, keys) {
   return sec;
 }
 
-function keyRow(t, k) {
+function keyRow(t, k, refresh) {
+  refresh = refresh || (() => showTenant(t));
   const tr = el("tr", { className: k.revoked_at ? "admin-key-revoked" : "" });
   const revoked = !!k.revoked_at;
   const status = revoked ? `revoked ${fmtDate(k.revoked_at)}` : "active";
@@ -1411,7 +1539,7 @@ function keyRow(t, k) {
         body: JSON.stringify(body),
       });
       showKeyModal(result);
-      showTenant(t);
+      refresh();
     } catch (err) {
       rotate.disabled = false;
       alert("Rotate failed: " + err.message);
@@ -1424,7 +1552,7 @@ function keyRow(t, k) {
     revoke.disabled = true;
     try {
       await apiFetch(`/admin/keys/${k.id}`, { method: "DELETE" });
-      showTenant(t);
+      refresh();
     } catch (err) {
       revoke.disabled = false;
       alert("Revoke key failed: " + err.message);
@@ -1497,11 +1625,12 @@ function showKeyModal(result) {
       return;
     }
     wireSearch();
-    mountConnectEntry();
     await checkAdmin();
     await checkWritable();
+    renderTabBar();
     // Single hash router for all top-level views; also renders the initial view.
     window.addEventListener("hashchange", route);
+    document.addEventListener("keydown", slashFocus);
     route();
   } catch (err) {
     // beginLogin() throws "redirecting to login" — that's expected; ignore it.
