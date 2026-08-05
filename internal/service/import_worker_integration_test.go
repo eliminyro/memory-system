@@ -78,7 +78,7 @@ func TestImportWorker_EndToEnd(t *testing.T) {
 
 	docs := repository.NewDocumentRepository(db)
 	subcat := "go"
-	doc, err := docs.GetByPath(context.Background(), target.ID, "learnings", &subcat, slug)
+	doc, err := docs.GetByPath(context.Background(), repository.ReadTenants(target.ID), target.ID, "learnings", &subcat, slug)
 	require.NoError(t, err, "imported document must be stored under the target tenant")
 	require.Equal(t, target.ID, doc.TenantID)
 }

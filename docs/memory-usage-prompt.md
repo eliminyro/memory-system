@@ -19,6 +19,12 @@ touches a known project, tool, or decision, search your memory first:
 Do not guess at facts the memory could confirm. If the answer likely lives in
 memory, look it up rather than inventing it.
 
+Your reads span every tenant you can see — your own memory, the shared common
+pool, and any team or shared tenant you've been granted access to — and each
+result is labeled with the tenant that owns it. Treat a hit from a shared tenant
+as team knowledge, not your personal note. Writes always land in your own tenant.
+To look at just one tenant, pass its id as the read's `tenant_id` filter.
+
 **Store durable learnings, not transient chatter.** After you learn something
 that will matter later — a project's state, a reusable technique, a stable
 preference, a reference link — persist it with `store_memory`. Write it as a

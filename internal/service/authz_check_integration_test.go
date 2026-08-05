@@ -186,10 +186,11 @@ func TestAuthzCrossTenantDenied(t *testing.T) {
 	require.Error(t, err, "cross-tenant update_section must be denied")
 	require.ErrorIs(t, f.svc.MarkVerified(ctx, f.secB, nil), apperr.ErrNotFound)
 
-	// tenant_id override without admin is refused up front.
+	// Read tenant_id filter to a non-readable tenant yields not-found, never that
+	// tenant's document and never an existence-revealing error (cross-tenant-reads).
 	catB, slugB := f.catSlug(t, f.docB)
 	_, err = f.svc.GetDocument(ctx, catB, nil, slugB, false, "", &f.tenantB)
-	require.ErrorIs(t, err, apperr.ErrInvalidInput, "non-admin override must be denied")
+	require.ErrorIs(t, err, apperr.ErrNotFound, "non-readable read filter must yield not-found, not a leak")
 }
 
 // TestAuthzGlobalAdminSpansTenants: a global admin overrides tenant_id, reads
@@ -284,7 +285,7 @@ func TestAuthzSubjectlessDenied(t *testing.T) {
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "subjectless get_related denied")
 
 	_, err = f.svc.GetDocument(ctx, "learnings", nil, "whatever", false, "", &f.tenantB)
-	require.ErrorIs(t, err, apperr.ErrInvalidInput, "subjectless override denied")
+	require.ErrorIs(t, err, apperr.ErrNotFound, "subjectless read filter to another tenant yields not-found")
 }
 
 // TestAuthzEscalationRegression is the crux: an admin-allowlisted Email set via

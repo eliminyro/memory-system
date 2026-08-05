@@ -34,6 +34,8 @@ type SectionView struct {
 type DocumentView struct {
 	ID          uuid.UUID     `json:"id"`
 	TenantID    uuid.UUID     `json:"tenant_id"`
+	TenantName  string        `json:"tenant_name,omitempty"`
+	TenantType  string        `json:"tenant_type,omitempty"`
 	Category    string        `json:"category"`
 	Subcategory *string       `json:"subcategory,omitempty"`
 	Slug        string        `json:"slug"`
@@ -102,15 +104,23 @@ func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, 
 	return view, nil
 }
 
-// applyStalenessToSearchResults overlays staleness metadata on search results.
-// Hard mode replaces guarded Content with Preview + hints; advisory sets metadata
-// but keeps Content; off (or nil store) is a no-op.
-func applyStalenessToSearchResults(ctx context.Context, store *staleness.ThresholdStore, results []repository.SearchResult, mode string, forceRead bool) ([]repository.SearchResult, error) {
-	if store == nil || mode == models.StalenessModeOff {
+// applyStalenessToSearchResults overlays staleness metadata on search results,
+// applying each result under ITS OWN owning tenant's staleness mode. Because a
+// cross-tenant result set can mix tenants with different modes, the caller
+// resolves a per-tenant mode map (keyed by result TenantID) once and passes it
+// here. A result whose tenant is absent from the map, or maps to "off", is left
+// untouched. Hard mode replaces guarded Content with Preview + hints; advisory
+// sets metadata but keeps Content; a nil store is an overall no-op.
+func applyStalenessToSearchResults(ctx context.Context, store *staleness.ThresholdStore, results []repository.SearchResult, modeByTenant map[uuid.UUID]string, forceRead bool) ([]repository.SearchResult, error) {
+	if store == nil {
 		return results, nil
 	}
 	for i := range results {
 		r := &results[i]
+		mode := modeByTenant[r.TenantID]
+		if mode == "" || mode == models.StalenessModeOff {
+			continue
+		}
 		check, err := staleness.Check(ctx, store, models.Section{
 			Content:    r.Content,
 			VerifiedAt: r.VerifiedAt,

@@ -43,6 +43,20 @@ func (r *TenantRepository) List(ctx context.Context) ([]models.Tenant, error) {
 	return tenants, nil
 }
 
+// GetByIDs fetches the tenants for the given ids in one query. Used by the read
+// path to label cross-tenant results with their owning tenant's name/type
+// without an N+1. Missing ids are simply absent from the result.
+func (r *TenantRepository) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Tenant, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var tenants []models.Tenant
+	if err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&tenants).Error; err != nil {
+		return nil, err
+	}
+	return tenants, nil
+}
+
 func (r *TenantRepository) Update(ctx context.Context, tenant *models.Tenant) error {
 	return r.db.WithContext(ctx).Save(tenant).Error
 }

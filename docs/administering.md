@@ -38,6 +38,17 @@ engine** (a Zanzibar-style tuple ACL), not by a hard-coded list of emails.
   (`tenant:<id>#system@system:memory`, written when a tenant is created), so a
   holder of `system:memory#admin` is authorized against tenant-scoped and
   document-scoped relations everywhere without a per-tenant grant.
+- **Read aggregation is bounded — an admin is not a read firehose.** Memory reads
+  (`search_memory`, `list_documents`, `get_document`, `get_document_by_id`) span
+  the caller's **readable tenant set**: their home tenant, the common (`default`)
+  pool, and every tenant they hold a **direct**
+  `viewer`/`member`/`manager`/`admin` grant on (each confirmed by a `Check`). This
+  set is derived from **direct** grants only — a `system:memory#admin` holder is
+  **not** expanded to every tenant for aggregation, so an admin's search is not an
+  instance-wide dump. Admins still reach any single tenant explicitly (through the
+  Tenants page, or an admin `tenant_id` scope on the request), just not implicitly
+  through a broad search. Each result is labeled with its owning tenant. **Writes
+  are unaffected** — stores, updates, and deletes still target one tenant.
 - The **`memory-admin` CLI is inherently privileged**: holding `DATABASE_URL`
   is equivalent to full control of the instance. It performs no authorization
   check of its own and needs no token — protect the database URL accordingly

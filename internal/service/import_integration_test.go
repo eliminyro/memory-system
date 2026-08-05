@@ -50,12 +50,12 @@ func TestImportDocuments(t *testing.T) {
 	docs := repository.NewDocumentRepository(db)
 	subcat := "go"
 
-	doc, err := docs.GetByPath(context.Background(), target.ID, "learnings", &subcat, slug)
+	doc, err := docs.GetByPath(context.Background(), repository.ReadTenants(target.ID), target.ID, "learnings", &subcat, slug)
 	require.NoError(t, err, "document must be stored under the target tenant")
 	require.Equal(t, target.ID, doc.TenantID)
 	requireTuple(t, store, authzseed.DocumentTenantEdge(doc.ID, target.ID))
 
 	// Tenant-scoping: the import must not be visible from another tenant.
-	_, err = docs.GetByPath(context.Background(), other.ID, "learnings", &subcat, slug)
+	_, err = docs.GetByPath(context.Background(), repository.ReadTenants(other.ID), other.ID, "learnings", &subcat, slug)
 	require.Error(t, err, "import must not leak into a different tenant")
 }

@@ -73,11 +73,52 @@ All data is **tenant-scoped**. Authorization tuples for the relationship graph l
 ### Searching (`search_memory`)
 
 1. `MemoryService.Search` embeds the query text.
-2. The repository runs a **hybrid search**: vector candidates ordered by cosine
-   distance are fused with lexical candidates ranked by
+2. It resolves the caller's **readable tenant set** (see
+   [Read scope](#read-scope-aggregated-reads)).
+3. The repository runs a **hybrid search** across that set: vector candidates
+   ordered by cosine distance are fused with lexical candidates ranked by
    `ts_rank(tsv, plainto_tsquery(...))`.
-3. Results are filtered/annotated according to the tenant's staleness mode (unless the
-   caller forces a read), then returned.
+4. Each result is annotated with its **owning tenant** (id, name, type) and
+   filtered according to *that tenant's* staleness mode (unless the caller forces
+   a read), then returned.
+
+### Read scope (aggregated reads)
+
+Reads — `search_memory`, `list_documents`, `get_document`, and
+`get_document_by_id` — span the caller's **readable tenant set**, not a single
+tenant. The set is:
+
+- the caller's **home tenant**,
+- the shared **common (`default`) pool**, and
+- every tenant for which the caller holds a **direct**
+  `viewer`/`member`/`manager`/`admin` grant, each confirmed by an authz `Check`.
+
+The set is built from *direct* grants only. A global admin is **not** expanded to
+every tenant for aggregation — that would turn each admin search into an
+instance-wide dump. Admins still reach any specific tenant explicitly (through the
+Tenants page or the admin write-path tenant override), just not implicitly through
+a broad search. The repository filters strictly on this resolved set, so no
+document outside it is ever returned.
+
+Every returned item is labeled with its **owning tenant** (id, name, type) so a
+client can group or color results by tenant, and staleness is applied using each
+result's *own* tenant settings rather than one global mode.
+
+A read may be narrowed to one tenant with an optional **`tenant_id` filter**. The
+filter applies only when that tenant is inside the readable set; naming a tenant
+the caller cannot read yields an **empty** result, never that tenant's documents.
+This read filter is distinct from the admin-only write-path tenant override.
+
+**Writes are unchanged.** `store_memory`, `update_section`, `delete_document`, and
+the create paths still target the caller's single authorized tenant — only the
+read scope widened.
+
+> **Upgrade note.** This is a behavior change for existing MCP clients. Previously
+> `search_memory` and `list_documents` returned only the caller's home tenant (plus
+> the common pool); they now aggregate across the full readable set, so an agent's
+> search surfaces the user's team and shared-tenant knowledge, not just their
+> personal shelf. Writes are unaffected. To pin a read to one tenant, pass the
+> `tenant_id` filter.
 
 ## MCP surface
 
@@ -96,8 +137,8 @@ subject is missing or the check errors.
 - **Admin tools:** `list_tenants`, `create_tenant`, `update_tenant`, `delete_tenant`,
   `create_api_key`, `list_api_keys`, `revoke_api_key`.
 
-Tool handlers are thin: they validate input, resolve the tenant, and delegate to
-`MemoryService`.
+Tool handlers are thin: they validate input, resolve the tenant (writes) or the
+caller's readable tenant set (reads), and delegate to `MemoryService`.
 
 ## Authorization — one engine, two auth paths
 
