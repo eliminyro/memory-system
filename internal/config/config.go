@@ -90,6 +90,15 @@ type Config struct {
 	// (redirect_uri = PublicBaseURL + "/ui"). Non-secret; served to the page.
 	UIClientID string `env:"MEMORY_UI_CLIENT_ID"`
 
+	// SIGNUP_ALLOWED_DOMAINS gates self-serve tenant provisioning: a
+	// comma-separated allow-list of email domains (e.g. "example.com,acme.org")
+	// whose verified identities may auto-provision a personal tenant on first
+	// login. Entries are lowercased and trimmed at load into SignupAllowedDomains.
+	// Empty/unset ⇒ empty slice, meaning PUBLIC (any verified identity may
+	// self-provision) — see design decision 2.
+	SignupAllowedDomainsSpec string `env:"SIGNUP_ALLOWED_DOMAINS"`
+	SignupAllowedDomains     []string
+
 	// PublicBaseURL is the external origin (scheme+host, no path/trailing slash),
 	// e.g. "https://mem.example.org". Anchors the authlet issuer/audience/PRM/
 	// callback URLs and the UI OAuth config. REQUIRED (absolute http(s)) when the
@@ -117,13 +126,17 @@ type TenantDefaults struct {
 	CleanupScanEnabled bool
 }
 
-// DefaultTenantDefaults returns the safe baseline: every toggle off.
+// DefaultTenantDefaults returns the safe-retention bundle applied to new
+// tenants when MEMORY_DEFAULT_OPTS is unset: staleness_mode=hard,
+// duplicate_guard=true, cleanup_scan_enabled=true. An operator opts out of a
+// toggle by setting it explicitly in MEMORY_DEFAULT_OPTS.
 func DefaultTenantDefaults() TenantDefaults {
-	return TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
+	return TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
 }
 
 // ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
-// into a TenantDefaults. Empty = safe baseline; whitespace-tolerant, case-insensitive;
+// into a TenantDefaults, overlaying set keys on top of DefaultTenantDefaults (the
+// safe bundle). Empty = the safe bundle; whitespace-tolerant, case-insensitive;
 // unknown keys or invalid values error.
 func ParseTenantDefaults(spec string) (TenantDefaults, error) {
 	out := DefaultTenantDefaults()
@@ -174,6 +187,25 @@ func parseBool(s string) (bool, error) {
 	return strconv.ParseBool(s)
 }
 
+// ParseAllowedDomains splits a comma-separated SIGNUP_ALLOWED_DOMAINS spec into
+// a normalized allow-list: each entry lowercased and trimmed, empties dropped.
+// An empty/whitespace-only spec yields nil (len 0), which callers treat as
+// "public" — any verified identity may self-provision.
+func ParseAllowedDomains(spec string) []string {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil
+	}
+	var out []string
+	for part := range strings.SplitSeq(spec, ",") {
+		d := strings.ToLower(strings.TrimSpace(part))
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{}
 	if err := env.Parse(cfg); err != nil {
@@ -184,6 +216,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse MEMORY_DEFAULT_OPTS: %w", err)
 	}
 	cfg.TenantDefaults = td
+
+	// Self-serve signup domain allow-list (empty ⇒ public).
+	cfg.SignupAllowedDomains = ParseAllowedDomains(cfg.SignupAllowedDomainsSpec)
 
 	// Both Google client envs are the OAuth opt-in signal; one without the other
 	// is a deployment bug (OIDC discovery needs both).

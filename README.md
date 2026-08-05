@@ -155,17 +155,28 @@ Ollama deploy works out of the box.
 | `CLEANUP_INTERVAL_HOURS` | `24` | Scan interval. |
 | `TELEGRAM_BOT_TOKEN` | *(unset)* | Optional — post a per-scan cleanup summary. |
 | `TELEGRAM_CHAT_ID` | *(unset)* | Optional — target chat for the summary. |
-| `MEMORY_DEFAULT_OPTS` | *(unset)* | Per-tenant toggle defaults, e.g. `staleness=off,duplicate_guard=false,cleanup_scan_enabled=false`. |
+| `MEMORY_DEFAULT_OPTS` | *(safe bundle)* | Per-tenant toggle defaults, applied at **tenant-create time only** (existing tenants keep their settings). The built-in default is the safe bundle `staleness=hard,duplicate_guard=true,cleanup_scan_enabled=true`; override to loosen, e.g. `staleness=off,duplicate_guard=false,cleanup_scan_enabled=false`. See [`docs/administering.md`](docs/administering.md#retention-defaults-for-new-tenants). |
 | `AUTHLET_MASTER_KEY` | *(unset)* | 32-byte hex key encrypting OAuth signing material at rest. |
 | `MEMORY_MCP_GOOGLE_CLIENT_ID` | *(unset)* | OAuth opt-in (set **with** the secret). |
 | `MEMORY_MCP_GOOGLE_CLIENT_SECRET` | *(unset)* | OAuth opt-in (set **with** the client id). |
 | `MEMORY_UI_CLIENT_ID` | *(unset)* | Public PKCE client id used by the web UI. |
 | `PUBLIC_BASE_URL` | *(unset)* | External origin (e.g. `https://mem.example.org`). **Required** when the OAuth path is enabled. |
+| `SIGNUP_ALLOWED_DOMAINS` | *(unset)* | Self-serve signup gate (OAuth path). **Empty/unset means PUBLIC signup** — any verified identity your IdP authenticates can self-provision a tenant. Set a comma-separated domain allow-list (e.g. `example.com,corp.example.com`) to lock signup to your org. Fails closed (403); never affects already-provisioned users. |
 
 Setting **both** `MEMORY_MCP_GOOGLE_CLIENT_ID` and `MEMORY_MCP_GOOGLE_CLIENT_SECRET` opts
 into the OAuth 2.1 / OIDC path; setting one without the other is a fatal boot error. When
 the OAuth path is enabled, `PUBLIC_BASE_URL` must be an absolute `http(s)` origin with no
 path. Leaving the Google client vars unset keeps `/mcp` API-key-only.
+
+> **Warning — signup is PUBLIC by default.** With the OAuth path enabled, the first
+> verified login from an identity that has no existing membership **auto-provisions a
+> personal tenant** for that user (they become its admin). If `SIGNUP_ALLOWED_DOMAINS`
+> is unset or empty, this is **public** — anyone your IdP will authenticate (for Google,
+> *any* Google account) can self-provision. To lock a private instance to your
+> organization, set `SIGNUP_ALLOWED_DOMAINS` to your domain(s). The gate does not affect
+> already-provisioned users, and the first admin is separately gated by the bootstrap
+> token. See
+> [`docs/administering.md`](docs/administering.md#self-serve-signup-and-the-domain-gate).
 
 ### Embedding providers
 

@@ -113,25 +113,25 @@ func TestBootstrapPostHandler_AcceptsFormEncoded(t *testing.T) {
 }
 
 func TestParseBootstrapRequest_JSON(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/bootstrap", strings.NewReader(`{"token":"tok","admin_email":"a@b.com"}`))
+	req := httptest.NewRequest(http.MethodPost, "/bootstrap", strings.NewReader(`{"token":"tok","admin_email":"a@b.com","tenant_name":"Ada's memory"}`))
 	req.Header.Set("Content-Type", "application/json")
 	got, err := parseBootstrapRequest(req)
 	if err != nil {
 		t.Fatalf("parseBootstrapRequest: %v", err)
 	}
-	if got.Token != "tok" || got.AdminEmail != "a@b.com" {
+	if got.Token != "tok" || got.AdminEmail != "a@b.com" || got.TenantName != "Ada's memory" {
 		t.Fatalf("got %+v", got)
 	}
 }
 
 func TestParseBootstrapRequest_Form(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/bootstrap", strings.NewReader(`token=tok&admin_email=a%40b.com`))
+	req := httptest.NewRequest(http.MethodPost, "/bootstrap", strings.NewReader(`token=tok&admin_email=a%40b.com&tenant_name=Ada%27s+memory`))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	got, err := parseBootstrapRequest(req)
 	if err != nil {
 		t.Fatalf("parseBootstrapRequest: %v", err)
 	}
-	if got.Token != "tok" || got.AdminEmail != "a@b.com" {
+	if got.Token != "tok" || got.AdminEmail != "a@b.com" || got.TenantName != "Ada's memory" {
 		t.Fatalf("got %+v", got)
 	}
 }

@@ -83,21 +83,12 @@ func (h *adminAPIHandler) listTenants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tenants)
 }
 
+// createTenant accepts an optional "type" in the body alongside name/email and
+// forwards it to CreateTenant (default shared when omitted). The decode +
+// create mechanics live in createTenantWithType so a handler unit test can
+// drive them with a stubbed tenantCreator.
 func (h *adminAPIHandler) createTenant(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name  string `json:"name"`
-		Email string `json:"email"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	tenant, err := h.memory.CreateTenant(r.Context(), body.Name, body.Email)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, tenant)
+	createTenantWithType(w, r, h.memory)
 }
 
 func (h *adminAPIHandler) listUsers(w http.ResponseWriter, r *http.Request) {

@@ -14,44 +14,44 @@ func TestParseTenantDefaults(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:  "empty string yields safe baseline",
+			name:  "empty string yields safe bundle",
 			input: "",
-			want:  TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false},
-		},
-		{
-			name:  "all three set",
-			input: "staleness=hard,duplicate_guard=true,cleanup_scan_enabled=true",
 			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true},
 		},
 		{
-			name:  "partial: just staleness",
-			input: "staleness=advisory",
-			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: false},
+			name:  "full opt-out overrides every toggle",
+			input: "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false",
+			want:  TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
-			name:  "partial: just duplicate_guard",
-			input: "duplicate_guard=true",
-			want:  TenantDefaults{StalenessMode: "off", DuplicateGuard: true, CleanupScanEnabled: false},
+			name:  "partial: staleness overrides, other toggles keep bundle",
+			input: "staleness=advisory",
+			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: true},
+		},
+		{
+			name:  "partial: duplicate_guard off, rest keep bundle",
+			input: "duplicate_guard=false",
+			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: true},
 		},
 		{
 			name:  "whitespace tolerated around tokens",
-			input: "  staleness = advisory ,  duplicate_guard = true ",
-			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: false},
+			input: "  staleness = advisory ,  duplicate_guard = false ",
+			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: true},
 		},
 		{
 			name:  "staleness value is case-insensitive",
 			input: "staleness=ADVISORY",
-			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: false},
+			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: true},
 		},
 		{
 			name:  "bool accepts true/false case-insensitive",
-			input: "duplicate_guard=TRUE,cleanup_scan_enabled=False",
-			want:  TenantDefaults{StalenessMode: "off", DuplicateGuard: true, CleanupScanEnabled: false},
+			input: "duplicate_guard=FALSE,cleanup_scan_enabled=False",
+			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
 			name:  "bool accepts 1 and 0",
-			input: "duplicate_guard=1,cleanup_scan_enabled=0",
-			want:  TenantDefaults{StalenessMode: "off", DuplicateGuard: true, CleanupScanEnabled: false},
+			input: "duplicate_guard=0,cleanup_scan_enabled=0",
+			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
 			name:    "unknown key fails",
@@ -300,10 +300,98 @@ func TestLoadRejectsRetentionBelowLowerBound(t *testing.T) {
 
 func TestDefaultTenantDefaults(t *testing.T) {
 	got := DefaultTenantDefaults()
-	want := TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
+	want := TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
+}
+
+// TestLoadTenantDefaultsBundle guards design decision 6: the built-in
+// MEMORY_DEFAULT_OPTS default is the safe retention bundle, and an operator
+// override via the env var still wins.
+func TestLoadTenantDefaultsBundle(t *testing.T) {
+	t.Run("built-in default is the safe bundle when unset", func(t *testing.T) {
+		t.Setenv("MEMORY_DEFAULT_OPTS", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		want := TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
+		if cfg.TenantDefaults != want {
+			t.Fatalf("TenantDefaults = %+v, want %+v", cfg.TenantDefaults, want)
+		}
+	})
+
+	t.Run("env override wins", func(t *testing.T) {
+		t.Setenv("MEMORY_DEFAULT_OPTS", "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		want := TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
+		if cfg.TenantDefaults != want {
+			t.Fatalf("TenantDefaults = %+v, want %+v", cfg.TenantDefaults, want)
+		}
+	})
+}
+
+func TestParseAllowedDomains(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"empty is public", "", nil},
+		{"whitespace-only is public", "   ", nil},
+		{"single domain", "example.com", []string{"example.com"}},
+		{"multiple domains", "example.com,acme.org", []string{"example.com", "acme.org"}},
+		{"mixed case lowercased", "Example.COM,ACME.org", []string{"example.com", "acme.org"}},
+		{"whitespace trimmed per entry", "  example.com , acme.org  ", []string{"example.com", "acme.org"}},
+		{"empty entries dropped", "example.com,,acme.org,", []string{"example.com", "acme.org"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseAllowedDomains(tc.input)
+			if len(got) != len(tc.want) {
+				t.Fatalf("ParseAllowedDomains(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("ParseAllowedDomains(%q)[%d] = %q, want %q", tc.input, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestLoadParsesSignupAllowedDomains(t *testing.T) {
+	t.Run("unset is public (empty slice)", func(t *testing.T) {
+		t.Setenv("SIGNUP_ALLOWED_DOMAINS", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if len(cfg.SignupAllowedDomains) != 0 {
+			t.Fatalf("SignupAllowedDomains = %v, want empty", cfg.SignupAllowedDomains)
+		}
+	})
+
+	t.Run("normalized allow-list", func(t *testing.T) {
+		t.Setenv("SIGNUP_ALLOWED_DOMAINS", " Example.COM , acme.org ")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		want := []string{"example.com", "acme.org"}
+		if len(cfg.SignupAllowedDomains) != len(want) {
+			t.Fatalf("SignupAllowedDomains = %v, want %v", cfg.SignupAllowedDomains, want)
+		}
+		for i := range want {
+			if cfg.SignupAllowedDomains[i] != want[i] {
+				t.Fatalf("SignupAllowedDomains[%d] = %q, want %q", i, cfg.SignupAllowedDomains[i], want[i])
+			}
+		}
+	})
 }
 
 // TestLoadDefaultEmbeddingDimensionsMatchesDefaultModel guards audit #12: a

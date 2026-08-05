@@ -12,9 +12,18 @@ import (
 )
 
 // ErrUnauthorized is returned when an upstream Google identity has no matching
-// tenant. We never auto-provision from federated claims — a tenant_users row
+// tenant and no Provision callback resolves one. Without a Provision hook the
+// resolver never auto-provisions from federated claims — a tenant_users row
 // must already exist.
 var ErrUnauthorized = errors.New("authletas: no tenant for google email")
+
+// ErrProvisionNotAllowed is the sentinel a Provision callback returns when the
+// verified claims are not permitted to auto-provision a tenant. The
+// composition root translates the service's not-allowed error into this
+// sentinel before it reaches Resolve, which then emits the standard reject
+// (reason=not_allowed) and returns ErrUnauthorized (a 403, never a leaked
+// internal error).
+var ErrProvisionNotAllowed = errors.New("authletas: provision not allowed")
 
 // ResolverRejectEvent is the stable structured-log event key emitted on every
 // resolver rejection; operators aggregate on it and read `reason`.
@@ -27,6 +36,7 @@ const (
 	rejectReasonEmailUnverified = "email_unverified"
 	rejectReasonTenantNotFound  = "tenant_not_found"
 	rejectReasonDBError         = "db_error"
+	rejectReasonNotAllowed      = "not_allowed"
 )
 
 // MemoryUserResolver maps upstream Google OIDC claims to a tenant UUID via the
@@ -36,6 +46,13 @@ type MemoryUserResolver struct {
 	DB *gorm.DB
 	// Logger receives the rejection events; nil falls back to slog.Default.
 	Logger *slog.Logger
+	// Provision, when non-nil, is called on a tenant_users miss to
+	// provision-and-resolve a tenant for the verified claims, returning the new
+	// tenant id. nil ⇒ no auto-provision (preserve today's reject: a missing
+	// tenant_users row yields ErrUnauthorized). The composition root sets this
+	// post-Setup; it must translate the service's not-allowed error into
+	// ErrProvisionNotAllowed so Resolve can reject with reason=not_allowed.
+	Provision func(ctx context.Context, c idp.Claims) (string, error)
 }
 
 // identityRow is the resolver's minimal projection. Avoids importing
@@ -76,6 +93,27 @@ func (r *MemoryUserResolver) Resolve(ctx context.Context, c idp.Claims) (string,
 		First(&row).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if r.Provision != nil {
+				id, perr := r.Provision(ctx, c)
+				if perr == nil {
+					return id, nil
+				}
+				if errors.Is(perr, ErrProvisionNotAllowed) {
+					logger.Info("authletas: resolver rejected",
+						"event", ResolverRejectEvent,
+						"reason", rejectReasonNotAllowed,
+						"email", c.Email)
+					return "", ErrUnauthorized
+				}
+				// Any other provision error is internal; never leak it as
+				// anything but a 403. Log at Warn for operators.
+				logger.Warn("authletas: resolver rejected",
+					"event", ResolverRejectEvent,
+					"reason", rejectReasonDBError,
+					"email", c.Email,
+					"err", perr)
+				return "", ErrUnauthorized
+			}
 			logger.Info("authletas: resolver rejected",
 				"event", ResolverRejectEvent,
 				"reason", rejectReasonTenantNotFound,

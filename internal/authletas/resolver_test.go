@@ -210,3 +210,106 @@ func TestMemoryUserResolver_NilLoggerFallsBackToDefault(t *testing.T) {
 		t.Fatalf("got %v, want ErrUnauthorized", err)
 	}
 }
+
+// TestMemoryUserResolver_NilProvisionRejectsUnknownEmail: with no Provision
+// callback a tenant_users miss must preserve today's reject behavior.
+func TestMemoryUserResolver_NilProvisionRejectsUnknownEmail(t *testing.T) {
+	db := openTestDB(t)
+	r := &MemoryUserResolver{DB: db} // Provision nil
+	_, err := r.Resolve(context.Background(), idp.Claims{
+		Email:         "stranger@example.com",
+		EmailVerified: true,
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("got %v, want ErrUnauthorized", err)
+	}
+}
+
+// TestMemoryUserResolver_ProvisionResolvesTenant: a Provision callback that
+// returns a tenant id on a miss makes Resolve return that id with no error.
+func TestMemoryUserResolver_ProvisionResolvesTenant(t *testing.T) {
+	db := openTestDB(t)
+	called := false
+	r := &MemoryUserResolver{
+		DB: db,
+		Provision: func(_ context.Context, c idp.Claims) (string, error) {
+			called = true
+			if c.Email != "new@example.com" {
+				t.Fatalf("provision got email %q", c.Email)
+			}
+			return "tenant-provisioned-1", nil
+		},
+	}
+	id, err := r.Resolve(context.Background(), idp.Claims{
+		Email:         "new@example.com",
+		EmailVerified: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("Provision was not called on a tenant_users miss")
+	}
+	if id != "tenant-provisioned-1" {
+		t.Fatalf("got %q, want tenant-provisioned-1", id)
+	}
+}
+
+// TestMemoryUserResolver_ProvisionNotAllowedRejects: a Provision callback
+// returning ErrProvisionNotAllowed yields ErrUnauthorized plus a reject event
+// with reason "not_allowed" at INFO.
+func TestMemoryUserResolver_ProvisionNotAllowedRejects(t *testing.T) {
+	logger, buf := captureLogger(t)
+	db := openTestDB(t)
+	r := &MemoryUserResolver{
+		DB:     db,
+		Logger: logger,
+		Provision: func(_ context.Context, _ idp.Claims) (string, error) {
+			return "", ErrProvisionNotAllowed
+		},
+	}
+	_, err := r.Resolve(context.Background(), idp.Claims{
+		Email:         "blocked@example.com",
+		EmailVerified: true,
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("got %v, want ErrUnauthorized", err)
+	}
+	rec := requireRejectEvent(t, buf, rejectReasonNotAllowed, "INFO")
+	if rec["email"] != "blocked@example.com" {
+		t.Fatalf("email=%v want blocked@example.com", rec["email"])
+	}
+}
+
+// TestMemoryUserResolver_ProvisionOtherErrorRejects: any non-sentinel provision
+// error must not leak — Resolve returns ErrUnauthorized and logs a db_error
+// reject at WARN.
+func TestMemoryUserResolver_ProvisionOtherErrorRejects(t *testing.T) {
+	logger, buf := captureLogger(t)
+	db := openTestDB(t)
+	r := &MemoryUserResolver{
+		DB:     db,
+		Logger: logger,
+		Provision: func(_ context.Context, _ idp.Claims) (string, error) {
+			return "", errors.New("provision backend exploded")
+		},
+	}
+	id, err := r.Resolve(context.Background(), idp.Claims{
+		Email:         "boom@example.com",
+		EmailVerified: true,
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("got %v, want ErrUnauthorized", err)
+	}
+	if id != "" {
+		t.Fatalf("got id %q, want empty", id)
+	}
+	rec := requireRejectEvent(t, buf, rejectReasonDBError, "WARN")
+	if rec["email"] != "boom@example.com" {
+		t.Fatalf("email=%v want boom@example.com", rec["email"])
+	}
+	// The raw internal error text must not surface as the returned error.
+	if strings.Contains(err.Error(), "exploded") {
+		t.Fatalf("internal provision error leaked into returned error: %v", err)
+	}
+}

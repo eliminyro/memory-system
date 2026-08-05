@@ -615,11 +615,22 @@ func (s *MemoryService) ListTenants(ctx context.Context) ([]models.Tenant, error
 	return s.tenants.List(ctx)
 }
 
-func (s *MemoryService) CreateTenant(ctx context.Context, name, email string) (*models.Tenant, error) {
+// CreateTenant provisions a tenant. tenantType is optional (variadic so existing
+// callers stay source-compatible): the first non-empty value classifies the
+// tenant (models.TenantType*), defaulting to shared. The type is a DISPLAY-ONLY
+// classifier — it is validated here and persisted but MUST NEVER be read by authz.
+func (s *MemoryService) CreateTenant(ctx context.Context, name, email string, tenantType ...string) (*models.Tenant, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
 	}
-	tenant := &models.Tenant{Name: name, Email: email}
+	t := models.TenantTypeShared
+	if len(tenantType) > 0 && tenantType[0] != "" {
+		t = tenantType[0]
+	}
+	if !models.IsValidTenantType(t) {
+		return nil, fmt.Errorf("%w: tenant type must be personal or shared", apperr.ErrInvalidInput)
+	}
+	tenant := &models.Tenant{Name: name, Email: email, Type: t}
 	if err := s.tenants.Create(ctx, tenant); err != nil {
 		return nil, fmt.Errorf("create tenant: %w", err)
 	}
@@ -730,9 +741,19 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 		return "", nil, fmt.Errorf("bootstrap: authz store not configured")
 	}
 
+	// Founding tenant name (design D7): use the supplied name; when empty, derive
+	// a sensible default from the operator email (admin email preferred, else the
+	// tenant email), falling back to "admin" when no email is available.
 	tenantName := spec.TenantName
 	if tenantName == "" {
-		tenantName = "admin"
+		switch {
+		case spec.AdminEmail != "":
+			tenantName = deriveTenantName(spec.AdminEmail, "admin")
+		case spec.TenantEmail != "":
+			tenantName = deriveTenantName(spec.TenantEmail, "admin")
+		default:
+			tenantName = "admin"
+		}
 	}
 	keyLabel := spec.KeyLabel
 	if keyLabel == "" {
@@ -764,13 +785,24 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 		// pass their own requireAdmin check — the pre-auth bootstrap path has no
 		// authenticated subject.
 		adminCtx := auth.WithLocalAdmin(ctx)
-		tenant, err := txSvc.CreateTenant(adminCtx, tenantName, spec.TenantEmail)
+		// The founding tenant is the admin's own personal shelf (design D7), not a
+		// shared group workspace; the common `default` pool remains the shared,
+		// public-read shelf and stays distinct from this tenant.
+		tenant, err := txSvc.CreateTenant(adminCtx, tenantName, spec.TenantEmail, models.TenantTypePersonal)
 		if err != nil {
 			return fmt.Errorf("bootstrap: create tenant: %w", err)
 		}
 		pt, k, err := txSvc.CreateAPIKey(adminCtx, tenant.ID, keyLabel, nil, nil)
 		if err != nil {
 			return fmt.Errorf("bootstrap: create admin key: %w", err)
+		}
+		// The founding key subject is tenant#admin of the founding personal tenant
+		// (design D7: the founding user is BOTH system#admin and tenant#admin of it).
+		// CreateAPIKey already seeded tenant membership; upgrade it to admin. Unlike
+		// the best-effort member seed, this must not silently drop, so a failure
+		// rolls the whole bootstrap back.
+		if err := txSvc.authz.Write(ctx, authzseed.TenantAdmin(tenant.ID, authzseed.APIKeySubjectID(*k))); err != nil {
+			return fmt.Errorf("bootstrap: seed founding tenant admin: %w", err)
 		}
 		// Seed system:memory#admin for the key's subject via authzseed. Unlike the
 		// best-effort seedTuple used for tenant edges, a failure here must roll the
@@ -1312,6 +1344,7 @@ func (s *MemoryService) ListDocumentGrants(ctx context.Context, docID uuid.UUID)
 type UpdateTenantFields struct {
 	Name               *string
 	Email              *string
+	Type               *string
 	StalenessMode      *string
 	DuplicateGuard     *bool
 	CleanupScanEnabled *bool
@@ -1376,6 +1409,12 @@ func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, cleanupSc
 }
 
 func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fields UpdateTenantFields) (*models.Tenant, error) {
+	// Validate the type patch before the DB read so bad input is rejected cheaply
+	// (and the admin update path stays unit-testable without a database). Type is
+	// a DISPLAY-ONLY classifier and MUST NEVER be read by authz.
+	if fields.Type != nil && !models.IsValidTenantType(*fields.Type) {
+		return nil, fmt.Errorf("%w: tenant type must be personal or shared", apperr.ErrInvalidInput)
+	}
 	tenant, err := s.tenants.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1385,6 +1424,9 @@ func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fiel
 	}
 	if fields.Email != nil {
 		tenant.Email = *fields.Email
+	}
+	if fields.Type != nil {
+		tenant.Type = *fields.Type
 	}
 	if fields.StalenessMode != nil {
 		if _, ok := models.ValidStalenessModes[*fields.StalenessMode]; !ok {

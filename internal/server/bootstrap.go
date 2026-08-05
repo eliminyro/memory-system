@@ -12,13 +12,15 @@ import (
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
-// bootstrapRequest is the POST /bootstrap body (design D3/D4): a token plus an
-// optional admin email. Everything else service.Bootstrap needs (tenant name,
-// key label) defaults server-side inside BootstrapSpec, so the pre-auth
-// front-end surface stays as small as the bootstrap.html form (token + email).
+// bootstrapRequest is the POST /bootstrap body (design D3/D4): a token, an
+// optional admin email, and an optional founding tenant name. An empty
+// tenant_name lets service.Bootstrap derive a default (spec: *Missing name
+// falls back to a default*); the key label still defaults server-side inside
+// BootstrapSpec.
 type bootstrapRequest struct {
 	Token      string `json:"token"`
 	AdminEmail string `json:"admin_email,omitempty"`
+	TenantName string `json:"tenant_name,omitempty"`
 }
 
 // bootstrapResponse surfaces the plaintext admin key exactly once (spec: *Admin
@@ -50,6 +52,7 @@ func parseBootstrapRequest(r *http.Request) (bootstrapRequest, error) {
 	return bootstrapRequest{
 		Token:      r.PostFormValue("token"),
 		AdminEmail: r.PostFormValue("admin_email"),
+		TenantName: r.PostFormValue("tenant_name"),
 	}, nil
 }
 
@@ -65,7 +68,7 @@ func bootstrapPostHandler(memory *service.MemoryService) http.HandlerFunc {
 			return
 		}
 
-		spec := service.BootstrapSpec{AdminEmail: body.AdminEmail}
+		spec := service.BootstrapSpec{AdminEmail: body.AdminEmail, TenantName: body.TenantName}
 		plaintext, key, err := memory.Bootstrap(r.Context(), body.Token, spec)
 		if err != nil {
 			switch {

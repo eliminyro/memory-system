@@ -37,7 +37,12 @@ are wrong or obsolete.
 needing verification (stale, and it references something that can change). When
 it is, do not act on it blindly — confirm it against the current source of
 truth first, then either `mark_verified` if it still holds or `update_section`
-with the correction. Keeping the store true is part of using it.
+with the correction. Keeping the store true is part of using it. This also keeps
+good records alive: on an instance with hard staleness and the retention sweep
+enabled (the default), verifying or updating a record on recall resets its
+staleness clock, so a document you keep using survives — while one that goes
+stale and is never re-verified is eventually archived and deleted. Treat
+verify-on-recall as the price of keeping a memory around.
 
 **Be concise and structured.** Records are markdown. Favor short, factual
 entries with a descriptive title and, where useful, links between related
