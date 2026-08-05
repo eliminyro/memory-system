@@ -223,6 +223,10 @@ form.addEventListener("submit", async (e) => {
   resultEl.replaceChildren();
 
   const body = { token: document.getElementById("bootstrap-token").value };
+  // Founding-tenant name is unconditional (always-visible field); send it only
+  // when non-empty, letting the server derive a default otherwise.
+  const tenantName = document.getElementById("bootstrap-tenant-name").value.trim();
+  if (tenantName) body.tenant_name = tenantName;
   // Send admin_email only when the single field is present, visible, and
   // non-empty AND OAuth is configured — matching shouldSeedAdminEmail server-side.
   if (oauthConfigured && !emailField.hidden) {

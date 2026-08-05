@@ -7,7 +7,11 @@
   <link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
-  <header><input id="q" type="search" placeholder="search memory…" autocomplete="off"></header>
+  <header><nav id="tabbar" class="tabbar" aria-label="Primary"></nav></header>
+  <div id="memsearch" class="memsearch" hidden>
+    <input id="q" type="search" placeholder="search memory…" autocomplete="off">
+    <span id="mem-filter-chip"></span>
+  </div>
   <main id="view"></main>
   <script src="/ui/vendor/marked.min.js"></script>
   <script src="/ui/vendor/purify.min.js"></script>
