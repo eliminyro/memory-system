@@ -17,6 +17,15 @@ import (
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
+// seedFoundingAdmin marks the instance bootstrapped for the auto-provision
+// precondition (PR-A4): ProvisionPersonalTenant now fails closed until a
+// system#admin tuple exists. A single throwaway subject is enough for HasAnyAdmin
+// to report the instance as bootstrapped.
+func seedFoundingAdmin(t *testing.T, store authz.Store) {
+	t.Helper()
+	require.NoError(t, store.Write(context.Background(), authzseed.SystemAdmin("svc:founding-"+uuid.NewString())))
+}
+
 // TestCreateTenantTypeDefaultAndExplicit proves CreateTenant defaults to shared
 // and persists an explicit personal type (group 2).
 func TestCreateTenantTypeDefaultAndExplicit(t *testing.T) {
@@ -45,6 +54,7 @@ func TestProvisionPersonalTenantGatePass(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
 	svc := newAdminTestSvc(db, store)
+	seedFoundingAdmin(t, store)
 
 	email := "prov-" + uuid.NewString() + "@example.com"
 	id, err := svc.ProvisionPersonalTenant(context.Background(), email, "", "", []string{"example.com"})
@@ -68,12 +78,49 @@ func TestProvisionPersonalTenantGatePass(t *testing.T) {
 	requireNoTuple(t, store, authzseed.TenantViewer(tid, authz.Wildcard))
 }
 
+// TestProvisionPersonalTenantRequiresFoundingAdmin proves the bootstrap gate
+// (PR-A4) against a real DB: on an un-bootstrapped instance a gate-passing login
+// is refused and NO tenant_users row is persisted (the collision source);
+// once a founding admin exists, the same login auto-provisions as before.
+func TestProvisionPersonalTenantRequiresFoundingAdmin(t *testing.T) {
+	db := openServicePG(t)
+	// system:memory#admin is a global singleton (not tenant-scoped), and the
+	// integration suite shares one DB with no per-test truncation, so sibling
+	// provision tests that seedFoundingAdmin leave admin tuples behind. Clear them
+	// so this test's pre-bootstrap phase starts genuinely un-bootstrapped; Cleanup
+	// re-runs the delete so the founding admin seeded below does not leak.
+	clearAdmins(t, db)
+	store := authz.NewPostgresStore(db)
+	svc := newAdminTestSvc(db, store)
+
+	email := "gate-boot-" + uuid.NewString() + "@example.com"
+
+	// Un-bootstrapped: no system#admin yet -> fail closed, create nothing.
+	id, err := svc.ProvisionPersonalTenant(context.Background(), email, "", "", []string{"example.com"})
+	require.ErrorIs(t, err, service.ErrSignupNotAllowed)
+	require.Empty(t, id)
+
+	var rows int64
+	require.NoError(t, db.Model(&models.TenantUser{}).Where("email = ?", email).Count(&rows).Error)
+	require.Zero(t, rows, "no tenant_users row may be created before bootstrap (the /bootstrap collision source)")
+
+	// After bootstrap: a founding admin exists -> auto-provision resumes.
+	seedFoundingAdmin(t, store)
+	id, err = svc.ProvisionPersonalTenant(context.Background(), email, "", "", []string{"example.com"})
+	require.NoError(t, err)
+	require.NotEmpty(t, id)
+
+	require.NoError(t, db.Model(&models.TenantUser{}).Where("email = ?", email).Count(&rows).Error)
+	require.Equal(t, int64(1), rows, "exactly one tenant_users row after a post-bootstrap provision")
+}
+
 // TestProvisionPersonalTenantReturningEmail proves a second provision of the
 // same email returns the existing tenant, never a second one.
 func TestProvisionPersonalTenantReturningEmail(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
 	svc := newAdminTestSvc(db, store)
+	seedFoundingAdmin(t, store)
 
 	email := "returning-" + uuid.NewString() + "@example.com"
 	first, err := svc.ProvisionPersonalTenant(context.Background(), email, "", "", nil)
@@ -91,6 +138,7 @@ func TestProvisionPersonalTenantRace(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
 	svc := newAdminTestSvc(db, store)
+	seedFoundingAdmin(t, store)
 
 	email := "race-" + uuid.NewString() + "@example.com"
 	const n = 6
@@ -118,6 +166,7 @@ func TestProvisionPersonalTenantUsesDisplayName(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
 	svc := newAdminTestSvc(db, store)
+	seedFoundingAdmin(t, store)
 
 	display := "Ada Lovelace " + uuid.NewString()
 	email := "ada-" + uuid.NewString() + "@example.com"
@@ -138,6 +187,7 @@ func TestProvisionPersonalTenantDistinctEmailsSameBaseName(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
 	svc := newAdminTestSvc(db, store)
+	seedFoundingAdmin(t, store)
 
 	base := "John Smith " + uuid.NewString()
 	emailA := "a-" + uuid.NewString() + "@alpha.example"
