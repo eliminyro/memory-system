@@ -253,6 +253,16 @@ func TestAPIListDocuments_MalformedTenantID(t *testing.T) {
 	}
 }
 
+func TestAPIGetIndex_MalformedTenantID(t *testing.T) {
+	h := &apiHandler{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/index?tenant_id=not-a-uuid", nil)
+	h.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed tenant_id = %d, want 400", rec.Code)
+	}
+}
+
 func TestAPIGetDocument_MalformedTenantID(t *testing.T) {
 	h := &apiHandler{}
 	rec := httptest.NewRecorder()

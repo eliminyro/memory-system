@@ -163,14 +163,13 @@ type IndexEntry struct {
 	Topics      string  `json:"topics"`
 }
 
-// GenerateIndex produces a tiered catalog of documents for a tenant.
+// GenerateIndex produces a tiered catalog of documents over a tenant-id set
+// (the caller's readable scope), filtering tenant_id IN (?).
 //
 //   - summary:  one row per (category, subcategory) with COUNT and aggregated titles
 //   - category: one row per document (DocCount=1, Topics=title), filtered by category
 //   - full:     one row per document (DocCount=1, Topics=title), all categories
-func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UUID, depth IndexDepth, category *string) ([]IndexEntry, error) {
-	tenants := readTenants(tenantID)
-
+func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantIDs []uuid.UUID, depth IndexDepth, category *string) ([]IndexEntry, error) {
 	var sql string
 	var args []any
 
@@ -188,7 +187,7 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UU
 			GROUP BY category, subcategory
 			ORDER BY category, subcategory
 		`
-		args = []any{tenants, category, category}
+		args = []any{tenantIDs, category, category}
 
 	case IndexDepthCategory:
 		sql = `
@@ -202,7 +201,7 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UU
 			  AND (?::text IS NULL OR category = ?)
 			ORDER BY category, subcategory, title
 		`
-		args = []any{tenants, category, category}
+		args = []any{tenantIDs, category, category}
 
 	case IndexDepthFull:
 		sql = `
@@ -215,7 +214,7 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantID uuid.UU
 			  AND archived_at IS NULL
 			ORDER BY category, subcategory, title
 		`
-		args = []any{tenants}
+		args = []any{tenantIDs}
 
 	default:
 		return nil, fmt.Errorf("%w: unknown index depth %q", apperr.ErrInvalidInput, depth)

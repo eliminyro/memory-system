@@ -198,6 +198,46 @@ func TestAPIGetIndex_ReturnsSeededCategory(t *testing.T) {
 	}
 }
 
+// TestAPIGetIndex_TenantFilterPassthrough proves getIndex parses ?tenant_id and
+// forwards it to the service: the home tenant returns the seeded category; a
+// foreign (non-readable) tenant_id yields an empty index, never a leak.
+func TestAPIGetIndex_TenantFilterPassthrough(t *testing.T) {
+	f := newAPIFixture(t)
+
+	rec := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(rec, reqAs(http.MethodGet, "/index?depth=summary&tenant_id="+f.tenant.String(), f.tenant))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var entries []repository.IndexEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("body not an index array: %v (%s)", err, rec.Body.String())
+	}
+	found := false
+	for _, e := range entries {
+		if e.Category == "learnings" && e.DocCount >= 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("home-tenant tenant_id filter missing 'learnings' entry; got %+v", entries)
+	}
+
+	// A valid but non-readable tenant_id must produce an empty index.
+	rec2 := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(rec2, reqAs(http.MethodGet, "/index?depth=summary&tenant_id="+uuid.NewString(), f.tenant))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec2.Code)
+	}
+	var foreign []repository.IndexEntry
+	if err := json.Unmarshal(rec2.Body.Bytes(), &foreign); err != nil {
+		t.Fatalf("body not an index array: %v", err)
+	}
+	if len(foreign) != 0 {
+		t.Errorf("a non-readable tenant_id must yield an empty index; got %+v", foreign)
+	}
+}
+
 // TestAPIGetDocument_ReturnsSeededDoc proves getDocument resolves the id, uses
 // the context tenant, and marshals the document view with the seeded fields.
 func TestAPIGetDocument_ReturnsSeededDoc(t *testing.T) {
