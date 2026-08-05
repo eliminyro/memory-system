@@ -1730,12 +1730,20 @@ func (s *MemoryService) RevokeAPIKey(ctx context.Context, id uuid.UUID) error {
 	return s.keys.Revoke(ctx, id)
 }
 
+// GenerateIndex builds the browse catalog aggregated across the caller's
+// readable tenant SET (home + common pool + directly-granted tenants), the same
+// no-leak scope as search/list/get/get_related. The optional tenant_id filter
+// narrows to one readable tenant; a non-readable filter yields an empty scope ->
+// empty index (no existence leak).
 func (s *MemoryService) GenerateIndex(ctx context.Context, depth string, category *string, overrideID *uuid.UUID) ([]repository.IndexEntry, error) {
-	tid, err := s.resolveTenant(ctx, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
-	return s.docs.GenerateIndex(ctx, tid, repository.IndexDepth(depth), category)
+	if len(scope) == 0 {
+		return []repository.IndexEntry{}, nil // non-readable filter target
+	}
+	return s.docs.GenerateIndex(ctx, scope, repository.IndexDepth(depth), category)
 }
 
 // GetRelated returns documents semantically related to the target, aggregated

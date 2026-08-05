@@ -244,7 +244,12 @@ func (h *apiHandler) getIndex(w http.ResponseWriter, r *http.Request) {
 	if c := r.URL.Query().Get("category"); c != "" {
 		category = &c
 	}
-	entries, err := h.memory.GenerateIndex(r.Context(), depth, category, nil)
+	tenantID, err := tenantFilter(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	entries, err := h.memory.GenerateIndex(r.Context(), depth, category, tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return
