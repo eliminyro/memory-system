@@ -639,17 +639,17 @@ function showError(err) {
   view.replaceChildren(el("p", { className: "state-msg state-err", textContent: msg }));
 }
 
-// ── Admin ───────────────────────────────────────────────────────────────────
-// Gated on GET /admin/whoami. The admin affordance is only ever created for
-// admins: a 403 means "not an admin" and is swallowed (distinct from 401, which
-// apiFetch already turns into a re-login). Every call goes through
-// apiFetch("/admin/..."). Reachable via the header "Admin" button / "#admin" hash.
+// ── Admin gate ────────────────────────────────────────────────────────────────
+// isAdmin is probed once on init and gates admin-only affordances in the Tenants
+// tab (system admins see every tenant plus the create-tenant control). A 403 on
+// the probe means "not an admin" and is swallowed (distinct from 401, which
+// apiFetch already turns into a re-login).
 
 let isAdmin = false;
 
-// checkAdmin probes /admin/whoami. Returns true (and mounts the header entry
-// point) when the caller is an admin; returns false silently on 403 or any other
-// failure, so non-admins never receive the admin UI.
+// checkAdmin probes /admin/whoami and sets the module-level isAdmin. Returns true
+// when the caller is an admin; returns false silently on 403 or any other
+// failure, so non-admins never receive admin affordances.
 async function checkAdmin() {
   try {
     const r = await apiFetch("/admin/whoami");
@@ -666,14 +666,14 @@ async function checkAdmin() {
 // writableTenants caches the last /tenants/writable result (design.md §9):
 // empty for a caller with no delegated tenant, non-empty for a system admin
 // (every tenant) or a tenant#manager (their managed tenants). route() uses its
-// length to gate the Tenants tab / #tenants routes for non-admins the same way
-// isAdmin gates the Admin tab.
+// length to gate the Tenants tab / #tenants routes for non-admins (admins get
+// the tab via isAdmin).
 let writableTenants = [];
 
 // checkWritable probes GET /tenants/writable — not adminOnly, so every
 // logged-in caller can reach it. Its result (empty for a plain user, non-empty
 // for a system admin or a delegated manager) gates the Tenants tab and the
-// #tenants routes the same way isAdmin gates the Admin tab.
+// #tenants routes for non-admins (admins get them via isAdmin).
 async function checkWritable() {
   try {
     writableTenants = (await apiFetch("/tenants/writable")) || [];
@@ -684,19 +684,18 @@ async function checkWritable() {
 
 // route renders the top-level view for the current hash and refreshes the tab
 // bar's active state. Routes: #memories (default), #tenants, #tenants/<id>,
-// #admin, #connect. The superseded #acl/#import routes silently redirect to
-// #tenants. It is the single source of truth for view switching — registered
-// once on hashchange (see init), so every tab and back control just sets the hash.
+// #connect. The superseded #admin/#acl/#import routes silently redirect to
+// #tenants (the Tenants tab now owns all tenant management). It is the single
+// source of truth for view switching — registered once on hashchange (see init),
+// so every tab and back control just sets the hash.
 function route() {
   const h = location.hash;
-  if (h === "#acl" || h === "#import") { location.hash = "tenants"; return; } // redirect superseded routes
+  if (h === "#admin" || h === "#acl" || h === "#import") { location.hash = "tenants"; return; } // redirect superseded routes
   renderTabBar();
   const memsearch = document.getElementById("memsearch");
   const onMemories = h === "" || h === "#memories";
   if (memsearch) memsearch.hidden = !onMemories;
-  if (h === "#admin") {
-    (isAdmin ? renderAdmin() : renderMemories()).catch(showError);
-  } else if (h === "#tenants") {
+  if (h === "#tenants") {
     (isAdmin || writableTenants.length ? renderTenants() : renderMemories()).catch(showError);
   } else if (h.startsWith("#tenants/")) {
     const id = decodeURIComponent(h.slice("#tenants/".length));
@@ -711,8 +710,8 @@ function route() {
 // renderTabBar (re)builds the persistent centered tab bar into #tabbar and marks
 // the active tab from the current hash. Visibility reuses the existing role
 // signals: Memories always; Tenants when the caller is an admin or manages at
-// least one tenant; Admin for system admins only. Connect is a corner link for
-// everyone. Every tab just sets the hash — route() does the rendering.
+// least one tenant. Connect is a corner link for everyone. Every tab just sets
+// the hash — route() does the rendering.
 function renderTabBar() {
   const bar = document.getElementById("tabbar");
   if (!bar) return;
@@ -722,7 +721,6 @@ function renderTabBar() {
   if (isAdmin || writableTenants.length) {
     tabs.push({ label: "Tenants", hash: "tenants", active: h === "#tenants" || h.startsWith("#tenants/") });
   }
-  if (isAdmin) tabs.push({ label: "Admin", hash: "admin", active: h === "#admin" });
   for (const t of tabs) {
     const b = el("button", { className: "tab-link" + (t.active ? " active" : ""), type: "button", textContent: t.label });
     b.addEventListener("click", () => { location.hash = t.hash; });
@@ -786,8 +784,8 @@ function renderConnect() {
   const keyPara = isAdmin
     ? el("p", { className: "meta" },
         "For clients (or CI) that don't do OAuth, use a static Bearer key. Issue one from ",
-        el("a", { href: "#admin", textContent: "Admin" }),
-        " → a tenant → \"Issue key\", then drop it into the ", el("code", { textContent: "Authorization" }), " header:")
+        el("a", { href: "#tenants", textContent: "Tenants" }),
+        " → a personal tenant → \"Issue key\", then drop it into the ", el("code", { textContent: "Authorization" }), " header:")
     : el("p", { className: "meta" },
         "For clients (or CI) that don't do OAuth, use a static Bearer key (ask an admin to issue one) in the ",
         el("code", { textContent: "Authorization" }), " header:");
@@ -1022,41 +1020,6 @@ function importSection(tenantID) {
 
   sec.append(form, progress);
   return sec;
-}
-
-// renderAdmin — admin root: list tenants + create-tenant form.
-async function renderAdmin() {
-  navStack.length = 0; // admin root — clear browse/search history
-  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  let tenants;
-  try {
-    tenants = await apiFetch("/admin/tenants");
-  } catch (err) { showError(err); return; }
-  view.replaceChildren();
-
-  const hdr = el("div", { className: "cat-hdr" });
-  const browseBtn = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
-  browseBtn.addEventListener("click", () => { location.hash = ""; });
-  hdr.append(browseBtn, el("h2", { textContent: "Admin · Tenants" }));
-  view.append(hdr);
-
-  view.append(newTenantForm());
-
-  if (!tenants || !tenants.length) {
-    view.append(el("p", { className: "state-msg", textContent: "no tenants" }));
-    return;
-  }
-  const list = el("ul", { className: "doc-list" });
-  for (const t of tenants) {
-    const meta = [t.email, t.staleness_mode ? `staleness: ${t.staleness_mode}` : "", t.id].filter(Boolean).join(" · ");
-    const item = el("li", { className: "doc-item" },
-      el("h3", { textContent: t.name || "(unnamed)" }),
-      el("div", { className: "doc-meta", textContent: meta }),
-    );
-    item.addEventListener("click", () => { navStack.push(renderAdmin); showTenant(t); });
-    list.append(item);
-  }
-  view.append(list);
 }
 
 // ── ACL grant helpers (shared by the per-tenant panel) ───────────────────────
@@ -1326,153 +1289,13 @@ function documentGrantForm(docID, onGranted) {
   return form;
 }
 
-// newTenantForm — collapsed create-tenant form (name + email).
-function newTenantForm() {
-  const wrap = el("div", { className: "admin-form" });
-  const toggle = el("button", { textContent: "+ New tenant", className: "sec-btn", type: "button" });
-  const form = el("form", { className: "admin-form-fields" });
-  form.hidden = true;
-  const name = el("input", { className: "admin-input", type: "text", placeholder: "name", required: true });
-  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
-  const submit = el("button", { textContent: "Create", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(name, email, submit);
-  toggle.addEventListener("click", () => { form.hidden = !form.hidden; if (!form.hidden) name.focus(); });
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    submit.disabled = true;
-    try {
-      await apiFetch("/admin/tenants", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.value.trim(), email: email.value.trim() }),
-      });
-      renderAdmin();
-    } catch (err) {
-      submit.disabled = false;
-      alert("Create tenant failed: " + err.message);
-    }
-  });
-  wrap.append(toggle, form);
-  return wrap;
-}
-
-// showTenant — tenant detail: users + keys tables with their management forms.
-async function showTenant(t) {
-  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  let users, keys;
-  try {
-    [users, keys] = await Promise.all([
-      apiFetch(`/admin/tenants/${t.id}/users`),
-      apiFetch(`/admin/tenants/${t.id}/keys`),
-    ]);
-  } catch (err) { showError(err); return; }
-  view.replaceChildren();
-
-  const hdr = el("div", { className: "doc-hdr" });
-  hdr.append(backBtn(), el("h1", { textContent: t.name || "(unnamed)" }));
-  view.append(hdr);
-  view.append(el("div", { className: "meta", textContent: `${t.email || ""} · staleness: ${t.staleness_mode || "?"} · ${t.id}` }));
-
-  view.append(usersSection(t, users || []));
-  view.append(keysSection(t, keys || []));
-}
-
 // wrapScroll — horizontal-scroll container so wide tables never scroll the page.
 function wrapScroll(node) {
   return el("div", { className: "admin-table-wrap" }, node);
 }
 
-function usersSection(t, users) {
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "Users" }));
-
-  const table = el("table", { className: "admin-table" });
-  const thead = el("thead", {}, el("tr", {},
-    el("th", { textContent: "Email" }),
-    el("th", { textContent: "Role" }),
-    el("th", { textContent: "" }),
-  ));
-  const tbody = el("tbody");
-  for (const u of users) tbody.append(userRow(t, u));
-  table.append(thead, tbody);
-  sec.append(users.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no users" }));
-
-  const form = el("form", { className: "admin-form-fields" });
-  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
-  const role = el("select", { className: "admin-input" },
-    el("option", { value: "member", textContent: "member" }),
-    el("option", { value: "admin", textContent: "admin" }),
-  );
-  const submit = el("button", { textContent: "Grant", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(el("span", { className: "admin-form-label", textContent: "Grant user:" }), email, role, submit);
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    submit.disabled = true;
-    try {
-      await apiFetch("/admin/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.value.trim(), tenant_id: t.id, role: role.value }),
-      });
-      showTenant(t);
-    } catch (err) {
-      submit.disabled = false;
-      alert("Grant failed: " + err.message);
-    }
-  });
-  sec.append(form);
-  return sec;
-}
-
-function userRow(t, u) {
-  const tr = el("tr");
-
-  const roleSel = el("select", { className: "admin-input admin-role-select" },
-    el("option", { value: "member", textContent: "member" }),
-    el("option", { value: "admin", textContent: "admin" }),
-  );
-  roleSel.value = u.role || "member";
-  roleSel.addEventListener("change", async () => {
-    const prev = u.role || "member";
-    roleSel.disabled = true;
-    try {
-      await apiFetch("/admin/users", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: u.email, role: roleSel.value }),
-      });
-      u.role = roleSel.value;
-    } catch (err) {
-      roleSel.value = prev;
-      alert("Set role failed: " + err.message);
-    } finally {
-      roleSel.disabled = false;
-    }
-  });
-
-  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
-  revoke.addEventListener("click", async () => {
-    if (!confirm(`Revoke access for ${u.email}?`)) return;
-    revoke.disabled = true;
-    try {
-      await apiFetch(`/admin/users?email=${encodeURIComponent(u.email)}`, { method: "DELETE" });
-      tr.remove();
-    } catch (err) {
-      revoke.disabled = false;
-      alert("Revoke failed: " + err.message);
-    }
-  });
-
-  tr.append(
-    el("td", { textContent: u.email || "" }),
-    el("td", {}, roleSel),
-    el("td", { className: "admin-actions" }, revoke),
-  );
-  return tr;
-}
-
 function keysSection(t, keys, refresh) {
-  refresh = refresh || (() => showTenant(t)); // Admin tab re-renders the tenant; the panel re-renders itself
+  refresh = refresh || (() => renderTenantPanel(t.id)); // callers pass an explicit refresh; default re-renders the tenant panel
   const sec = el("section", { className: "admin-section" });
   sec.append(el("h2", { textContent: "API keys" }));
 
@@ -1519,7 +1342,8 @@ function keysSection(t, keys, refresh) {
 }
 
 function keyRow(t, k, refresh) {
-  refresh = refresh || (() => showTenant(t));
+  refresh = refresh || (() => renderTenantPanel(t.id)); // keysSection always passes an explicit refresh; safe default
+
   const tr = el("tr", { className: k.revoked_at ? "admin-key-revoked" : "" });
   const revoked = !!k.revoked_at;
   const status = revoked ? `revoked ${fmtDate(k.revoked_at)}` : "active";

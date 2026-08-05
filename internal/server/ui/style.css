@@ -293,7 +293,6 @@ main {
   box-sizing: border-box;
 }
 .admin-input-num { width: 12rem; }
-.admin-role-select { font-size: 13px; padding: 0.2rem 0.35rem; }
 
 /* Copy-once key modal */
 .modal-overlay {
