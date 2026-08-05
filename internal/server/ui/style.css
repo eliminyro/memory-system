@@ -283,6 +283,9 @@ main {
   gap: 0.5rem;
   margin: 0.75rem 0;
 }
+/* display:flex above overrides the hidden attribute; restore collapse for
+   toggled forms (e.g. the "+ New tenant" create form). */
+.admin-form-fields[hidden] { display: none; }
 .admin-form-label { font-size: 13px; color: #666; }
 .admin-input {
   font: inherit;
