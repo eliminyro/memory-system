@@ -161,3 +161,55 @@ func TestMCPGrantTenantAccess_AdminWritesGrant(t *testing.T) {
 		t.Fatalf("granted member tuple not found in %+v", grants)
 	}
 }
+
+// TestMCPCreateAPIKey_SharedRefused proves the MCP create_api_key tool inherits
+// the service rule: minting a key for a shared tenant is refused as a tool error.
+func TestMCPCreateAPIKey_SharedRefused(t *testing.T) {
+	db := openBoundaryPG(t)
+	store := authz.NewPostgresStore(db)
+	srv := newACLIntegrationServer(t, db, store)
+	ctx := auth.WithLocalAdmin(context.Background())
+
+	shared, err := srv.memory.CreateTenant(ctx, "shared-"+uuid.NewString(), "", models.TenantTypeShared)
+	if err != nil {
+		t.Fatalf("seed shared tenant: %v", err)
+	}
+
+	res, _, err := srv.CreateAPIKey(ctx, nil, CreateAPIKeyInput{
+		TenantID: shared.ID.String(),
+		Label:    "k",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("create_api_key on a shared tenant must be a tool error, got %+v", res)
+	}
+}
+
+// TestMCPGrantTenantAccess_PersonalRefused proves the MCP grant_tenant_access
+// tool inherits the service rule: a tenant-level grant into a personal tenant is
+// refused as a tool error.
+func TestMCPGrantTenantAccess_PersonalRefused(t *testing.T) {
+	db := openBoundaryPG(t)
+	store := authz.NewPostgresStore(db)
+	srv := newACLIntegrationServer(t, db, store)
+	ctx := auth.WithLocalAdmin(context.Background())
+
+	personal, err := srv.memory.CreateTenant(ctx, "personal-"+uuid.NewString(), "", models.TenantTypePersonal)
+	if err != nil {
+		t.Fatalf("seed personal tenant: %v", err)
+	}
+
+	res, _, err := srv.GrantTenantAccess(ctx, nil, GrantTenantAccessInput{
+		TenantID: personal.ID.String(),
+		Email:    "guest-" + uuid.NewString() + "@example.com",
+		Relation: authz.RelViewer,
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("grant_tenant_access into a personal tenant must be a tool error, got %+v", res)
+	}
+}

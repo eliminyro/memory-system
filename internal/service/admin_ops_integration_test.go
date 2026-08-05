@@ -14,6 +14,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/authzseed"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -99,7 +100,9 @@ func TestKeyRotation(t *testing.T) {
 	ctx := auth.WithLocalAdmin(context.Background())
 	validator := auth.NewAPIKeyValidator(db)
 
-	tenant, err := svc.CreateTenant(ctx, "rotate-"+uuid.NewString(), "")
+	// API keys are personal-tenant only (tenant-type rules), so the rotation
+	// fixture tenant must be personal.
+	tenant, err := svc.CreateTenant(ctx, "rotate-"+uuid.NewString(), "", models.TenantTypePersonal)
 	require.NoError(t, err)
 
 	// Immediate rotation.

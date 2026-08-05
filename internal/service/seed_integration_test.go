@@ -15,6 +15,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/authzseed"
 	"github.com/eliminyro/memory-system/internal/database"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -76,8 +77,10 @@ func TestLifecycleSeeding(t *testing.T) {
 	require.NoError(t, store.Write(context.Background(), authzseed.SystemAdmin(adminSubj)))
 	adminCtx := auth.WithSubject(context.Background(), auth.Subject{Type: auth.SubjectTypeUser, ID: adminSubj})
 
-	// CreateTenant -> system parent edge + service-principal membership.
-	tenant, err := svc.CreateTenant(adminCtx, "acme-"+uuid.NewString(), "")
+	// CreateTenant -> system parent edge + service-principal membership. Personal
+	// so the CreateAPIKey seeding step below is permitted (API keys are
+	// personal-tenant only).
+	tenant, err := svc.CreateTenant(adminCtx, "acme-"+uuid.NewString(), "", models.TenantTypePersonal)
 	require.NoError(t, err)
 	requireTuple(t, store, authzseed.TenantSystemEdge(tenant.ID))
 	requireTuple(t, store, authzseed.TenantMember(tenant.ID, authz.ServicePrincipalID(tenant.ID.String())))

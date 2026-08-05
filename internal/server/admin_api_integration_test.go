@@ -16,6 +16,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/authzseed"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -83,9 +84,10 @@ func TestAdminAPI_GateRejectsNonAdmin(t *testing.T) {
 func TestAdminAPI_KeyLifecycleNeverLeaksSecret(t *testing.T) {
 	h, adminCtx, _ := newAdminHarness(t)
 
-	// Create a tenant.
+	// Create a tenant. API keys are personal-tenant only (tenant-type rules), so
+	// the key fixture must be a personal tenant.
 	rec := httptest.NewRecorder()
-	h.mux().ServeHTTP(rec, adminReq(t, adminCtx, http.MethodPost, "/admin/tenants", map[string]string{"name": "acme-" + uuid.NewString()}))
+	h.mux().ServeHTTP(rec, adminReq(t, adminCtx, http.MethodPost, "/admin/tenants", map[string]string{"name": "acme-" + uuid.NewString(), "type": models.TenantTypePersonal}))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create tenant = %d (%s)", rec.Code, rec.Body.String())
 	}

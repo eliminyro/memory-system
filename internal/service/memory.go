@@ -1068,8 +1068,22 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 	if _, ok := models.ValidTenantUserRoles[role]; !ok {
 		return nil, fmt.Errorf("%w: role must be member or admin", apperr.ErrInvalidInput)
 	}
-	if _, err := s.tenants.GetByID(ctx, tenantID); err != nil {
+	tenant, err := s.tenants.GetByID(ctx, tenantID)
+	if err != nil {
 		return nil, err
+	}
+	// Operation-validity: a personal tenant holds a single owner. Allow the
+	// creation-time first user (bootstrap / self-serve auto-provision), reject a
+	// second. Shared tenants are unrestricted.
+	if tenant.Type == models.TenantTypePersonal {
+		var existing int64
+		if err = s.db.WithContext(ctx).Model(&models.TenantUser{}).
+			Where("tenant_id = ?", tenantID).Count(&existing).Error; err != nil {
+			return nil, fmt.Errorf("count tenant_users: %w", err)
+		}
+		if existing >= 1 {
+			return nil, fmt.Errorf("%w: a personal tenant may have only one user", apperr.ErrInvalidInput)
+		}
 	}
 	tu := &models.TenantUser{Email: email, TenantID: tenantID, Role: role}
 	if err := s.db.WithContext(ctx).Create(tu).Error; err != nil {
@@ -1327,6 +1341,17 @@ func (s *MemoryService) GrantTenantAccess(ctx context.Context, tenantID uuid.UUI
 	}
 	if !s.canGrantTenantRelation(ctx, tenantID, relation) {
 		return fmt.Errorf("%w: not authorized to grant %s on tenant %s", apperr.ErrInvalidInput, relation, tenantID)
+	}
+	// Operation-validity: a personal tenant takes no tenant-level grants (single
+	// owner). Document-level guest grants stay allowed (see GrantDocumentAccess).
+	// Checked after the ceiling so an unauthorized caller still short-circuits
+	// before any tenant read.
+	tenant, err := s.tenants.GetByID(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if tenant.Type == models.TenantTypePersonal {
+		return fmt.Errorf("%w: cannot grant tenant-level access on a personal tenant", apperr.ErrInvalidInput)
 	}
 	tu, err := s.resolveSubjectByEmail(ctx, email)
 	if err != nil {
@@ -1631,8 +1656,15 @@ func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, la
 	if err := s.requireAdmin(ctx); err != nil {
 		return "", nil, err
 	}
-	if _, err := s.tenants.GetByID(ctx, tenantID); err != nil {
+	tenant, err := s.tenants.GetByID(ctx, tenantID)
+	if err != nil {
 		return "", nil, err
+	}
+	// Operation-validity (not an access decision — type never gates Check): API
+	// keys are a personal-tenant affordance. A shared tenant is reached via its
+	// members' own identities + ACL, so a tenant-scoped key has no purpose.
+	if tenant.Type == models.TenantTypeShared {
+		return "", nil, fmt.Errorf("%w: API keys cannot be created for a shared tenant", apperr.ErrInvalidInput)
 	}
 	if subjectID != nil && *subjectID == "" {
 		subjectID = nil

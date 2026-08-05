@@ -11,6 +11,7 @@ import (
 
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
@@ -40,7 +41,9 @@ func TestResetBootstrap(t *testing.T) {
 
 	// Unrelated tenant data that must survive reset byte-for-byte: a second
 	// tenant, a document under it, and a non-admin API key.
-	tenant, err := svc.CreateTenant(adminCtx, "tenant-"+uuid.NewString(), "")
+	// Personal so the non-admin CreateAPIKey below is permitted (API keys are
+	// personal-tenant only under the tenant-type rules).
+	tenant, err := svc.CreateTenant(adminCtx, "tenant-"+uuid.NewString(), "", models.TenantTypePersonal)
 	require.NoError(t, err)
 	docCtx := auth.WithTenantID(adminCtx, tenant.ID)
 	storeRes, err := svc.StoreDocument(docCtx, "learnings", nil, "keep-"+uuid.NewString(), "# Title\n\nbody", true, "test", nil)
