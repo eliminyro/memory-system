@@ -14,6 +14,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/database"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -39,6 +40,8 @@ func buildService() (*service.MemoryService, context.Context, error) {
 	authzStore := authz.NewPostgresStore(db)
 
 	svc := service.NewMemoryService(db, nil, nil, nil, tenantRepo, keyRepo, nil, nil, nil, nil, authzStore)
+	// No config.Load here, so stamp the built-in safe bundle onto CLI-created tenants.
+	svc.TenantDefaults = models.BaselineTenantDefaults()
 	ctx := auth.WithLocalAdmin(context.Background())
 	return svc, ctx, nil
 }

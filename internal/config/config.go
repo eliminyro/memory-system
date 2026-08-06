@@ -8,6 +8,7 @@ import (
 
 	"github.com/caarlos0/env/v10"
 
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
@@ -73,10 +74,10 @@ type Config struct {
 	RateLimitBurst  int     `env:"RATE_LIMIT_BURST" envDefault:"40"`
 
 	// Tenant-toggle defaults. Raw spec from env, overridable via --opts;
-	// ParseTenantDefaults yields the typed TenantDefaults applied at AutoMigrate
-	// and tenant-create time.
+	// ParseTenantDefaults yields the typed models.TenantDefaults applied at
+	// AutoMigrate and tenant-create time.
 	TenantDefaultsSpec string `env:"MEMORY_DEFAULT_OPTS"`
-	TenantDefaults     TenantDefaults
+	TenantDefaults     models.TenantDefaults
 
 	// authlet — OAuth 2.1 / OIDC AS for /mcp. AuthletMasterKey is a 32-byte hex
 	// key encrypting AS signing material at rest. GoogleClient* identify memory-mcp
@@ -118,28 +119,12 @@ type Config struct {
 	ImportWorkerConcurrency int   `env:"IMPORT_WORKER_CONCURRENCY" envDefault:"1"`
 }
 
-// TenantDefaults is the operator baseline for the three per-tenant toggles,
-// applied as the Postgres column DEFAULT (AutoMigrate) and in service.CreateTenant.
-type TenantDefaults struct {
-	StalenessMode      string
-	DuplicateGuard     bool
-	CleanupScanEnabled bool
-}
-
-// DefaultTenantDefaults returns the safe-retention bundle applied to new
-// tenants when MEMORY_DEFAULT_OPTS is unset: staleness_mode=hard,
-// duplicate_guard=true, cleanup_scan_enabled=true. An operator opts out of a
-// toggle by setting it explicitly in MEMORY_DEFAULT_OPTS.
-func DefaultTenantDefaults() TenantDefaults {
-	return TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
-}
-
 // ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
-// into a TenantDefaults, overlaying set keys on top of DefaultTenantDefaults (the
-// safe bundle). Empty = the safe bundle; whitespace-tolerant, case-insensitive;
-// unknown keys or invalid values error.
-func ParseTenantDefaults(spec string) (TenantDefaults, error) {
-	out := DefaultTenantDefaults()
+// into a models.TenantDefaults, overlaying set keys on top of the built-in safe
+// bundle (models.BaselineTenantDefaults). Empty = the safe bundle;
+// whitespace-tolerant, case-insensitive; unknown keys or invalid values error.
+func ParseTenantDefaults(spec string) (models.TenantDefaults, error) {
+	out := models.BaselineTenantDefaults()
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return out, nil
@@ -148,12 +133,12 @@ func ParseTenantDefaults(spec string) (TenantDefaults, error) {
 	for pair := range strings.SplitSeq(spec, ",") {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) != 2 {
-			return TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
+			return models.TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
 		}
 		key := strings.ToLower(strings.TrimSpace(kv[0]))
 		val := strings.ToLower(strings.TrimSpace(kv[1]))
 		if key == "" {
-			return TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
+			return models.TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
 		}
 		switch key {
 		case "staleness":
@@ -161,22 +146,22 @@ func ParseTenantDefaults(spec string) (TenantDefaults, error) {
 			case "off", "advisory", "hard":
 				out.StalenessMode = val
 			default:
-				return TenantDefaults{}, fmt.Errorf("invalid staleness value %q (want off|advisory|hard)", val)
+				return models.TenantDefaults{}, fmt.Errorf("invalid staleness value %q (want off|advisory|hard)", val)
 			}
 		case "duplicate_guard":
 			b, err := parseBool(val)
 			if err != nil {
-				return TenantDefaults{}, fmt.Errorf("invalid duplicate_guard value %q (want true|false|1|0)", val)
+				return models.TenantDefaults{}, fmt.Errorf("invalid duplicate_guard value %q (want true|false|1|0)", val)
 			}
 			out.DuplicateGuard = b
 		case "cleanup_scan_enabled":
 			b, err := parseBool(val)
 			if err != nil {
-				return TenantDefaults{}, fmt.Errorf("invalid cleanup_scan_enabled value %q (want true|false|1|0)", val)
+				return models.TenantDefaults{}, fmt.Errorf("invalid cleanup_scan_enabled value %q (want true|false|1|0)", val)
 			}
 			out.CleanupScanEnabled = b
 		default:
-			return TenantDefaults{}, fmt.Errorf("unknown key %q (want staleness|duplicate_guard|cleanup_scan_enabled)", key)
+			return models.TenantDefaults{}, fmt.Errorf("unknown key %q (want staleness|duplicate_guard|cleanup_scan_enabled)", key)
 		}
 	}
 	return out, nil

@@ -66,6 +66,11 @@ type MemoryService struct {
 	// useful when logins can actually resolve via OAuth. The offline CLI, which
 	// skips config.Load, leaves it false.
 	OAuthConfigured bool
+	// TenantDefaults are the operator-chosen toggle defaults (staleness_mode,
+	// duplicate_guard, cleanup_scan_enabled) stamped onto every tenant created
+	// through the service. Set once at startup from config.TenantDefaults; a zero
+	// value (unset — offline CLI / tests) leaves creation to the model/DB default.
+	TenantDefaults models.TenantDefaults
 }
 
 // NewMemoryService constructs the service. Optional deps may be nil outside the
@@ -783,6 +788,21 @@ func (s *MemoryService) ListTenants(ctx context.Context) ([]models.Tenant, error
 	return s.tenants.List(ctx)
 }
 
+// applyCreationDefaults stamps the operator-chosen toggle defaults onto a new
+// tenant. GORM emits the model's struct-tag defaults ('off'/false/false) for
+// zero-valued fields, silently bypassing the DB column default, so a configured
+// service must write the values explicitly. A zero/invalid StalenessMode means
+// the service was built without wiring config (offline CLI / tests): leave the
+// fields untouched so the model/DB default (upgrade-safe 'off') applies.
+func (s *MemoryService) applyCreationDefaults(t *models.Tenant) {
+	if _, ok := models.ValidStalenessModes[s.TenantDefaults.StalenessMode]; !ok {
+		return
+	}
+	t.StalenessMode = s.TenantDefaults.StalenessMode
+	t.DuplicateGuard = s.TenantDefaults.DuplicateGuard
+	t.CleanupScanEnabled = s.TenantDefaults.CleanupScanEnabled
+}
+
 // CreateTenant provisions a tenant. tenantType is optional (variadic so existing
 // callers stay source-compatible): the first non-empty value classifies the
 // tenant (models.TenantType*), defaulting to shared. The type is a DISPLAY-ONLY
@@ -799,6 +819,7 @@ func (s *MemoryService) CreateTenant(ctx context.Context, name, email string, te
 		return nil, fmt.Errorf("%w: tenant type must be personal or shared", apperr.ErrInvalidInput)
 	}
 	tenant := &models.Tenant{Name: name, Email: email, Type: t}
+	s.applyCreationDefaults(tenant)
 	if err := s.tenants.Create(ctx, tenant); err != nil {
 		return nil, fmt.Errorf("create tenant: %w", err)
 	}

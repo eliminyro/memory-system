@@ -223,6 +223,8 @@ func main() {
 	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore)
 	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
+	// Toggle defaults stamped onto every tenant created through the service.
+	memorySvc.TenantDefaults = cfg.TenantDefaults
 
 	// First-run provisioning (design D1): on an un-bootstrapped instance generate a
 	// one-time bootstrap token and log it at WARN; when an admin already exists,
