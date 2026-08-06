@@ -225,6 +225,8 @@ func main() {
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
 	// Toggle defaults stamped onto every tenant created through the service.
 	memorySvc.TenantDefaults = cfg.TenantDefaults
+	// Global default self-service policy; per-tenant overrides resolve against it.
+	memorySvc.SelfServicePolicyDefault = cfg.SelfServicePolicy
 
 	// First-run provisioning (design D1): on an un-bootstrapped instance generate a
 	// one-time bootstrap token and log it at WARN; when an admin already exists,

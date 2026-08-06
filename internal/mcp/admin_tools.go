@@ -33,6 +33,7 @@ type UpdateTenantInput struct {
 	StalenessMode      *string `json:"staleness_mode,omitempty" jsonschema:"Staleness enforcement: off, advisory, or hard"`
 	DuplicateGuard     *bool   `json:"duplicate_guard,omitempty" jsonschema:"Refuse store_memory on near-duplicate content (default false)"`
 	CleanupScanEnabled *bool   `json:"cleanup_scan_enabled,omitempty" jsonschema:"Include this tenant in the nightly near-duplicate scan (default false)"`
+	SelfServicePolicy  *string `json:"self_service_policy,omitempty" jsonschema:"Self-service lock: open, admin_only, or inherit (clear the per-tenant override to the global default)"`
 }
 
 type DeleteTenantInput struct {
@@ -93,7 +94,7 @@ func (s *Server) registerAdminTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_tenant",
-		Description: "Update an existing tenant's name and/or email. Admin only.",
+		Description: "Update an existing tenant: name, email, type (personal/shared), the feature toggles (staleness_mode, duplicate_guard, cleanup_scan_enabled), and self_service_policy (open/admin_only/inherit). Admin only.",
 	}, s.UpdateTenant)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -180,6 +181,7 @@ func (s *Server) UpdateTenant(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		StalenessMode:      input.StalenessMode,
 		DuplicateGuard:     input.DuplicateGuard,
 		CleanupScanEnabled: input.CleanupScanEnabled,
+		SelfServicePolicy:  input.SelfServicePolicy,
 	})
 	if err != nil {
 		return handleAdminError(err)

@@ -79,6 +79,12 @@ type Config struct {
 	TenantDefaultsSpec string `env:"MEMORY_DEFAULT_OPTS"`
 	TenantDefaults     models.TenantDefaults
 
+	// SelfServicePolicy is the global default self-service gate: "open" (default)
+	// lets any member edit tenant toggles and an owner self-create API keys;
+	// "admin_only" raises both to admin. A nullable per-tenant column overrides
+	// it. Validated at load — unknown values are rejected.
+	SelfServicePolicy string `env:"MEMORY_SELF_SERVICE_POLICY" envDefault:"open"`
+
 	// authlet — OAuth 2.1 / OIDC AS for /mcp. AuthletMasterKey is a 32-byte hex
 	// key encrypting AS signing material at rest. GoogleClient* identify memory-mcp
 	// to Google (upstream IdP). Both Google envs set = opt into authlet: Setup must
@@ -201,6 +207,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse MEMORY_DEFAULT_OPTS: %w", err)
 	}
 	cfg.TenantDefaults = td
+
+	// Global default self-service policy (open|admin_only) — reject unknown values.
+	if !models.IsValidSelfServicePolicy(cfg.SelfServicePolicy) {
+		return nil, fmt.Errorf("MEMORY_SELF_SERVICE_POLICY must be open or admin_only, got %q", cfg.SelfServicePolicy)
+	}
 
 	// Self-serve signup domain allow-list (empty ⇒ public).
 	cfg.SignupAllowedDomains = ParseAllowedDomains(cfg.SignupAllowedDomainsSpec)
