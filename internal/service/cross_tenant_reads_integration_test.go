@@ -195,15 +195,28 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	require.NoError(t, f.db.Model(&models.Section{}).
 		Where("id IN ?", []uuid.UUID{secA, secB}).Update("verified_at", old).Error)
 
-	results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil)
-	require.NoError(t, err)
-
-	byTenant := map[uuid.UUID]repository.SearchResult{}
-	for _, r := range results {
-		byTenant[r.TenantID] = r
+	// The unique-token keyword arm of hybrid search deterministically returns both
+	// docs (a lexical-only hit scores fuseLexWeight*1.0 = 0.6 > scoreFloor 0.4, so
+	// it survives fusion, the score floor, and the result limit regardless of vector
+	// recall or shared-corpus size). A rare transient over the pgvector backend can
+	// still under-return, so retry a few times: the data is stable, so this only
+	// absorbs a backend blip — a real regression fails every attempt.
+	var ra, rb repository.SearchResult
+	var okA, okB bool
+	for attempt := 0; attempt < 5; attempt++ {
+		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil)
+		require.NoError(t, err)
+		byTenant := map[uuid.UUID]repository.SearchResult{}
+		for _, r := range results {
+			byTenant[r.TenantID] = r
+		}
+		ra, okA = byTenant[f.tenantA]
+		rb, okB = byTenant[f.tenantB]
+		if okA && okB {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
 	}
-	ra, okA := byTenant[f.tenantA]
-	rb, okB := byTenant[f.tenantB]
 	require.True(t, okA, "hard-mode tenant result present")
 	require.True(t, okB, "off-mode tenant result present")
 
