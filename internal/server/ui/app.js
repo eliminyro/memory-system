@@ -229,16 +229,25 @@ function placeThumb(seg, animate) {
   thumb.style.width = active.offsetWidth + "px";
   if (!animate) { void thumb.offsetWidth; thumb.style.transition = ""; }
 }
+// segmentedsIn returns rocker elements at OR under `elm`. Call sites pass either a
+// standalone .segmented (tenant-scope, connect-method, new-tenant-type) or a
+// container holding several (a rendered view / addform / fragment); querying only
+// descendants misses a .segmented passed as `elm` itself. DocumentFragment has no
+// classList, so guard it.
+function segmentedsIn(elm) {
+  const self = elm.classList && elm.classList.contains("segmented") ? [elm] : [];
+  return self.concat(elm.querySelectorAll ? [...elm.querySelectorAll(".segmented")] : []);
+}
 function placeThumbsIn(elm, animate) {
   if (!elm) return;
-  requestAnimationFrame(() => elm.querySelectorAll(".segmented").forEach((s) => placeThumb(s, animate)));
+  requestAnimationFrame(() => segmentedsIn(elm).forEach((s) => placeThumb(s, animate)));
 }
-// initRockers wires every not-yet-wired .segmented under `elm`: inserts the
+// initRockers wires every not-yet-wired .segmented at or under `elm`: inserts the
 // thumb and per-button activation. onChange(button, seg) fires after a click so
 // callers can swap panels. Returns nothing; call placeThumbsIn to position.
 function initRockers(elm, onChange) {
   if (!elm) return;
-  elm.querySelectorAll(".segmented").forEach((seg) => {
+  segmentedsIn(elm).forEach((seg) => {
     if (seg._rockerReady) return;
     seg._rockerReady = true;
     seg.insertBefore(el("span", { className: "seg-thumb" }), seg.firstChild);
