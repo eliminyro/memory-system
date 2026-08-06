@@ -20,6 +20,7 @@ const (
 	OverrideToolSearchMemory           = "search_memory"
 	OverrideToolUpdateSection          = "update_section"
 	OverrideToolUpdateMyTenantSettings = "update_my_tenant_settings"
+	OverrideToolUpdateTenantSettings   = "update_tenant_settings"
 )
 
 // OverrideLog records every force-override call against the guarded tools.

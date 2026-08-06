@@ -1640,7 +1640,12 @@ func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields U
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
 	}
-	return s.applyTenantPatch(ctx, id, fields)
+	tenant, err := s.applyTenantPatch(ctx, id, fields)
+	if err != nil {
+		return nil, err
+	}
+	tenant.EffectivePolicy = tenant.EffectiveSelfServicePolicy(s.SelfServicePolicyDefault)
+	return tenant, nil
 }
 
 // UpdateMyTenantSettings lets any authenticated caller adjust their own tenant's
@@ -1681,6 +1686,51 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 		OverrideType: models.OverrideTypeSettingsChange,
 		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, cleanupScanEnabled),
 	})
+	return tenant, nil
+}
+
+// UpdateTenantSettings is the tenant-targeted analogue of UpdateMyTenantSettings:
+// it reads or edits ANOTHER tenant's toggles by id (the ctx-only sibling always
+// targets the caller's home tenant). With all three field pointers nil it is a
+// READ, gated by CanManageTenant (system admin OR tenant#manager). Otherwise it is
+// a WRITE, gated by the tenant's self-service policy at manager level
+// (requireSelfService: open ⇒ manager, admin_only ⇒ admin, system-admin bypass) —
+// managers manage settings, the lock escalates to admins. Writes are audited.
+func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.UUID, stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
+	tenant, err := s.tenants.GetByID(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	// No fields = settings read: gate on manage rights, populate the derived
+	// effective policy, and return without touching the DB or the audit log.
+	if stalenessMode == nil && duplicateGuard == nil && cleanupScanEnabled == nil {
+		if !s.CanManageTenant(ctx, tenantID) {
+			return nil, fmt.Errorf("%w: not authorized to view this tenant's settings", apperr.ErrInvalidInput)
+		}
+		tenant.EffectivePolicy = tenant.EffectiveSelfServicePolicy(s.SelfServicePolicyDefault)
+		return tenant, nil
+	}
+	// Write: self-service gate at manager level (admin_only escalates to admin).
+	if err := s.requireSelfService(ctx, tenant, authz.RelManager); err != nil {
+		return nil, err
+	}
+	tenant, err = s.applyTenantPatch(ctx, tenantID, UpdateTenantFields{
+		StalenessMode:      stalenessMode,
+		DuplicateGuard:     duplicateGuard,
+		CleanupScanEnabled: cleanupScanEnabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+	target := tenantID
+	s.logOverride(ctx, repository.OverrideEvent{
+		TenantID:     tenantID,
+		Tool:         models.OverrideToolUpdateTenantSettings,
+		TargetID:     &target,
+		OverrideType: models.OverrideTypeSettingsChange,
+		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, cleanupScanEnabled),
+	})
+	tenant.EffectivePolicy = tenant.EffectiveSelfServicePolicy(s.SelfServicePolicyDefault)
 	return tenant, nil
 }
 

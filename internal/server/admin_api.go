@@ -61,6 +61,7 @@ func (h *adminAPIHandler) mux() *http.ServeMux {
 	})
 	m.HandleFunc("GET /tenants", h.listTenants)
 	m.HandleFunc("POST /tenants", h.createTenant)
+	m.HandleFunc("PATCH /tenants/{id}", h.updateTenant)
 	m.HandleFunc("GET /tenants/{id}/users", h.listUsers)
 	m.HandleFunc("GET /tenants/{id}/keys", h.listKeys)
 	m.HandleFunc("POST /tenants/{id}/keys", h.createKey)
@@ -212,6 +213,33 @@ func (h *adminAPIHandler) grantUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, tu)
+}
+
+// updateTenant is the admin-only tenant patcher (PATCH /admin/tenants/{id}). The
+// UI wires it to the self-service-lock rocker, so it accepts only
+// self_service_policy (open | admin_only | inherit — the last clears the override
+// to NULL) and returns the settings projection. The /admin mux is adminOnly-gated
+// and UpdateTenant re-checks requireAdmin (defense in depth). The lock stays
+// admin-only by design — never wired to the self-service settings surface.
+func (h *adminAPIHandler) updateTenant(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+		return
+	}
+	var body struct {
+		SelfServicePolicy *string `json:"self_service_policy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	t, err := h.memory.UpdateTenant(r.Context(), id, service.UpdateTenantFields{SelfServicePolicy: body.SelfServicePolicy})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settingsResponse(t))
 }
 
 func (h *adminAPIHandler) updateUserRole(w http.ResponseWriter, r *http.Request) {

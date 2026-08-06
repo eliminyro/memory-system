@@ -7,10 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/eliminyro/memory-system/internal/auth"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
@@ -33,6 +36,7 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("GET /index", h.getIndex)
 	m.HandleFunc("GET /search", h.getSearch)
 	m.HandleFunc("GET /documents", h.listDocuments)
+	m.HandleFunc("POST /documents", h.createDocument)
 	m.HandleFunc("GET /documents/{id}", h.getDocument)
 	m.HandleFunc("PATCH /sections/{id}", h.patchSection)
 	m.HandleFunc("PATCH /documents/{id}", h.patchDocument)
@@ -49,6 +53,13 @@ func (h *apiHandler) mux() *http.ServeMux {
 	// that type for a system admin, else only the tenants the caller manages.
 	// Not adminOnly — delegated managers use it too.
 	m.HandleFunc("GET /tenants", h.listTenants)
+
+	// Per-tenant settings read/write. NOT adminOnly: a delegated manager may read
+	// (CanManageTenant) and, when the self-service policy allows, write the toggles.
+	// Authorization is enforced in the service (UpdateTenantSettings); the response
+	// DTO leaks only the toggles + resolved policy, never name/email.
+	m.HandleFunc("GET /tenants/{id}/settings", h.getTenantSettings)
+	m.HandleFunc("PATCH /tenants/{id}/settings", h.patchTenantSettings)
 
 	// Relational import surface (design.md §8): sysadmin may target any
 	// tenant, otherwise the caller must manage the target tenant
@@ -335,4 +346,131 @@ func (h *apiHandler) deleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// createDocument backs POST /documents. It mirrors the relational import
+// surface's authz (canImportInto: system admin OR manages the target tenant) and,
+// exactly like ImportDocuments, injects the resolved tenant into the context so
+// StoreDocument targets it with overrideID nil. force stays false, so the tenant's
+// duplicate guard is honored: a near/exact duplicate returns 409, not a 201.
+func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TenantID    string  `json:"tenant_id"`
+		Category    string  `json:"category"`
+		Subcategory *string `json:"subcategory"`
+		Slug        string  `json:"slug"`
+		Content     string  `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	category := strings.TrimSpace(body.Category)
+	slug := strings.TrimSpace(body.Slug)
+	content := strings.TrimSpace(body.Content)
+	if category == "" || slug == "" || content == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "category, slug and content are required"})
+		return
+	}
+	subcategory := body.Subcategory
+	if subcategory != nil && strings.TrimSpace(*subcategory) == "" {
+		subcategory = nil
+	}
+
+	ctx := r.Context()
+	tenantID := auth.TenantIDFromContext(ctx)
+	if body.TenantID != "" {
+		parsed, err := uuid.Parse(body.TenantID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+			return
+		}
+		tenantID = parsed
+	}
+	if !h.canImportInto(ctx, tenantID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to write to this tenant"})
+		return
+	}
+	ctx = auth.WithTenantID(ctx, tenantID)
+	res, err := h.memory.StoreDocument(ctx, category, subcategory, slug, content, false, "", nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if res.Status == "similar_exists" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":      "a similar document already exists",
+			"status":     res.Status,
+			"candidates": res.Candidates,
+		})
+		return
+	}
+	writeJSON(w, http.StatusCreated, res.Document)
+}
+
+// tenantSettingsResponse is the GET/PATCH /tenants/{id}/settings body: only the
+// per-tenant retention toggles + resolved self-service policy, so this
+// non-adminOnly surface never leaks name/email or other tenant fields.
+type tenantSettingsResponse struct {
+	ID                         uuid.UUID `json:"id"`
+	StalenessMode              string    `json:"staleness_mode"`
+	DuplicateGuard             bool      `json:"duplicate_guard"`
+	CleanupScanEnabled         bool      `json:"cleanup_scan_enabled"`
+	SelfServicePolicy          *string   `json:"self_service_policy"`
+	EffectiveSelfServicePolicy string    `json:"effective_self_service_policy"`
+}
+
+func settingsResponse(t *models.Tenant) tenantSettingsResponse {
+	return tenantSettingsResponse{
+		ID:                         t.ID,
+		StalenessMode:              t.StalenessMode,
+		DuplicateGuard:             t.DuplicateGuard,
+		CleanupScanEnabled:         t.CleanupScanEnabled,
+		SelfServicePolicy:          t.SelfServicePolicy,
+		EffectiveSelfServicePolicy: t.EffectivePolicy,
+	}
+}
+
+// getTenantSettings backs GET /tenants/{id}/settings: the read path of
+// UpdateTenantSettings (all field pointers nil), gated by CanManageTenant. A
+// read denial surfaces as 400 (ErrInvalidInput) via writeErr — deliberately not
+// writeACLErr, which would misclassify a validation error as 403.
+func (h *apiHandler) getTenantSettings(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+		return
+	}
+	t, err := h.memory.UpdateTenantSettings(r.Context(), id, nil, nil, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settingsResponse(t))
+}
+
+// patchTenantSettings backs PATCH /tenants/{id}/settings: the write path of
+// UpdateTenantSettings, gated by the tenant's self-service policy (manager, or
+// admin when locked). The self-service-lock denial surfaces as 400 via writeErr.
+func (h *apiHandler) patchTenantSettings(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+		return
+	}
+	var body struct {
+		StalenessMode      *string `json:"staleness_mode"`
+		DuplicateGuard     *bool   `json:"duplicate_guard"`
+		CleanupScanEnabled *bool   `json:"cleanup_scan_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	t, err := h.memory.UpdateTenantSettings(r.Context(), id, body.StalenessMode, body.DuplicateGuard, body.CleanupScanEnabled)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settingsResponse(t))
 }
