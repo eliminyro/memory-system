@@ -77,7 +77,8 @@ func from(tupleset, computedRelation string) Rewrite {
 //	type tenant
 //	  system:  [system]                        # parent edge (seeded at tenant create)
 //	  admin:   [user] or admin from system      # tenant admins ∪ global admins
-//	  manager: [user] or admin                  # admins are managers
+//	  owner:   [user]                           # personal-tenant owner (⊆ manager, ⊄ admin)
+//	  manager: [user] or admin or owner         # admins AND owners are managers
 //	  member:  [user] or manager                # managers are members
 //	  viewer:  [user:*] or member               # wildcard enables public read
 //	type document
@@ -86,10 +87,13 @@ func from(tupleset, computedRelation string) Rewrite {
 //	  editor:  [user] or member from tenant
 //
 // Inclusion chains: system#admin ⊆ tenant#admin ⊆ tenant#manager ⊆ tenant#member
-// ⊆ tenant#viewer; document#editor ⊆ document#viewer. No rewrite cycle
-// (viewer → editor → member-from-tenant → …#admin → system#admin; no back-edge to
-// viewer). Deepest Check chain (system admin reading a doc) is depth 5, well under
-// DefaultMaxDepth (16).
+// ⊆ tenant#viewer, and tenant#owner ⊆ tenant#manager (owner ⊄ admin: an owner is a
+// full manager of their own tenant but is NOT a system admin). document#editor ⊆
+// document#viewer. No rewrite cycle (owner is a `this`-only leaf; the deepest chain
+// still runs viewer → editor → member-from-tenant → …#admin → system#admin, no
+// back-edge to viewer). manager gains one extra union branch (computed(owner)), but
+// that branch is a shallow leaf, so the deepest Check chain (system admin reading a
+// doc, via the admin branch) is unchanged at depth 5 — well under DefaultMaxDepth (16).
 func DefaultNamespace() Namespace {
 	return Namespace{
 		Types: map[string]TypeDef{
@@ -122,11 +126,19 @@ func DefaultNamespace() Namespace {
 						DirectSubjects: []string{TypeUser},
 						Rewrites:       []Rewrite{thisRewrite(), from(RelSystem, RelAdmin)},
 					},
-					// Direct managers ∪ admins (admins are managers).
+					// Personal-tenant owner. A `this`-only leaf: owners fold up into
+					// manager (owner ⇒ manager) but never into admin, so they are NOT
+					// system admins and cannot reach other tenants via the system edge.
+					RelOwner: {
+						Name:           RelOwner,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite()},
+					},
+					// Direct managers ∪ admins ∪ owners (admins and owners are managers).
 					RelManager: {
 						Name:           RelManager,
 						DirectSubjects: []string{TypeUser},
-						Rewrites:       []Rewrite{thisRewrite(), computed(RelAdmin)},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelAdmin), computed(RelOwner)},
 					},
 					// Direct members ∪ managers.
 					RelMember: {

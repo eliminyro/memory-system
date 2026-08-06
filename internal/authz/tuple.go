@@ -15,6 +15,7 @@ const (
 // Relation names.
 const (
 	RelAdmin   = "admin"
+	RelOwner   = "owner" // personal-tenant owner: a manager (⊆ manager) without system-admin reach (⊄ admin)
 	RelManager = "manager"
 	RelMember  = "member"
 	RelViewer  = "viewer"

@@ -229,8 +229,9 @@ func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenan
 
 // readableTenants returns the set of tenant IDs the caller may READ across: the
 // caller's home tenant, the common (bootstrap) pool, and every tenant for which
-// the subject holds a DIRECT viewer/member/manager/admin tuple confirmed by an
-// authz viewer Check.
+// the subject holds a DIRECT viewer/member/manager/owner/admin tuple confirmed by
+// an authz viewer Check (owner ⇒ manager ⇒ member ⇒ viewer, so a personal owner's
+// direct owner tuple resolves here).
 //
 // The candidate tenants come from ReadBySubject (direct tuples only), so a
 // system admin is NOT expanded into every tenant — their system#admin tuple has
@@ -985,13 +986,13 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 		if err != nil {
 			return fmt.Errorf("bootstrap: create admin key: %w", err)
 		}
-		// The founding key subject is tenant#admin of the founding personal tenant
-		// (design D7: the founding user is BOTH system#admin and tenant#admin of it).
-		// CreateAPIKey already seeded tenant membership; upgrade it to admin. Unlike
-		// the best-effort member seed, this must not silently drop, so a failure
-		// rolls the whole bootstrap back.
-		if err := txSvc.authz.Write(ctx, authzseed.TenantAdmin(tenant.ID, authzseed.APIKeySubjectID(*k))); err != nil {
-			return fmt.Errorf("bootstrap: seed founding tenant admin: %w", err)
+		// The founding key subject is tenant#owner of the founding personal tenant
+		// (design D7/personal-owner-role: the founding user is BOTH system#admin and
+		// tenant#owner of it). CreateAPIKey already seeded tenant membership; upgrade
+		// it to owner. Unlike the best-effort member seed, this must not silently
+		// drop, so a failure rolls the whole bootstrap back.
+		if err := txSvc.authz.Write(ctx, authzseed.TenantOwner(tenant.ID, authzseed.APIKeySubjectID(*k))); err != nil {
+			return fmt.Errorf("bootstrap: seed founding tenant owner: %w", err)
 		}
 		// Seed system:memory#admin for the key's subject via authzseed. Unlike the
 		// best-effort seedTuple used for tenant edges, a failure here must roll the
@@ -1000,13 +1001,15 @@ func (s *MemoryService) Bootstrap(ctx context.Context, token string, spec Bootst
 			return fmt.Errorf("bootstrap: seed system admin: %w", err)
 		}
 		// Admin-email seeding (design D4): when an operator email is supplied and the
-		// OAuth login path is configured, map it to the new tenant as admin via the
-		// same lifecycle method the admin API uses — creating the tenant_users row the
-		// authlet resolver needs plus the admin tuple. Inside the transaction so the
-		// mapping is atomic with the tenant+key; a failure rolls the whole bootstrap
-		// back. The admin API key is still minted and returned for the API/MCP path.
+		// OAuth login path is configured, map it to the new (personal) tenant as its
+		// owner via the same lifecycle method the admin API uses — creating the
+		// tenant_users row the authlet resolver needs plus the owner tuple. Inside the
+		// transaction so the mapping is atomic with the tenant+key; a failure rolls the
+		// whole bootstrap back. The admin API key is still minted and returned for the
+		// API/MCP path. The founding operator's system-wide reach comes from the
+		// system#admin tuple seeded just below, not from a tenant#admin tuple.
 		if shouldSeedAdminEmail(spec.AdminEmail, s.OAuthConfigured) {
-			tu, err := txSvc.GrantTenantUser(adminCtx, spec.AdminEmail, tenant.ID, models.TenantUserRoleAdmin)
+			tu, err := txSvc.GrantTenantUser(adminCtx, spec.AdminEmail, tenant.ID, models.TenantUserRoleOwner)
 			if err != nil {
 				return fmt.Errorf("bootstrap: grant admin email: %w", err)
 			}
@@ -1077,8 +1080,9 @@ func (s *MemoryService) ResetBootstrap(ctx context.Context) error {
 }
 
 // GrantTenantUser maps a verified email to a tenant+role, creating the
-// tenant_users row and seeding membership tuples (+ admin when role==admin).
-// Admin-gated; the lifecycle seam for user grants (no in-band tool writes tuples).
+// tenant_users row and seeding membership tuples (+ admin when role==admin,
+// + owner when role==owner). Admin-gated; the lifecycle seam for user grants
+// (no in-band tool writes tuples).
 func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenantID uuid.UUID, role string) (*models.TenantUser, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
@@ -1087,7 +1091,7 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 		role = models.TenantUserRoleMember
 	}
 	if _, ok := models.ValidTenantUserRoles[role]; !ok {
-		return nil, fmt.Errorf("%w: role must be member or admin", apperr.ErrInvalidInput)
+		return nil, fmt.Errorf("%w: role must be member, admin, or owner", apperr.ErrInvalidInput)
 	}
 	tenant, err := s.tenants.GetByID(ctx, tenantID)
 	if err != nil {
@@ -1111,8 +1115,11 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 		return nil, fmt.Errorf("create tenant_user: %w", err)
 	}
 	s.seedTuple(ctx, authzseed.TenantMember(tenantID, tu.ID.String()))
-	if role == models.TenantUserRoleAdmin {
+	switch role {
+	case models.TenantUserRoleAdmin:
 		s.seedTuple(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String()))
+	case models.TenantUserRoleOwner:
+		s.seedTuple(ctx, authzseed.TenantOwner(tenantID, tu.ID.String()))
 	}
 	return tu, nil
 }
@@ -1132,15 +1139,17 @@ func (s *MemoryService) ListTenantUsers(ctx context.Context, tenantID uuid.UUID)
 	return users, nil
 }
 
-// UpdateTenantUserRole changes a role and syncs the admin tuple: grant writes
-// tenant:<T>#admin, downgrade deletes it (member tuple untouched — admin is a
-// superset). Admin-gated; email is the unique key.
+// UpdateTenantUserRole changes a role and syncs the role tuple: the target role
+// gets its tuple written (admin -> tenant#admin, owner -> tenant#owner) and the
+// other role tuple removed, so the stored tuples always match exactly one role
+// (member tuple untouched — every role is a member). Admin-gated; email is the
+// unique key.
 func (s *MemoryService) UpdateTenantUserRole(ctx context.Context, email, role string) (*models.TenantUser, error) {
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
 	}
 	if _, ok := models.ValidTenantUserRoles[role]; !ok {
-		return nil, fmt.Errorf("%w: role must be member or admin", apperr.ErrInvalidInput)
+		return nil, fmt.Errorf("%w: role must be member, admin, or owner", apperr.ErrInvalidInput)
 	}
 	var tu models.TenantUser
 	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&tu).Error; err != nil {
@@ -1153,17 +1162,24 @@ func (s *MemoryService) UpdateTenantUserRole(ctx context.Context, email, role st
 		return nil, fmt.Errorf("update tenant_user role: %w", err)
 	}
 	adminTuple := authzseed.TenantAdmin(tu.TenantID, tu.ID.String())
-	if role == models.TenantUserRoleAdmin {
+	ownerTuple := authzseed.TenantOwner(tu.TenantID, tu.ID.String())
+	switch role {
+	case models.TenantUserRoleAdmin:
 		s.seedTuple(ctx, adminTuple)
-	} else {
+		s.unseedTuple(ctx, ownerTuple)
+	case models.TenantUserRoleOwner:
+		s.seedTuple(ctx, ownerTuple)
 		s.unseedTuple(ctx, adminTuple)
+	default: // member: no elevated role tuple
+		s.unseedTuple(ctx, adminTuple)
+		s.unseedTuple(ctx, ownerTuple)
 	}
 	tu.Role = role
 	return &tu, nil
 }
 
 // RevokeTenantUser removes a user's email->tenant mapping and its membership
-// tuples (member, and admin when applicable). Admin-gated. Email is the key.
+// tuples (member, plus admin or owner when applicable). Admin-gated. Email is the key.
 func (s *MemoryService) RevokeTenantUser(ctx context.Context, email string) error {
 	if err := s.requireAdmin(ctx); err != nil {
 		return err
@@ -1176,8 +1192,11 @@ func (s *MemoryService) RevokeTenantUser(ctx context.Context, email string) erro
 		return fmt.Errorf("delete tenant_user: %w", err)
 	}
 	s.unseedTuple(ctx, authzseed.TenantMember(tu.TenantID, tu.ID.String()))
-	if tu.Role == models.TenantUserRoleAdmin {
+	switch tu.Role {
+	case models.TenantUserRoleAdmin:
 		s.unseedTuple(ctx, authzseed.TenantAdmin(tu.TenantID, tu.ID.String()))
+	case models.TenantUserRoleOwner:
+		s.unseedTuple(ctx, authzseed.TenantOwner(tu.TenantID, tu.ID.String()))
 	}
 	return nil
 }
@@ -1210,8 +1229,10 @@ type TenantAccess struct {
 // tuple on the caller's subject resolves to tenant#manager once confirmed by
 // Check. ReadBySubject returns only DIRECT tuples, so a member/viewer tuple on
 // a tenant the caller does not otherwise manage is a candidate that Check
-// then correctly excludes, while a direct tenant#admin tuple is correctly
-// included via the manager<-admin rewrite (design.md §4).
+// then correctly excludes, while a direct tenant#admin or tenant#owner tuple is
+// correctly included via the manager<-admin / manager<-owner rewrites. A
+// directly-owned personal tenant is labeled RelOwner; other managed tenants
+// RelManager (design.md §4).
 func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, error) {
 	if s.isAdmin(ctx) {
 		tenants, err := s.tenants.List(ctx)
@@ -1235,6 +1256,16 @@ func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, er
 	if err != nil {
 		return nil, err
 	}
+	// Pre-scan direct owner tuples so the label is owner-accurate regardless of the
+	// order ReadBySubject returns a tenant's (member/owner/...) direct tuples in.
+	ownerTenants := make(map[uuid.UUID]struct{})
+	for _, t := range tuples {
+		if t.ObjectType == authz.TypeTenant && t.Relation == authz.RelOwner {
+			if tid, perr := uuid.Parse(t.ObjectID); perr == nil {
+				ownerTenants[tid] = struct{}{}
+			}
+		}
+	}
 	seen := make(map[uuid.UUID]struct{}, len(tuples))
 	var result []TenantAccess
 	for _, t := range tuples {
@@ -1257,7 +1288,11 @@ func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, er
 			// Stale tuple pointing at a deleted tenant; skip rather than fail the list.
 			continue
 		}
-		result = append(result, TenantAccess{Tenant: *tenant, Relation: authz.RelManager})
+		label := authz.RelManager
+		if _, owned := ownerTenants[tid]; owned {
+			label = authz.RelOwner
+		}
+		result = append(result, TenantAccess{Tenant: *tenant, Relation: label})
 	}
 	return result, nil
 }
@@ -1674,8 +1709,14 @@ func (s *MemoryService) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 // subject; nil/empty defaults to the tenant service principal ("svc:<tenant_id>").
 // The subject is granted tenant membership (idempotent).
 func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string, subjectID *string, expiresAt *time.Time) (string, *models.APIKey, error) {
-	if err := s.requireAdmin(ctx); err != nil {
-		return "", nil, err
+	// Authorization (personal-owner-role D4): a system admin may mint a key for any
+	// (personal) tenant and pin it to any subject. A non-system-admin must resolve
+	// to manager on the target tenant — personal owners qualify via owner ⇒ manager,
+	// enabling owner self-service — and may only mint a key for the tenant's own
+	// service principal (the foreign-subject pin below is admin-only).
+	isSysAdmin := s.isAdmin(ctx)
+	if !isSysAdmin && !s.authorize(ctx, authz.TypeTenant, tenantID.String(), authz.RelManager) {
+		return "", nil, fmt.Errorf("%w: not authorized to create an API key for tenant %s", apperr.ErrInvalidInput, tenantID)
 	}
 	tenant, err := s.tenants.GetByID(ctx, tenantID)
 	if err != nil {
@@ -1689,6 +1730,23 @@ func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, la
 	}
 	if subjectID != nil && *subjectID == "" {
 		subjectID = nil
+	}
+	// A system admin may pin to any subject (incl. nil ⇒ the tenant service
+	// principal). A self-serving non-admin (personal owner) is scoped to their OWN
+	// subject and may NEVER mint a key for the service principal or a foreign
+	// subject: svc:<tenant> can carry residual elevated grants (e.g. a prior
+	// seedAdminServicePrincipals system#admin), so an unpinned/svc key here would
+	// be a privilege escalation. Pinning to the caller's own owner subject yields
+	// an owner-scoped key with no more power than the caller already holds.
+	if !isSysAdmin {
+		subj, ok := auth.SubjectFromContext(ctx)
+		if !ok || subj.ID == "" {
+			return "", nil, fmt.Errorf("%w: cannot determine caller subject for key creation", apperr.ErrInvalidInput)
+		}
+		if subjectID != nil && *subjectID != subj.ID {
+			return "", nil, fmt.Errorf("%w: only a system admin may pin an API key to another subject", apperr.ErrInvalidInput)
+		}
+		subjectID = &subj.ID
 	}
 	plaintext, hash, err := auth.GenerateAPIKey()
 	if err != nil {

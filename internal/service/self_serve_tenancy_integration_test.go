@@ -49,7 +49,7 @@ func TestCreateTenantTypeDefaultAndExplicit(t *testing.T) {
 }
 
 // TestProvisionPersonalTenantGatePass provisions a personal tenant for a
-// gate-passing verified email and makes the email tenant#admin (task 5.1/5.3).
+// gate-passing verified email and makes the email tenant#owner (personal-owner-role).
 func TestProvisionPersonalTenantGatePass(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
@@ -70,9 +70,12 @@ func TestProvisionPersonalTenantGatePass(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, users, 1)
 	require.Equal(t, email, users[0].Email)
+	require.Equal(t, models.TenantUserRoleOwner, users[0].Role, "auto-provisioned personal tenant makes its user an owner")
 
-	// The email's subject (tenant_users.id) is tenant#admin of the new tenant.
-	requireTuple(t, store, authzseed.TenantAdmin(tid, users[0].ID.String()))
+	// The email's subject (tenant_users.id) is tenant#owner (not #admin) of the new
+	// tenant (personal-owner-role).
+	requireTuple(t, store, authzseed.TenantOwner(tid, users[0].ID.String()))
+	requireNoTuple(t, store, authzseed.TenantAdmin(tid, users[0].ID.String()))
 
 	// No public-read wildcard on a personal tenant (default-pool-only).
 	requireNoTuple(t, store, authzseed.TenantViewer(tid, authz.Wildcard))
