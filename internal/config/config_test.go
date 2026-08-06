@@ -4,54 +4,56 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/eliminyro/memory-system/internal/models"
 )
 
 func TestParseTenantDefaults(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		want    TenantDefaults
+		want    models.TenantDefaults
 		wantErr string
 	}{
 		{
 			name:  "empty string yields safe bundle",
 			input: "",
-			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true},
+			want:  models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true},
 		},
 		{
 			name:  "full opt-out overrides every toggle",
 			input: "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false",
-			want:  TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false},
+			want:  models.TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
 			name:  "partial: staleness overrides, other toggles keep bundle",
 			input: "staleness=advisory",
-			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: true},
+			want:  models.TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: true},
 		},
 		{
 			name:  "partial: duplicate_guard off, rest keep bundle",
 			input: "duplicate_guard=false",
-			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: true},
+			want:  models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: true},
 		},
 		{
 			name:  "whitespace tolerated around tokens",
 			input: "  staleness = advisory ,  duplicate_guard = false ",
-			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: true},
+			want:  models.TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: true},
 		},
 		{
 			name:  "staleness value is case-insensitive",
 			input: "staleness=ADVISORY",
-			want:  TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: true},
+			want:  models.TenantDefaults{StalenessMode: "advisory", DuplicateGuard: true, CleanupScanEnabled: true},
 		},
 		{
 			name:  "bool accepts true/false case-insensitive",
 			input: "duplicate_guard=FALSE,cleanup_scan_enabled=False",
-			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: false},
+			want:  models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
 			name:  "bool accepts 1 and 0",
 			input: "duplicate_guard=0,cleanup_scan_enabled=0",
-			want:  TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: false},
+			want:  models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
 			name:    "unknown key fails",
@@ -298,9 +300,9 @@ func TestLoadRejectsRetentionBelowLowerBound(t *testing.T) {
 	}
 }
 
-func TestDefaultTenantDefaults(t *testing.T) {
-	got := DefaultTenantDefaults()
-	want := TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
+func TestBaselineTenantDefaults(t *testing.T) {
+	got := models.BaselineTenantDefaults()
+	want := models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
@@ -316,7 +318,7 @@ func TestLoadTenantDefaultsBundle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		want := TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
+		want := models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
 		if cfg.TenantDefaults != want {
 			t.Fatalf("TenantDefaults = %+v, want %+v", cfg.TenantDefaults, want)
 		}
@@ -328,7 +330,7 @@ func TestLoadTenantDefaultsBundle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		want := TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
+		want := models.TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
 		if cfg.TenantDefaults != want {
 			t.Fatalf("TenantDefaults = %+v, want %+v", cfg.TenantDefaults, want)
 		}

@@ -20,6 +20,22 @@ var ValidStalenessModes = map[string]struct{}{
 	StalenessModeHard:     {},
 }
 
+// TenantDefaults is the operator-chosen baseline for the three per-tenant
+// toggles. It is the single shared shape for these values across config parsing
+// and the service create-path.
+type TenantDefaults struct {
+	StalenessMode      string
+	DuplicateGuard     bool
+	CleanupScanEnabled bool
+}
+
+// BaselineTenantDefaults is the built-in safe-retention bundle used when the
+// operator sets no MEMORY_DEFAULT_OPTS override: staleness_mode=hard,
+// duplicate_guard=true, cleanup_scan_enabled=true.
+func BaselineTenantDefaults() TenantDefaults {
+	return TenantDefaults{StalenessMode: StalenessModeHard, DuplicateGuard: true, CleanupScanEnabled: true}
+}
+
 // Tenant type constants. A display/visibility classifier only — see Tenant.Type.
 const (
 	TenantTypePersonal = "personal"
