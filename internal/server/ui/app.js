@@ -124,6 +124,215 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+// relAge renders a compact relative age ("4h", "9d", "2mo", "1y") from an ISO
+// timestamp — used on cards, section spines and the doc meta line.
+function relAge(iso) {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "";
+  const h = ms / 36e5;
+  if (h < 1) return Math.max(1, Math.round(ms / 6e4)) + "m";
+  if (h < 24) return Math.round(h) + "h";
+  const d = Math.round(h / 24);
+  if (d < 30) return d + "d";
+  const mo = Math.round(d / 30);
+  if (mo < 12) return mo + "mo";
+  return Math.round(mo / 12) + "y";
+}
+
+// icon parses a trusted static SVG string (literals in THIS file only, never
+// user data) into a detached node so it can be appended via el(). The SVG markup
+// carries no inline styles or event handlers, so it satisfies the CSP.
+function icon(svg) {
+  const t = document.createElement("template");
+  t.innerHTML = svg.trim();
+  return t.content.firstChild;
+}
+
+const ICON_COPY = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const ICON_SHIELD = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"/></svg>';
+const ICON_LOCK = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="9.5" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>';
+const ICON_WARN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+const ICON_INFO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>';
+const ICON_UPLOAD = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
+
+// ── Console chrome: theme + accent (client-only, localStorage-backed) ─────────
+const _root = document.documentElement;
+const SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+const MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
+
+function applyTheme(t) {
+  _root.setAttribute("data-theme", t);
+  const ic = document.getElementById("theme-icon");
+  if (ic) ic.innerHTML = t === "dark" ? MOON : SUN;
+}
+
+const ACCENT_HEX = { amber: "#f5b13d", green: "#4fd18b", cyan: "#49d4d4", violet: "#a78bfa", rose: "#f6799a" };
+function applyAccent(a) {
+  _root.setAttribute("data-accent", a);
+  document.querySelectorAll(".sw").forEach((s) => s.setAttribute("aria-pressed", String(s.dataset.accent === a)));
+}
+
+// Apply the saved (or default) theme immediately, before the first dynamic paint.
+applyTheme(localStorage.getItem("mem-theme") || "dark");
+
+// wireChrome wires the static topbar controls once after auth: the swatch --c
+// custom props (CSSOM — CSP forbids inline style attrs), the accent popover,
+// the theme toggle, and the search-bar layout tweaks that the #q id-selector
+// would otherwise override.
+function wireChrome() {
+  document.querySelectorAll(".sw").forEach((s) => {
+    const hex = ACCENT_HEX[s.dataset.accent];
+    if (hex) s.style.setProperty("--c", hex);
+  });
+  applyAccent(localStorage.getItem("mem-accent") || "amber");
+
+  const themeBtn = document.getElementById("theme");
+  if (themeBtn) themeBtn.addEventListener("click", () => {
+    const next = _root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    localStorage.setItem("mem-theme", next);
+    applyTheme(next);
+  });
+
+  const accentBtn = document.getElementById("accent-btn");
+  const accentPop = document.getElementById("accent-pop");
+  if (accentBtn && accentPop) {
+    const setPop = (open) => { accentPop.hidden = !open; accentBtn.setAttribute("aria-expanded", String(open)); };
+    accentBtn.addEventListener("click", (e) => { e.stopPropagation(); setPop(accentPop.hidden); });
+    document.querySelectorAll(".sw").forEach((s) => s.addEventListener("click", (e) => {
+      e.stopPropagation();
+      localStorage.setItem("mem-accent", s.dataset.accent);
+      applyAccent(s.dataset.accent); // popover stays open — dismiss via outside-click / Escape
+    }));
+    document.addEventListener("click", (e) => { if (!accentPop.hidden && !accentPop.contains(e.target) && e.target !== accentBtn) setPop(false); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") setPop(false); });
+  }
+
+  // #q's id-selector overrides the .searchbar input padding; restore room for the
+  // mag icon and give the bar a sensible width — both via CSSOM (allowed).
+  const sb = document.querySelector("#memsearch .searchbar");
+  if (sb) { sb.style.flex = "1 1 auto"; sb.style.maxWidth = "640px"; }
+  const q = document.getElementById("q");
+  if (q) q.style.paddingLeft = "2.3rem";
+}
+
+// ── Segmented "rocker" controls ───────────────────────────────────────────────
+// A .seg-thumb slides behind the active button. placeThumb positions it; snap
+// (no animation) when first revealed, animate on click. Views render
+// dynamically, so callers run initRockers + placeThumbsIn right after insert.
+function placeThumb(seg, animate) {
+  const thumb = seg.querySelector(".seg-thumb");
+  const active = seg.querySelector("button.active");
+  if (!thumb || !active || !seg.offsetParent) return; // hidden -> offsetParent null
+  if (!animate) thumb.style.transition = "none";
+  thumb.style.left = active.offsetLeft + "px";
+  thumb.style.width = active.offsetWidth + "px";
+  if (!animate) { void thumb.offsetWidth; thumb.style.transition = ""; }
+}
+function placeThumbsIn(elm, animate) {
+  if (!elm) return;
+  requestAnimationFrame(() => elm.querySelectorAll(".segmented").forEach((s) => placeThumb(s, animate)));
+}
+// initRockers wires every not-yet-wired .segmented under `elm`: inserts the
+// thumb and per-button activation. onChange(button, seg) fires after a click so
+// callers can swap panels. Returns nothing; call placeThumbsIn to position.
+function initRockers(elm, onChange) {
+  if (!elm) return;
+  elm.querySelectorAll(".segmented").forEach((seg) => {
+    if (seg._rockerReady) return;
+    seg._rockerReady = true;
+    seg.insertBefore(el("span", { className: "seg-thumb" }), seg.firstChild);
+    seg.querySelectorAll("button").forEach((btn) => btn.addEventListener("click", () => {
+      seg.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === btn));
+      placeThumb(seg, true);
+      if (onChange) onChange(btn, seg);
+    }));
+    placeThumb(seg, false);
+  });
+}
+window.addEventListener("resize", () => document.querySelectorAll(".segmented").forEach((s) => placeThumb(s, false)));
+
+// segActive returns the trimmed lowercased label of a rocker's active button.
+function segActive(seg) {
+  const b = seg && seg.querySelector("button.active");
+  return b ? b.textContent.trim().toLowerCase() : "";
+}
+
+// ── Inline add/create forms ───────────────────────────────────────────────────
+// wireAddToggle links an .add-toggle to its .addform: toggles [hidden] + .open,
+// focuses the first field and positions rockers on show, resets a key-reveal on
+// hide, and collapses on .af-cancel. opts.onOpen runs just before focus.
+function wireAddToggle(toggle, form, opts = {}) {
+  const resetKeyReveal = () => {
+    const cfg = form.querySelector(".key-config"), rev = form.querySelector(".key-reveal");
+    if (cfg && rev) { cfg.hidden = false; rev.hidden = true; }
+  };
+  toggle.addEventListener("click", () => {
+    const show = form.hidden;
+    form.hidden = !show;
+    toggle.classList.toggle("open", show);
+    if (show) {
+      if (opts.onOpen) opts.onOpen();
+      const i = form.querySelector("input,textarea,select"); if (i) i.focus();
+      placeThumbsIn(form, false);
+    } else resetKeyReveal();
+  });
+  form.querySelectorAll(".af-cancel").forEach((c) => c.addEventListener("click", (e) => {
+    e.preventDefault(); form.hidden = true; toggle.classList.remove("open"); resetKeyReveal();
+  }));
+  return form;
+}
+
+// autoGrow makes a .sec-edit-ta (resize:none; overflow:hidden) grow to fit its
+// content on focus and input.
+function autoGrow(ta) {
+  const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  ta.addEventListener("focus", fit);
+  ta.addEventListener("input", fit);
+  fit();
+}
+
+// ── Copy affordances ──────────────────────────────────────────────────────────
+function shortId(s) {
+  s = String(s || "");
+  return s.length > 16 ? s.slice(0, 8) + "…" + s.slice(-4) : s;
+}
+// copyIdBtn copies `full` (a tenant id, endpoint URL — never a secret) and
+// flashes "copied ✓". The full value lives in data-full; the label is elided.
+function copyIdBtn(full, label, title) {
+  const txt = el("span", { className: "idtext", textContent: label != null ? label : shortId(full) });
+  const btn = el("button", { className: "copy-id", type: "button", title: title || "Copy" });
+  btn.dataset.full = full;
+  btn.append(txt, icon(ICON_COPY));
+  const orig = txt.textContent;
+  btn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(btn.dataset.full); } catch (e) { /* clipboard blocked */ }
+    txt.textContent = "copied ✓"; btn.classList.add("copied");
+    setTimeout(() => { txt.textContent = orig; btn.classList.remove("copied"); }, 1200);
+  });
+  return btn;
+}
+// copyCodeBtn copies the text of the sibling <pre> in its .codewrap parent.
+function copyCodeBtn() {
+  const btn = el("button", { className: "copy-code", type: "button", textContent: "copy" });
+  btn.addEventListener("click", async () => {
+    const pre = btn.parentElement.querySelector("pre");
+    if (!pre) return;
+    try { await navigator.clipboard.writeText(pre.innerText); } catch (e) { /* clipboard blocked */ }
+    btn.textContent = "copied ✓"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("copied"); }, 1200);
+  });
+  return btn;
+}
+
+// gDot is the small status glow-dot inside a status .pill; its color is a token
+// reference set via CSSOM (no CSS rule paints .pill .g).
+function gDot(token) {
+  const g = el("span", { className: "g" });
+  g.style.background = `var(${token})`;
+  return g;
+}
+
 // ── Navigation history ────────────────────────────────────────────────────────
 // A stack of thunks that re-render the previous view. Drilling into a view
 // pushes the way back; the back button pops and re-renders it. The two roots
@@ -207,16 +416,15 @@ function inlineEdit(displayEl, current, onSave) {
 // the read view. needs_verification sections show a preview and can only be
 // verified, not edited.
 function sectionEl(doc, s) {
-  const container = el("div", { className: "section-block" + (s.status === "needs_verification" ? " stale" : "") });
-
+  const container = el("div", { className: "sec" });
   const editable = s.status !== "needs_verification";
 
-  // Heading — editable; sections without one get a faint "add heading" placeholder.
+  // Heading — editable (verified) or plain (withheld). Empty editable headings
+  // get a faint "add heading" placeholder.
+  const head = el("div", { className: "sec-head" });
+  let headingEl;
   if (editable) {
-    const headingEl = el("h2", {
-      textContent: s.heading || "Add heading…",
-      className: s.heading ? "" : "placeholder",
-    });
+    headingEl = el("h2", { className: "sec-h editable" + (s.heading ? "" : " placeholder"), textContent: s.heading || "Add heading…", title: "Click to edit" });
     headingEl.dataset.placeholder = "Add heading…";
     inlineEdit(headingEl, s.heading || "", async (heading) => {
       const updated = await apiFetch("/sections/" + s.id, {
@@ -227,40 +435,68 @@ function sectionEl(doc, s) {
       s.heading = updated.heading || "";
       return s.heading;
     });
-    container.append(headingEl);
-  } else if (s.heading) {
-    container.append(el("h2", { textContent: s.heading }));
+  } else {
+    headingEl = el("h2", { className: "sec-h", textContent: s.heading || "" });
+  }
+  head.append(headingEl);
+  const ageIso = s.verified_at || s.updated_at;
+  const age = relAge(ageIso);
+  if (age) {
+    head.append(el("div", { className: "sec-meta" },
+      el("span", { className: "age", title: (s.verified_at ? "Verified " : "Edited ") + (fmtDate(ageIso) || ""), textContent: age + " ago" })));
+  }
+  container.append(head);
+
+  // needs_verification — guarded: content withheld; only "Mark verified"
+  // (POST /sections/{id}/verify) unlocks editing. The .md-withheld child drives
+  // the amber spine via .sec:has(.md-withheld)::before.
+  if (!editable) {
+    const withheld = el("div", { className: "md-withheld" });
+    withheld.append(el("p", { textContent: s.preview || "Content withheld — this section was edited since it was last confirmed and stays locked until verified against source." }));
+    const hints = s.verify_hints || [];
+    if (hints.length) {
+      const hintsRow = el("div", { className: "hints" }, el("span", { className: "eyebrow", textContent: "cited" }));
+      for (const hp of hints) hintsRow.append(el("code", { textContent: hp }));
+      withheld.append(hintsRow);
+    }
+    const verifyBtn = el("button", { className: "btn btn--primary", type: "button", textContent: "Mark verified" });
+    verifyBtn.addEventListener("click", async () => {
+      verifyBtn.disabled = true;
+      try {
+        await apiFetch("/sections/" + s.id + "/verify", { method: "POST" });
+        showDocument(doc.id); // re-render: the section is now editable
+      } catch (err) {
+        verifyBtn.disabled = false;
+        alert("Verify failed: " + err.message);
+      }
+    });
+    withheld.append(el("div", { className: "withheld-actions" }, verifyBtn));
+    container.append(withheld);
+    return container;
   }
 
-  // Read-view content box.
-  const mdBox = el("div", { className: "md" + (editable ? " editable" : "") });
-
+  // Verified prose — click-to-edit; blur commits PATCH content. The .prose.editable
+  // child drives the green spine via .sec:has(.prose.editable)::before.
+  const prose = el("div", { className: "prose editable", title: "Click to edit" });
   function renderRead() {
-    mdBox.replaceChildren();
-    if (!editable) {
-      mdBox.append(
-        el("p", { textContent: s.preview || "" }),
-        el("p", { className: "hint", textContent: "stale — needs verification: " + (s.verify_hints || []).join(", ") }),
-      );
-      return;
-    }
+    prose.replaceChildren();
     const { frontmatter, body } = splitFrontmatter(s.content);
-    if (frontmatter) mdBox.append(el("div", { className: "frontmatter", textContent: frontmatter }));
+    if (frontmatter) prose.append(el("div", { className: "frontmatter", textContent: frontmatter }));
     const bodyDiv = el("div", { className: "md-body" });
     bodyDiv.innerHTML = renderMarkdown(body);
-    mdBox.append(bodyDiv);
+    prose.append(bodyDiv);
   }
   renderRead();
 
-  // Click-to-edit: swap the read view for a textarea; blur commits.
   function enterEdit() {
+    if (prose.dataset.editing) return;
+    prose.dataset.editing = "1";
     const ta = el("textarea", { className: "sec-edit-ta", value: s.content || "" });
     let settled = false;
-
     async function commit() {
       if (settled) return;
       settled = true;
-      if (ta.value === (s.content || "")) { ta.replaceWith(mdBox); return; } // unchanged
+      if (ta.value === (s.content || "")) { delete prose.dataset.editing; ta.replaceWith(prose); return; }
       try {
         const result = await apiFetch("/sections/" + s.id, {
           method: "PATCH",
@@ -268,63 +504,27 @@ function sectionEl(doc, s) {
           body: JSON.stringify({ content: ta.value }),
         });
         s.content = result.content;
-        container.classList.remove("stale");
+        delete prose.dataset.editing;
         renderRead();
-        ta.replaceWith(mdBox);
+        ta.replaceWith(prose);
       } catch (err) {
         settled = false; // keep editing so the user can retry
         alert("Save failed: " + err.message);
         ta.focus();
       }
     }
-
-    function cancel() {
-      if (settled) return;
-      settled = true;
-      ta.replaceWith(mdBox);
-    }
-
+    function cancel() { if (settled) return; settled = true; delete prose.dataset.editing; ta.replaceWith(prose); }
     ta.addEventListener("blur", commit);
-    ta.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { e.preventDefault(); cancel(); }
-    });
-
-    mdBox.replaceWith(ta);
+    ta.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } });
+    prose.replaceWith(ta);
+    autoGrow(ta);
     ta.focus();
   }
-
-  if (editable) {
-    mdBox.title = "Click to edit";
-    mdBox.addEventListener("click", (e) => {
-      if (e.target.closest("a")) return; // let links work normally
-      enterEdit();
-    });
-  }
-
-  container.append(mdBox);
-
-  if (s.verified_at) {
-    container.append(el("p", { className: "meta", textContent: `verified ${fmtDate(s.verified_at)}` }));
-  }
-
-  // Controls row — Verify only. Editing is click-to-edit (no Edit button).
-  const controls = el("div", { className: "section-controls" });
-  const verifyBtn = el("button", { textContent: "Verify", className: "sec-btn" });
-  verifyBtn.addEventListener("click", async () => {
-    verifyBtn.disabled = true;
-    try {
-      await apiFetch("/sections/" + s.id + "/verify", { method: "POST" });
-      container.classList.remove("stale");
-      verifyBtn.textContent = "Verified";
-      verifyBtn.classList.add("sec-btn-verified");
-      setTimeout(() => { verifyBtn.textContent = "Verify"; verifyBtn.classList.remove("sec-btn-verified"); verifyBtn.disabled = false; }, 2000);
-    } catch (err) {
-      verifyBtn.disabled = false;
-      alert("Verify failed: " + err.message);
-    }
+  prose.addEventListener("click", (e) => {
+    if (e.target.closest("a")) return; // let links work normally
+    enterEdit();
   });
-  controls.append(verifyBtn);
-  container.append(controls);
+  container.append(prose);
   return container;
 }
 
@@ -332,13 +532,21 @@ async function showDocument(id) {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const doc = await apiFetch(`/documents/${id}`);
   view.replaceChildren();
-  const wrap = el("div", { className: "doc-view" });
 
-  // Header row: back + title + delete button
-  const hdr = el("div", { className: "doc-hdr" });
-  hdr.append(backBtn());
-  const titleEl = el("h1", { textContent: doc.title });
-  inlineEdit(titleEl, doc.title, async (title) => {
+  const back = el("button", { className: "back", type: "button", textContent: "← Memories" });
+  back.addEventListener("click", goBack);
+  view.append(back);
+
+  // path line (category/subcategory · slug)
+  const path = el("div", { className: "mem-path" });
+  const prefix = [doc.category, doc.subcategory].filter(Boolean).join("/");
+  if (prefix) path.append(document.createTextNode(prefix + " · "));
+  path.append(el("b", { textContent: doc.slug || "" }));
+  view.append(path);
+
+  // title — inline click-to-edit (PATCH /documents/{id})
+  const titleEl = el("h1", { className: "doc-title editable", title: "Click to edit", textContent: doc.title || doc.slug || "" });
+  inlineEdit(titleEl, doc.title || "", async (title) => {
     const updated = await apiFetch("/documents/" + doc.id, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -347,8 +555,19 @@ async function showDocument(id) {
     doc.title = updated.title;
     return updated.title;
   });
-  hdr.append(titleEl);
-  const delBtn = el("button", { textContent: "Delete", className: "sec-btn sec-btn-danger", title: "Delete document" });
+  view.append(titleEl);
+
+  // meta row: tenant tag + doc_type + edited age + delete (DELETE /documents/{id})
+  const meta = el("div", { className: "doc-meta" });
+  if (doc.tenant_id) {
+    const tag = el("span", { className: "tenant-tag" }, el("span", { className: "dot" }), document.createTextNode(doc.tenant_name || doc.tenant_id));
+    tag.style.setProperty("--tc", tenantColor(doc.tenant_id));
+    meta.append(tag);
+  }
+  if (doc.doc_type) meta.append(el("span", { className: "pill", textContent: doc.doc_type }));
+  if (doc.updated_at) meta.append(el("span", { className: "muted mono", textContent: "edited " + relAge(doc.updated_at) + " ago" }));
+  meta.append(el("span", { className: "spacer" }));
+  const delBtn = el("button", { textContent: "Delete", className: "btn btn--danger", type: "button", title: "Delete document" });
   delBtn.addEventListener("click", async () => {
     if (!confirm("Delete this document?")) return;
     delBtn.disabled = true;
@@ -360,52 +579,52 @@ async function showDocument(id) {
       alert("Delete failed: " + err.message);
     }
   });
-  hdr.append(delBtn);
-  wrap.append(hdr);
+  meta.append(delBtn);
+  view.append(meta);
 
-  wrap.append(el("div", {
-    className: "meta",
-    textContent: `${doc.doc_type || ""}  ·  ${doc.category}${doc.subcategory ? "/" + doc.subcategory : ""}/${doc.slug}  ·  updated ${fmtDate(doc.updated_at)}`,
-  }));
+  const sections = doc.sections || [];
+  const needing = sections.filter((s) => s.status === "needs_verification").length;
+  const body = el("div", { className: "doc-body" });
 
-  for (const s of doc.sections || []) {
-    wrap.append(sectionEl(doc, s));
+  if (needing) {
+    const notice = el("div", { className: "doc-notice" }, icon(ICON_WARN));
+    notice.append(el("span", {},
+      el("b", { textContent: `${needing} of ${sections.length} section${sections.length === 1 ? "" : "s"}` }),
+      document.createTextNode(" need" + (needing === 1 ? "s" : "") + " verification.")));
+    const review = el("button", { className: "linklike", type: "button", textContent: "Review ↓" });
+    review.addEventListener("click", () => { const w = body.querySelector(".md-withheld"); if (w) w.scrollIntoView({ behavior: "smooth", block: "center" }); });
+    notice.append(review);
+    view.append(notice);
   }
-  view.append(wrap);
+
+  body.append(el("div", { className: "sec-head-row" }, el("span", { className: "eyebrow", textContent: "sections · " + sections.length })));
+  for (const s of sections) body.append(sectionEl(doc, s));
+  view.append(body);
 }
 
 // ── Search results view ───────────────────────────────────────────────────────
 
 function renderSearchResults(results) {
   view.replaceChildren();
+  view.append(...memHead());
   if (!results.length) {
     view.append(el("p", { className: "state-msg", textContent: "no results" }));
     return;
   }
-  const legend = legendFor(results);
+  const legend = buildLegend(results);
   if (legend) view.append(legend);
-  const list = el("ul", { className: "doc-list" });
+  const list = el("div", { className: "mem-list" });
   for (const r of results) {
-    const path = [r.category, r.subcategory, r.slug].filter(Boolean).join("/");
-    const tierClass = r.relevance ? `tier-${r.relevance}` : "";
-    const meta = el("div", { className: "doc-meta" },
-      el("span", { textContent: path }),
-      el("span", { textContent: r.doc_type ? ` · ${r.doc_type}` : "" }),
-      r.relevance ? el("span", { className: `relevance-badge tier-${r.relevance}`, textContent: ` · ${r.relevance}` }) : "",
-      r.verified_at ? el("span", { textContent: ` · verified ${fmtDate(r.verified_at)}` }) : "",
-      r.status === "needs_verification" ? el("span", { className: "stale-badge", textContent: " · stale" }) : "",
-    );
-    if (r.tenant_id) meta.append(tenantBadge(r.tenant_id, r.tenant_name));
-    const item = el("li", { className: `doc-item ${tierClass}`.trim() },
-      el("h3", { textContent: r.doc_title }),
-      meta,
-    );
-    colorByTenant(item, r.tenant_id);
-    item.addEventListener("click", () => {
-      navStack.push(() => renderSearchResults(results));
-      showDocument(r.document_id);
-    });
-    list.append(item);
+    list.append(memCard({
+      pathPrefix: [r.category, r.subcategory].filter(Boolean).join("/"),
+      pathBold: r.slug,
+      title: r.doc_title,
+      tenantId: r.tenant_id,
+      tenantName: r.tenant_name,
+      status: r.status,
+      verifiedAt: r.verified_at,
+      onClick: () => { navStack.push(() => renderSearchResults(results)); showDocument(r.document_id); },
+    }));
   }
   view.append(list);
 }
@@ -420,6 +639,7 @@ async function renderBrowse() {
   const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
   const entries = (await apiFetch(`/index?depth=summary${tf}`)) || [];
   view.replaceChildren();
+  view.append(...memHead());
 
   if (!entries.length) {
     view.append(el("p", {
@@ -429,41 +649,21 @@ async function renderBrowse() {
     return;
   }
 
-  // Group by category
-  const byCategory = new Map();
+  // Each index summary row (a category/subcategory bucket) is one card; clicking
+  // it drills into that bucket's documents.
+  const list = el("div", { className: "mem-list" });
   for (const e of entries) {
-    if (!byCategory.has(e.category)) byCategory.set(e.category, []);
-    byCategory.get(e.category).push(e);
+    const label = e.subcategory || e.category;
+    const countText = e.doc_count != null ? ` (${e.doc_count})` : "";
+    list.append(memCard({
+      pathPrefix: e.category,
+      pathBold: e.subcategory || null,
+      title: label + countText,
+      snip: e.topics || "",
+      onClick: () => { navStack.push(renderBrowse); renderCategoryDocs(e.category, e.subcategory || null); },
+    }));
   }
-
-  for (const [cat, rows] of byCategory) {
-    const section = el("section");
-    const heading = el("h2", { textContent: cat, style: "cursor:pointer" });
-    const sub = el("ul", { className: "doc-list" });
-
-    // summary rows: one per subcategory (or category-level)
-    for (const row of rows) {
-      const label = row.subcategory || cat;
-      const countText = row.doc_count != null ? ` (${row.doc_count})` : "";
-      const item = el("li", { className: "doc-item" },
-        el("h3", { textContent: label + countText }),
-        row.topics ? el("div", { className: "doc-meta", textContent: row.topics }) : "",
-      );
-      item.addEventListener("click", () => {
-        navStack.push(renderBrowse);
-        renderCategoryDocs(cat, row.subcategory || null);
-      });
-      sub.append(item);
-    }
-
-    // clicking the heading also drills into the whole category
-    heading.addEventListener("click", () => {
-      navStack.push(renderBrowse);
-      renderCategoryDocs(cat, null);
-    });
-    section.append(heading, sub);
-    view.append(section);
-  }
+  view.append(list);
 }
 
 async function renderCategoryDocs(category, subcategory) {
@@ -474,32 +674,30 @@ async function renderCategoryDocs(category, subcategory) {
   const docs = await apiFetch(`/documents?${params}`);
   view.replaceChildren();
 
-  const hdr = el("div", { className: "cat-hdr" });
-  hdr.append(backBtn());
-  hdr.append(el("h2", { textContent: subcategory ? `${category} / ${subcategory}` : category }));
-  view.append(hdr);
+  const back = el("button", { className: "back", type: "button", textContent: "← Memories" });
+  back.addEventListener("click", goBack);
+  view.append(back);
+  view.append(el("div", { className: "view-head" }, el("h1", { textContent: subcategory ? `${category} / ${subcategory}` : category })));
 
   if (!docs.length) {
     view.append(el("p", { className: "state-msg", textContent: "no documents" }));
     return;
   }
-  const legend = legendFor(docs);
+  const legend = buildLegend(docs);
   if (legend) view.append(legend);
-  const list = el("ul", { className: "doc-list" });
+  const list = el("div", { className: "mem-list" });
   for (const doc of docs) {
-    const meta = [doc.subcategory, doc.slug, doc.doc_type].filter(Boolean).join(" · ");
-    const metaRow = el("div", { className: "doc-meta", textContent: meta });
-    if (doc.tenant_id) metaRow.append(tenantBadge(doc.tenant_id, doc.tenant_name));
-    const item = el("li", { className: "doc-item" },
-      el("h3", { textContent: doc.title || doc.slug }),
-      metaRow,
-    );
-    colorByTenant(item, doc.tenant_id);
-    item.addEventListener("click", () => {
-      navStack.push(() => renderCategoryDocs(category, subcategory));
-      showDocument(doc.id);
-    });
-    list.append(item);
+    list.append(memCard({
+      pathPrefix: [doc.category || category, doc.subcategory || subcategory].filter(Boolean).join("/"),
+      pathBold: doc.slug,
+      title: doc.title || doc.slug,
+      tenantId: doc.tenant_id,
+      tenantName: doc.tenant_name,
+      status: doc.status,
+      verifiedAt: doc.verified_at,
+      metaPill: doc.doc_type || null,
+      onClick: () => { navStack.push(() => renderCategoryDocs(category, subcategory)); showDocument(doc.id); },
+    }));
   }
   view.append(list);
 }
@@ -559,30 +757,141 @@ function tenantBadge(id, name) {
   return b;
 }
 
-// tenantLegend maps colors → tenant names; shown when results span >1 tenant.
-function tenantLegend(items) {
-  const wrap = el("div", { className: "tenant-legend" });
-  for (const t of items) {
-    const sw = el("span", { className: "tenant-swatch" });
-    sw.style.background = tenantColor(t.id);
-    wrap.append(el("span", { className: "legend-item" }, sw, document.createTextNode(t.name || t.id)));
+// memCard builds a .mem-card. The owning tenant tints the left spine via the
+// --tc custom prop (CSSOM); its status renders as an ok/warn pill.
+function memCard(opts) {
+  const card = el("a", { className: "mem-card" });
+  if (opts.tenantId) card.style.setProperty("--tc", tenantColor(opts.tenantId));
+  const path = el("span", { className: "mem-path" });
+  if (opts.pathPrefix) path.append(document.createTextNode(opts.pathPrefix));
+  if (opts.pathBold) {
+    if (opts.pathPrefix) path.append(document.createTextNode(" · "));
+    path.append(el("b", { textContent: opts.pathBold }));
   }
-  return wrap;
+  card.append(el("div", { className: "mem-top" }, path));
+  card.append(el("div", { className: "mem-title", textContent: opts.title || "" }));
+  if (opts.snip) card.append(el("p", { className: "mem-snip", textContent: opts.snip }));
+
+  const meta = el("div", { className: "mem-meta" });
+  if (opts.tenantName || opts.tenantId) {
+    const tag = el("span", { className: "tenant-tag" }, el("span", { className: "dot" }), document.createTextNode(opts.tenantName || opts.tenantId));
+    if (opts.tenantType === "shared") tag.append(el("span", { className: "pill pill--shared", textContent: "shared" }));
+    meta.append(tag);
+  }
+  meta.append(el("span", { className: "spacer" }));
+  if (opts.status === "needs_verification") {
+    meta.append(el("span", { className: "pill pill--warn" }, gDot("--warn"), document.createTextNode("needs verification")));
+  } else if (opts.verifiedAt) {
+    meta.append(el("span", { className: "pill pill--ok" }, gDot("--ok"), document.createTextNode("verified · " + relAge(opts.verifiedAt))));
+  } else if (opts.metaPill) {
+    meta.append(el("span", { className: "pill", textContent: opts.metaPill }));
+  }
+  card.append(meta);
+  if (opts.onClick) card.addEventListener("click", (e) => { e.preventDefault(); opts.onClick(); });
+  return card;
 }
 
-// colorByTenant paints a result row's left edge with its tenant color (no-op for
-// rows the read API didn't tag with a tenant id).
-function colorByTenant(node, id) {
-  if (id) node.style.borderLeft = `4px solid ${tenantColor(id)}`;
+// buildLegend renders the per-tenant .legend (dot + name + count) + a total
+// pill from a result set. Each chip narrows the view to its tenant. Returns
+// null when no row carries a tenant id (e.g. the aggregate index summary).
+function buildLegend(rows) {
+  const seen = new Map(); // id -> {name, count}
+  for (const r of rows) {
+    if (!r.tenant_id) continue;
+    const cur = seen.get(r.tenant_id) || { name: r.tenant_name || r.tenant_id, count: 0 };
+    cur.count++;
+    seen.set(r.tenant_id, cur);
+  }
+  if (!seen.size) return null;
+  const legend = el("div", { className: "legend" }, el("span", { className: "eyebrow", textContent: "tenants" }));
+  for (const [id, info] of seen) {
+    const chip = el("button", { className: "lchip", type: "button" });
+    const dot = el("span", { className: "dot" });
+    dot.style.background = tenantColor(id);
+    chip.append(dot, document.createTextNode((info.name || id) + " "), el("span", { className: "muted", textContent: "· " + info.count }));
+    chip.addEventListener("click", () => { memFilter = { id, name: info.name }; renderMemFilterChip(); renderMemories().catch(showError); });
+    legend.append(chip);
+  }
+  legend.append(el("span", { className: "total-pill" }, document.createTextNode("Total "), el("span", { className: "tnum", textContent: "· " + rows.length })));
+  return legend;
 }
 
-// legendFor collects the distinct tenants present in a result set and returns a
-// legend node when more than one tenant is represented, else null.
-function legendFor(rows) {
-  const seen = new Map();
-  for (const r of rows) if (r.tenant_id) seen.set(r.tenant_id, r.tenant_name || r.tenant_id);
-  if (seen.size <= 1) return null;
-  return tenantLegend([...seen].map(([id, name]) => ({ id, name })));
+// memHead builds the Memories view head (title + "+ new memory") and its inline
+// create .addform. Commit POSTs /documents (tenant + path + title + first
+// section) and opens the new doc. Fields collapse via the add-form helper.
+function memHead() {
+  const head = el("div", { className: "view-head" }, el("h1", { textContent: "Memories" }));
+  const toggle = el("button", { className: "add-toggle", type: "button", textContent: "+ new memory" });
+  head.append(toggle);
+
+  const form = el("div", { className: "addform" });
+  form.hidden = true;
+
+  const tenantSel = el("select", { className: "text-input" });
+  for (const t of writableTenants) tenantSel.append(el("option", { value: t.id, textContent: t.name || t.id }));
+  if (!writableTenants.length) tenantSel.append(el("option", { value: "", textContent: "(no writable tenant)" }));
+  const tRow = el("div", { className: "af-row" }, el("label", { textContent: "Tenant" }), tenantSel);
+  form.append(el("div", { className: "af-inline" }, tRow));
+
+  const catI = el("input", { className: "text-input", placeholder: "category" });
+  const subI = el("input", { className: "text-input", placeholder: "subcategory — optional" });
+  const slugI = el("input", { className: "text-input", placeholder: "slug" });
+  const pathWrap = el("div", { className: "af-path" }, catI, el("span", { className: "sep", textContent: "/" }), subI, el("span", { className: "sep", textContent: "/" }), slugI);
+  form.append(el("div", { className: "af-row" },
+    el("label", { textContent: "Path" }), pathWrap,
+    el("span", { className: "hint", textContent: "subcategory is optional — omit for e.g. tools/claude-code" })));
+
+  const titleI = el("input", { className: "text-input", placeholder: "Short descriptive title" });
+  form.append(el("div", { className: "af-row" }, el("label", { textContent: "Title" }), titleI));
+
+  const bodyTa = el("textarea", { className: "text-input sec-edit-ta", placeholder: "## Heading\nBody text…" });
+  form.append(el("div", { className: "af-row" }, el("label", { textContent: "First section (markdown)" }), bodyTa));
+  autoGrow(bodyTa);
+
+  const errLine = el("div", { className: "state-err" });
+  errLine.hidden = true;
+  const cancel = el("button", { className: "btn af-cancel", type: "button", textContent: "Cancel" });
+  const commit = el("button", { className: "btn btn--primary af-commit", type: "button", textContent: "Create memory" });
+  form.append(errLine, el("div", { className: "af-actions" }, cancel, commit));
+
+  const showErr = (m) => { errLine.textContent = m; errLine.hidden = false; };
+  wireAddToggle(toggle, form);
+  commit.addEventListener("click", async () => {
+    errLine.hidden = true;
+    const category = catI.value.trim(), slug = slugI.value.trim(), title = titleI.value.trim();
+    // The API derives the document title from the content's first H1 (else the
+    // slug), so fold the Title field in as a leading heading; the first-section
+    // markdown follows. There is no separate title field on the endpoint.
+    const bodyText = bodyTa.value.trim();
+    const content = title ? `# ${title}\n\n${bodyText}` : bodyText;
+    if (!category || !slug) { showErr("Category and slug are required."); return; }
+    if (!content) { showErr("Add a title or some content."); return; }
+    if (!tenantSel.value) { showErr("No tenant you can write to is selected."); return; }
+    commit.disabled = true;
+    try {
+      const created = await apiFetch("/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: tenantSel.value,
+          category,
+          subcategory: subI.value.trim(),
+          slug,
+          content,
+        }),
+      });
+      form.hidden = true; toggle.classList.remove("open");
+      if (created && created.id) showDocument(created.id);
+      else renderMemories().catch(showError);
+    } catch (err) {
+      commit.disabled = false;
+      showErr(err.status === 409
+        ? "A similar memory already exists in that tenant."
+        : "Create failed: " + err.message);
+    }
+  });
+
+  return [head, form];
 }
 
 // renderMemFilterChip fills #mem-filter-chip with the "viewing: <tenant> ✕" chip
@@ -717,18 +1026,31 @@ function renderTabBar() {
   if (!bar) return;
   bar.replaceChildren();
   const h = location.hash;
-  const tabs = [{ label: "Memories", hash: "memories", active: h === "" || h === "#memories" }];
+  const tabs = [{ label: "Memories", view: "memories", hash: "memories", active: h === "" || h === "#memories" }];
   if (isAdmin || writableTenants.length) {
-    tabs.push({ label: "Tenants", hash: "tenants", active: h === "#tenants" || h.startsWith("#tenants/") });
+    tabs.push({ label: "Tenants", view: "tenants", hash: "tenants", active: h === "#tenants" || h.startsWith("#tenants/") });
   }
   for (const t of tabs) {
-    const b = el("button", { className: "tab-link" + (t.active ? " active" : ""), type: "button", textContent: t.label });
+    const b = el("button", { type: "button", textContent: t.label, className: t.active ? "active" : "" });
+    b.dataset.view = t.view;
     b.addEventListener("click", () => { location.hash = t.hash; });
     bar.append(b);
   }
-  const connect = el("button", { className: "tab-link tab-connect" + (h === "#connect" ? " active" : ""), type: "button", textContent: "Connect" });
+
+  // Inject the admin role badge + the Connect ghost-btn into .top-right, left of
+  // the static theme button. Rebuilt each route; clear prior injections first.
+  const tr = document.querySelector(".top-right");
+  if (!tr) return;
+  tr.querySelectorAll(".role, .ghost-btn").forEach((n) => n.remove());
+  const themeBtn = document.getElementById("theme");
+  if (isAdmin) {
+    const role = el("span", { className: "role", title: "You have system-admin privileges" });
+    role.append(icon(ICON_SHIELD), document.createTextNode("system admin"));
+    tr.insertBefore(role, themeBtn);
+  }
+  const connect = el("button", { className: "ghost-btn", type: "button", textContent: "Connect", title: "Connection instructions" });
   connect.addEventListener("click", () => { location.hash = "connect"; });
-  bar.append(connect);
+  tr.insertBefore(connect, themeBtn);
 }
 
 // ── Connect an MCP client (Task 5 / D5) ───────────────────────────────────────
@@ -762,37 +1084,56 @@ function renderConnect() {
   navStack.length = 0; // root-ish view — clear history
   view.replaceChildren();
 
-  const hdr = el("div", { className: "cat-hdr" });
-  const back = el("button", { textContent: "←", className: "back-btn", title: "Back to browse", type: "button" });
+  const back = el("button", { className: "back", type: "button", textContent: "← Memories" });
   back.addEventListener("click", () => { location.hash = ""; });
-  hdr.append(back, el("h2", { textContent: "Connect an MCP client" }));
-  view.append(hdr);
+  view.append(back);
+  view.append(el("div", { className: "view-head" }, el("h1", { textContent: "Connect a client" })));
+  view.append(el("p", { className: "lede", textContent: "Point any MCP client at this server. Use OAuth for interactive work — it opens a browser once and needs no secret. Use an API key for headless agents and CI." }));
 
   const url = mcpURL();
-  const sec = el("section");
-  sec.append(el("p", { className: "meta", textContent: "Point your MCP client at this server:" }));
-  sec.append(el("code", { className: "modal-key", textContent: url }));
+  view.append(el("div", { className: "endpoint" },
+    el("span", { className: "eyebrow", textContent: "mcp endpoint" }),
+    el("code", { textContent: url }),
+    el("span", { className: "spacer" }),
+    copyIdBtn(url, "copy", "Copy endpoint")));
 
-  sec.append(el("h3", { textContent: "With OAuth (recommended)" }));
-  sec.append(el("p", {
-    className: "meta",
-    textContent: "Clients that support OAuth need only the URL — they complete the login flow themselves, with no static token to manage. Field names vary slightly by client (type/transport).",
-  }));
-  sec.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(url, false) }));
+  const seg = el("div", { className: "segmented", id: "connect-method" },
+    el("button", { type: "button", className: "active", textContent: "OAuth" }),
+    el("button", { type: "button", textContent: "API key" }));
+  view.append(seg);
 
-  sec.append(el("h3", { textContent: "With an API key" }));
-  const keyPara = isAdmin
-    ? el("p", { className: "meta" },
-        "For clients (or CI) that don't do OAuth, use a static Bearer key. Issue one from ",
-        el("a", { href: "#tenants", textContent: "Tenants" }),
-        " → a personal tenant → \"Issue key\", then drop it into the ", el("code", { textContent: "Authorization" }), " header:")
-    : el("p", { className: "meta" },
-        "For clients (or CI) that don't do OAuth, use a static Bearer key (ask an admin to issue one) in the ",
-        el("code", { textContent: "Authorization" }), " header:");
-  sec.append(keyPara);
-  sec.append(el("pre", { className: "code-block", textContent: mcpConfigJSON(url, true) }));
+  // OAuth
+  const oauthBody = el("div", { className: "method-body" });
+  oauthBody.dataset.method = "oauth";
+  oauthBody.append(el("p", {}, "Add this to your client config (e.g. ", el("code", { textContent: "~/.claude.json" }), "). On first call the client opens a browser to authorize this instance."));
+  const oauthWrap = el("div", { className: "codewrap" });
+  oauthWrap.append(copyCodeBtn(), el("pre", {}, el("code", { textContent: mcpConfigJSON(url, false) })));
+  oauthBody.append(oauthWrap);
+  const oauthCallout = el("div", { className: "callout" }, icon(ICON_INFO));
+  oauthCallout.append(el("span", {}, el("b", { textContent: "First time here? " }), document.createTextNode("Authorizing provisions your personal tenant automatically — no setup needed. You land on it as owner.")));
+  oauthBody.append(oauthCallout);
+  view.append(oauthBody);
 
-  view.append(sec);
+  // API key
+  const keyBody = el("div", { className: "method-body" });
+  keyBody.dataset.method = "key";
+  keyBody.hidden = true;
+  const keyLink = el("a", { textContent: "Tenants → API keys" });
+  keyLink.addEventListener("click", () => { location.hash = "tenants"; });
+  keyBody.append(el("p", {}, "Create a key under ", keyLink, ", then send it as a bearer token. The key is scoped to the tenant it was minted on."));
+  const keyWrap = el("div", { className: "codewrap" });
+  keyWrap.append(copyCodeBtn(), el("pre", {}, el("code", { textContent: mcpConfigJSON(url, true) })));
+  keyBody.append(keyWrap);
+  const keyCallout = el("div", { className: "callout" }, icon(ICON_SHIELD));
+  keyCallout.append(el("span", { textContent: "Treat the key like a password — it grants full read/write on its tenant. Rotate it from the same panel if it leaks." }));
+  keyBody.append(keyCallout);
+  view.append(keyBody);
+
+  initRockers(seg, (btn) => {
+    const m = btn.textContent.trim().toLowerCase().includes("oauth") ? "oauth" : "key";
+    view.querySelectorAll(".method-body").forEach((mb) => { mb.hidden = mb.dataset.method !== m; });
+  });
+  placeThumbsIn(view, false);
 }
 
 // ── Tenants tab ───────────────────────────────────────────────────────────────
@@ -814,84 +1155,123 @@ async function renderTenants() {
   for (const t of rows) tenantCache[t.id] = t;
   view.replaceChildren();
 
-  view.append(el("div", { className: "cat-hdr" }, el("h2", { textContent: "Tenants" })));
-
-  const subtabs = el("div", { id: "tenant-subtabs" });
-  for (const ty of ["shared", "personal"]) {
-    const b = el("button", { className: "tab", type: "button", textContent: ty[0].toUpperCase() + ty.slice(1) });
-    b.setAttribute("aria-selected", ty === tenantsType ? "true" : "false");
-    b.addEventListener("click", () => { if (ty !== tenantsType) { tenantsType = ty; renderTenants().catch(showError); } });
-    subtabs.append(b);
+  const head = el("div", { className: "view-head" }, el("h1", { textContent: "Tenants" }));
+  view.append(head);
+  if (isAdmin) {
+    const toggle = el("button", { className: "add-toggle", type: "button", textContent: "+ new tenant" });
+    head.append(toggle);
+    view.append(newTenantTypeForm(toggle));
   }
-  view.append(subtabs);
 
-  if (isAdmin) view.append(newTenantTypeForm());
+  // Personal ⇄ Shared scope rocker (replaces the old #tenant-subtabs)
+  const scope = el("div", { className: "segmented", id: "tenant-scope" },
+    el("button", { type: "button", className: tenantsType === "personal" ? "active" : "", textContent: "Personal" }),
+    el("button", { type: "button", className: tenantsType === "shared" ? "active" : "", textContent: "Shared" }));
+  view.append(scope);
 
-  const filter = el("input", { className: "admin-input tenant-filter", type: "text", placeholder: "filter by name or UUID…", autocomplete: "off" });
+  // client-side live filter (name substring / UUID substring), preserved
+  const filter = el("input", { className: "text-input tenant-filter", type: "text", placeholder: "filter by name or UUID…", autocomplete: "off" });
   view.append(el("div", { className: "admin-form-fields" }, filter));
 
-  const list = el("ul", { className: "doc-list" });
-  view.append(list);
+  const grid = el("div", { className: "tenant-grid" });
+  view.append(grid);
 
-  // draw filters the already-fetched rows live (name substring, case-insensitive,
-  // or UUID substring) — no submit button, no re-fetch per keystroke.
   function draw() {
     const f = filter.value.trim().toLowerCase();
-    list.replaceChildren();
+    grid.replaceChildren();
     const shown = rows.filter((t) =>
       !f || (t.name || "").toLowerCase().includes(f) || (t.id || "").toLowerCase().includes(f));
     if (!shown.length) {
-      list.append(el("li", { className: "state-msg", textContent: tenantsType === "personal" ? "No personal tenants." : "No tenants." }));
+      grid.append(el("p", { className: "state-msg", textContent: tenantsType === "personal" ? "No personal tenants." : "No tenants." }));
       return;
     }
     for (const t of shown) {
-      const sw = el("span", { className: "tenant-swatch" });
-      sw.style.background = tenantColor(t.id);
-      const item = el("li", { className: "doc-item" },
-        el("h3", {}, sw, document.createTextNode(t.name || "(unnamed)")),
-        el("div", { className: "doc-meta", textContent: [t.type, t.relation, t.id].filter(Boolean).join(" · ") }),
-      );
-      item.addEventListener("click", () => { location.hash = "tenants/" + t.id; });
-      list.append(item);
+      const card = el("div", { className: "tenant-card" });
+      card.style.setProperty("--tc", tenantColor(t.id));
+      card.append(
+        el("span", { className: "dot" }),
+        el("div", {},
+          el("div", { className: "nm", textContent: t.name || "(unnamed)" }),
+          el("div", { className: "sub", textContent: [t.relation, t.type].filter(Boolean).join(" · ") })),
+        el("span", { className: "spacer" }),
+        el("span", { className: t.type === "shared" ? "pill pill--shared" : "pill pill--personal", textContent: t.type || "" }));
+      card.addEventListener("click", () => { location.hash = "tenants/" + t.id; });
+      grid.append(card);
     }
   }
   filter.addEventListener("input", draw);
   draw();
+
+  initRockers(scope, (btn) => {
+    const ty = btn.textContent.trim().toLowerCase() === "shared" ? "shared" : "personal";
+    if (ty !== tenantsType) { tenantsType = ty; renderTenants().catch(showError); }
+  });
+  placeThumbsIn(view, false);
 }
 
-// newTenantTypeForm — admin-only create affordance on the Tenants tab (name +
-// type → POST /api/admin/tenants). Distinct from the Admin tab's create form,
-// which also collects an owner email.
-function newTenantTypeForm() {
-  const wrap = el("div", { className: "admin-form" });
-  const toggle = el("button", { className: "sec-btn", type: "button", textContent: "+ New tenant" });
-  const form = el("form", { className: "admin-form-fields" });
+// newTenantTypeForm — admin-only inline create .addform on the Tenants tab: a
+// type rocker (personal/shared, pre-picked from the active scope), a name, and
+// an owner-email row shown only for personal tenants. POST /api/admin/tenants
+// (body { name, type }, plus owner_email when a personal owner is provided).
+function newTenantTypeForm(toggle) {
+  const form = el("div", { className: "addform" });
   form.hidden = true;
-  const name = el("input", { className: "admin-input", type: "text", placeholder: "name", required: true });
-  const type = el("select", { className: "admin-input" },
-    el("option", { value: "shared", textContent: "shared" }),
-    el("option", { value: "personal", textContent: "personal" }),
-  );
-  const submit = el("button", { className: "sec-btn sec-btn-primary", type: "submit", textContent: "Create" });
-  form.append(name, type, submit);
-  toggle.addEventListener("click", () => { form.hidden = !form.hidden; if (!form.hidden) name.focus(); });
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    submit.disabled = true;
+
+  const typeSeg = el("div", { className: "segmented seg-inline", id: "new-tenant-type" },
+    el("button", { type: "button", className: "active", textContent: "personal" }),
+    el("button", { type: "button", textContent: "shared" }));
+  form.append(el("div", { className: "af-row" }, el("label", { textContent: "Type" }), typeSeg));
+
+  const nameI = el("input", { className: "text-input", placeholder: "e.g. jdoe, platform" });
+  form.append(el("div", { className: "af-row" }, el("label", { textContent: "Name" }), nameI));
+
+  const emailRow = el("div", { className: "af-row" });
+  emailRow.dataset.type = "personal";
+  const emailI = el("input", { className: "text-input", type: "email", placeholder: "person@example.com" });
+  emailRow.append(
+    el("label", {}, document.createTextNode("Owner email "), el("span", { className: "desc", textContent: "— whom this personal tenant is for; they become its owner (one per tenant)" })),
+    emailI);
+  form.append(emailRow);
+
+  const cancel = el("button", { className: "btn af-cancel", type: "button", textContent: "Cancel" });
+  const commit = el("button", { className: "btn btn--primary af-commit", type: "button", textContent: "Create tenant" });
+  form.append(el("div", { className: "af-actions" }, cancel, commit));
+
+  const currentType = () => (segActive(typeSeg) === "shared" ? "shared" : "personal");
+  const applyType = (t) => { emailRow.hidden = t !== "personal"; };
+
+  wireAddToggle(toggle, form, { onOpen: () => {
+    const scope = document.querySelector("#tenant-scope button.active");
+    const t = scope && scope.textContent.trim().toLowerCase() === "shared" ? "shared" : "personal";
+    typeSeg.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.textContent.trim().toLowerCase() === t));
+    applyType(t);
+    placeThumb(typeSeg, false);
+  } });
+  initRockers(typeSeg, (btn) => applyType(btn.textContent.trim().toLowerCase()));
+  applyType(currentType());
+
+  commit.addEventListener("click", async () => {
+    const name = nameI.value.trim();
+    const type = currentType();
+    if (!name) { alert("Name is required."); return; }
+    commit.disabled = true;
+    const body = { name, type };
+    if (type === "personal" && emailI.value.trim()) body.owner_email = emailI.value.trim();
     try {
       await apiFetch("/admin/tenants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.value.trim(), type: type.value }),
+        body: JSON.stringify(body),
       });
+      form.hidden = true; toggle.classList.remove("open");
       renderTenants();
     } catch (err) {
-      submit.disabled = false;
+      commit.disabled = false;
       alert("Create tenant failed: " + err.message);
     }
   });
-  wrap.append(toggle, form);
-  return wrap;
+
+  return form;
 }
 
 // lookupTenant resolves a tenant by id — from the cache first, else by fetching
@@ -922,41 +1302,77 @@ async function renderTenantPanel(id) {
   }
   view.replaceChildren();
 
-  const hdr = el("div", { className: "doc-hdr" });
-  const back = el("button", { className: "back-btn", type: "button", textContent: "←", title: "Back to tenants" });
+  const back = el("button", { className: "back", type: "button", textContent: "← Tenants" });
   back.addEventListener("click", () => { location.hash = "tenants"; });
-  hdr.append(back, el("h1", { textContent: t.name || "(unnamed)" }), tenantBadge(t.id, t.type));
-  view.append(hdr);
-  view.append(el("div", { className: "meta", textContent: [t.type, t.relation, t.id].filter(Boolean).join(" · ") }));
+  view.append(back);
 
-  const viewMem = el("button", { className: "sec-btn", type: "button", textContent: "View this tenant's memories" });
+  const panel = el("div", { className: "panel" });
+
+  const phead = el("div", { className: "panel-head" });
+  phead.style.setProperty("--tc", tenantColor(t.id));
+  const viewMem = el("button", { className: "btn", type: "button", textContent: "View memories" });
   viewMem.addEventListener("click", () => { memFilter = { id: t.id, name: t.name, type: t.type }; location.hash = "memories"; });
-  view.append(el("div", { className: "admin-form-fields" }, viewMem));
+  phead.append(
+    el("span", { className: "dot" }),
+    el("h2", { textContent: t.name || "(unnamed)" }),
+    el("span", { className: "spacer" }),
+    viewMem,
+    copyIdBtn(t.id, shortId(t.id), "Copy full tenant ID"));
+  panel.append(phead);
+
+  // Settings rockers: self-service lock + enforcement toggles. tenantSettingsSection
+  // loads current values and persists changes (reveals only to a manager/admin).
+  panel.append(tenantSettingsSection(t));
 
   if (t.type === "personal") {
     // Personal: API keys + Import. No member management (single-owner tenant).
     let keys;
     try { keys = (await apiFetch(`/admin/tenants/${id}/keys`)) || []; }
-    catch (err) { view.append(el("p", { className: "state-msg state-err", textContent: "Failed to load keys: " + err.message })); }
-    if (keys) view.append(keysSection(t, keys, () => renderTenantPanel(id)));
-    view.append(importSection(id));
+    catch (err) { keys = null; panel.append(el("div", { className: "section" }, el("p", { className: "state-msg state-err", textContent: "Failed to load keys: " + err.message }))); }
+    if (keys) panel.append(keysSection(t, keys, () => renderTenantPanel(id)));
+    panel.append(importSection(id));
   } else {
     // Shared: Members/ACL + per-doc guest sharing + Import. No API keys (refused
     // for shared tenants by the backend).
-    view.append(tenantMembersSection(id));
-    view.append(aclDocumentSection());
-    view.append(importSection(id));
+    panel.append(tenantMembersSection(id));
+    panel.append(aclDocumentSection());
+    panel.append(importSection(id));
   }
+
+  view.append(panel);
+  initRockers(view);          // wire settings + addform rockers in this panel
+  placeThumbsIn(view, false); // position the visible ones
 }
 
 // tenantMembersSection — the tenant-membership grants (viewer/member/manager)
 // for a fixed tenant id, extracted from the old renderAcl so it renders bound to
 // the route tenant with no dropdown. Same /acl/tenants/{id}/grants endpoints.
 function tenantMembersSection(tenantID) {
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "Members" }));
+  const sec = el("div", { className: "section" });
+  const eyebrow = el("span", { className: "eyebrow", textContent: "members" });
+  const toggle = el("button", { className: "add-toggle", type: "button", textContent: "+ invite" });
+  sec.append(el("div", { className: "sec-head-row" }, eyebrow, toggle));
+
+  // invite addform (email + role rocker) → POST grant
+  const form = el("div", { className: "addform" });
+  form.hidden = true;
+  const emailI = el("input", { className: "text-input", type: "email", placeholder: "name@example.com" });
+  const roleSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", className: "active", textContent: "viewer" }),
+    el("button", { type: "button", textContent: "member" }));
+  if (canGrantManager()) roleSeg.append(el("button", { type: "button", textContent: "manager" }));
+  form.append(el("div", { className: "af-inline" },
+    el("div", { className: "af-row" }, el("label", { textContent: "Email" }), emailI),
+    el("div", { className: "af-row" }, el("label", { textContent: "Role" }), roleSeg)));
+  const cancel = el("button", { className: "btn af-cancel", type: "button", textContent: "Cancel" });
+  const commit = el("button", { className: "btn btn--primary af-commit", type: "button", textContent: "Send invite" });
+  form.append(el("div", { className: "af-actions" }, cancel, commit));
+  sec.append(form);
+  wireAddToggle(toggle, form);
+
   const body = el("div");
   sec.append(body);
+
   async function load() {
     body.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
     let grants;
@@ -967,58 +1383,131 @@ function tenantMembersSection(tenantID) {
       return;
     }
     body.replaceChildren();
-    body.append(tenantGrantsTable(tenantID, grants || [], load));
-    body.append(tenantGrantForm(tenantID, load));
+    const list = grants || [];
+    eyebrow.textContent = "members · " + list.length;
+    if (!list.length) { body.append(el("p", { className: "meta", textContent: "no members" })); return; }
+    for (const g of list) body.append(memberRow(tenantID, g, load));
   }
+
+  commit.addEventListener("click", async () => {
+    const email = emailI.value.trim();
+    if (!email) { alert("Email is required."); return; }
+    commit.disabled = true;
+    const relation = segActive(roleSeg) || "member";
+    try {
+      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, relation }),
+      });
+      emailI.value = ""; form.hidden = true; toggle.classList.remove("open");
+      await load();
+    } catch (err) {
+      alert("Invite failed: " + err.message);
+    } finally {
+      commit.disabled = false;
+    }
+  });
+
   load().catch(showError);
   return sec;
 }
 
-// importSection — the upload/poll import flow with the target tenant fixed to a
-// passed id (extracted from the old renderImport; no tenant picker). Same
-// /import + /import/{id} endpoints.
-function importSection(tenantID) {
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "Import" }));
-  sec.append(el("p", {
-    className: "meta",
-    textContent: "Upload a .zip archive of memory files. Files must sit at the archive's " +
-      "ROOT (category/subcategory/slug.md or category/slug.md) — a wrapping top-level " +
-      "directory makes every path parse as misc/<path> instead of its real category.",
-  }));
+// memberRow renders one tenant grant as a .member-row: avatar (initials, tinted
+// via --av), name/email, role tag (mgr accent for managers), and a hover Remove
+// (DELETE /acl/tenants/{id}/grants).
+function memberRow(tenantID, g, onRevoked) {
+  const email = g.email || "";
+  const local = email.replace(/@.*/, "");
+  const avatar = el("span", { className: "avatar", textContent: (local.slice(0, 2) || "?").toUpperCase() });
+  avatar.style.setProperty("--av", tenantColor(email || g.relation));
+  const who = el("div", { className: "who" },
+    el("div", { className: "nm", textContent: local || email }),
+    el("small", { textContent: email }));
+  const roleTag = el("span", { className: "role-tag" + (g.relation === "manager" ? " mgr" : ""), textContent: g.relation || "" });
+  const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Remove" });
+  revoke.addEventListener("click", async () => {
+    if (!confirm(`Revoke ${g.relation} for ${email}?`)) return;
+    revoke.disabled = true;
+    try {
+      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: g.email, relation: g.relation }),
+      });
+      await onRevoked();
+    } catch (err) {
+      revoke.disabled = false;
+      alert("Revoke failed: " + err.message);
+    }
+  });
+  return el("div", { className: "member-row" }, avatar, who, roleTag, el("div", { className: "row-actions" }, revoke));
+}
 
-  const form = el("form", { className: "admin-form-fields" });
-  const fileInput = el("input", { className: "admin-input", type: "file", accept: ".zip", required: true });
-  const submit = el("button", { textContent: "Upload", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(fileInput, submit);
+// importSection — the upload/poll import flow (dropzone) with the target tenant
+// fixed to a passed id. Same /import + /import/{id} endpoints (multipart
+// "archive" + "tenant_id").
+function importSection(tenantID) {
+  const sec = el("div", { className: "section" });
+  sec.append(el("span", { className: "eyebrow", textContent: "import archive" }));
+
+  const fileInput = el("input", { type: "file", accept: ".zip" });
+  fileInput.hidden = true;
+  const dz = el("label", { className: "dropzone" },
+    icon(ICON_UPLOAD),
+    el("span", { className: "dz-hint" }, el("b", { textContent: "Choose a file" }), document.createTextNode(" or drop it here")),
+    el("span", { className: "dz-sub", textContent: "markdown archive · .zip" }),
+    fileInput);
+  sec.append(dz);
+
+  sec.append(el("div", { className: "import-note" }, icon(ICON_INFO),
+    el("span", {},
+      document.createTextNode("Entries are markdown files keyed by path: "),
+      el("code", { textContent: "category / subcategory / slug.md" }),
+      document.createTextNode(" (subcategory optional). Files must sit at the archive ROOT — a wrapping top-level directory makes every path parse as misc/<path>. A matching document is "),
+      el("b", { textContent: "overwritten" }),
+      document.createTextNode("; new paths are created; documents not in the archive are left as-is."))));
+
+  const importBtn = el("button", { className: "btn btn--primary", type: "button", textContent: "Import" });
+  importBtn.disabled = true;
+  sec.append(importBtn);
 
   const progress = el("div", { className: "import-progress" });
-  let activeTimer = null; // guards against overlapping polls if a second file is uploaded before the first finishes
+  sec.append(progress);
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const file = fileInput.files[0];
-    if (!file) return;
+  let activeTimer = null; // guards against overlapping polls
+  let chosen = null;
+  const dzHint = () => dz.querySelector(".dz-hint");
+  fileInput.addEventListener("change", () => {
+    chosen = fileInput.files[0] || null;
+    importBtn.disabled = !chosen;
+    dzHint().replaceChildren(chosen
+      ? el("b", { textContent: chosen.name })
+      : el("b", { textContent: "Choose a file" }));
+  });
+
+  importBtn.addEventListener("click", async () => {
+    if (!chosen) return;
     if (activeTimer) { clearInterval(activeTimer); activeTimer = null; }
-    submit.disabled = true;
+    importBtn.disabled = true;
     progress.replaceChildren();
     try {
       const body = new FormData();
-      body.append("archive", file);
+      body.append("archive", chosen);
       body.append("tenant_id", tenantID);
       // No Content-Type header: the browser sets the multipart boundary itself.
       const job = await apiFetch("/import", { method: "POST", body });
-      fileInput.value = "";
+      fileInput.value = ""; chosen = null;
+      dzHint().replaceChildren(el("b", { textContent: "Choose a file" }), document.createTextNode(" or drop it here"));
       renderImportProgress(progress, job);
       activeTimer = pollImportJob(progress, job.id, job.tenant_id || tenantID, () => { activeTimer = null; });
     } catch (err) {
       progress.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Upload failed: " + err.message }));
     } finally {
-      submit.disabled = false;
+      importBtn.disabled = !chosen;
     }
   });
 
-  sec.append(form, progress);
   return sec;
 }
 
@@ -1092,77 +1581,104 @@ function pollImportJob(container, id, tenantID, onDone) {
 
 // ── Tenant membership grants (used by tenantMembersSection) ───────────────────
 
-function tenantGrantsTable(tenantID, grants, onRevoked) {
-  const table = el("table", { className: "admin-table" });
-  const thead = el("thead", {}, el("tr", {},
-    el("th", { textContent: "Email" }),
-    el("th", { textContent: "Relation" }),
-    el("th", { textContent: "" }),
-  ));
-  const tbody = el("tbody");
-  for (const g of grants) tbody.append(tenantGrantRow(tenantID, g, onRevoked));
-  table.append(thead, tbody);
-  return grants.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no grants" });
-}
+// tenantSettingsSection renders the enforcement toggles as segmented rockers:
+// the self-service lock (its own lock-glyph row) plus staleness / duplicate-
+// guard / cleanup. NOTE: these are display + client-side UX only — the UI API
+// exposes no persist endpoint for tenant settings (they are administered via the
+// MCP admin tools), so flipping a rocker does not save server-side. Returns a
+// fragment of .section blocks; the caller's initRockers wires the thumbs.
+function tenantSettingsSection(t) {
+  const shared = t.type === "shared";
+  const frag = document.createDocumentFragment();
 
-function tenantGrantRow(tenantID, g, onRevoked) {
-  const tr = el("tr");
-  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
-  revoke.addEventListener("click", async () => {
-    if (!confirm(`Revoke ${g.relation} for ${g.email}?`)) return;
-    revoke.disabled = true;
-    try {
-      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: g.email, relation: g.relation }),
-      });
-      await onRevoked();
-    } catch (err) {
-      revoke.disabled = false;
-      alert("Revoke failed: " + err.message);
-    }
-  });
-  tr.append(
-    el("td", { textContent: g.email || "" }),
-    el("td", { textContent: g.relation || "" }),
-    el("td", { className: "admin-actions" }, revoke),
-  );
-  return tr;
-}
+  // Both sections stay hidden until GET settings confirms the caller may manage
+  // them (a plain member never sees settings).
+  const lockSec = el("div", { className: "section" });
+  lockSec.hidden = true;
+  const lockSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", textContent: "open" }),
+    el("button", { type: "button", textContent: "admin-only" }));
+  lockSec.append(el("div", { className: "toggle-row lock-row" },
+    el("span", { className: "lk" }, icon(ICON_LOCK)),
+    el("div", { className: "lbl" },
+      el("b", { textContent: "Self-service lock" }),
+      el("small", { textContent: shared ? "admin-only: only managers & system admins change settings or make keys" : "who may change settings & create keys on this tenant" })),
+    lockSeg));
+  frag.append(lockSec);
 
-// tenantGrantForm — grant viewer/member/manager on tenantID. The "manager"
-// option is only offered to system admins (canGrantManager) — the grant-
-// ceiling matrix (design.md §6) forbids a plain manager from appointing
-// another manager, and the backend would 403 the attempt anyway.
-function tenantGrantForm(tenantID, onGranted) {
-  const form = el("form", { className: "admin-form-fields" });
-  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
-  const relation = el("select", { className: "admin-input" },
-    el("option", { value: "viewer", textContent: "viewer" }),
-    el("option", { value: "member", textContent: "member" }),
-  );
-  if (canGrantManager()) relation.append(el("option", { value: "manager", textContent: "manager" }));
-  const submit = el("button", { textContent: "Grant", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(el("span", { className: "admin-form-label", textContent: "Grant:" }), email, relation, submit);
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    submit.disabled = true;
+  const enf = el("div", { className: "section" });
+  enf.hidden = true;
+  enf.append(el("span", { className: "eyebrow", textContent: "enforcement" }));
+  const staleSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", textContent: "off" }),
+    el("button", { type: "button", textContent: "advisory" }),
+    el("button", { type: "button", textContent: "hard" }));
+  enf.append(el("div", { className: "toggle-row" },
+    el("div", { className: "lbl" }, document.createTextNode("Staleness mode "), el("small", { textContent: "off · advisory flags stale reads · hard withholds guarded content" })),
+    staleSeg));
+  const dupSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", textContent: "off" }),
+    el("button", { type: "button", textContent: "on" }));
+  enf.append(el("div", { className: "toggle-row" },
+    el("div", { className: "lbl" }, document.createTextNode("Duplicate guard "), el("small", { textContent: "refuse near-duplicate memories on write" })),
+    dupSeg));
+  const cleanSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", textContent: "off" }),
+    el("button", { type: "button", textContent: "on" }));
+  enf.append(el("div", { className: "toggle-row" },
+    el("div", { className: "lbl" }, document.createTextNode("Cleanup scan "), el("small", { textContent: "nightly near-duplicate sweep" })),
+    cleanSeg));
+  const errLine = el("div", { className: "state-err" });
+  errLine.hidden = true;
+  enf.append(errLine);
+  frag.append(enf);
+
+  const setActive = (seg, label) =>
+    seg.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.textContent.trim().toLowerCase() === label));
+  const showErr = (m) => { errLine.textContent = m; errLine.hidden = false; setTimeout(() => { errLine.hidden = true; }, 4000); };
+
+  let current = null; // last saved settings, for optimistic revert-on-error
+
+  function applyState(s) {
+    if (!s) return;
+    setActive(lockSeg, s.effective_self_service_policy === "admin_only" ? "admin-only" : "open");
+    setActive(staleSeg, s.staleness_mode || "off");
+    setActive(dupSeg, s.duplicate_guard ? "on" : "off");
+    setActive(cleanSeg, s.cleanup_scan_enabled ? "on" : "off");
+    placeThumbsIn(lockSec, false);
+    placeThumbsIn(enf, false);
+  }
+  async function save(path, patch) {
     try {
-      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.value.trim(), relation: relation.value }),
-      });
-      email.value = "";
-      await onGranted();
+      current = await apiFetch(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
     } catch (err) {
-      alert("Grant failed: " + err.message);
-    } finally {
-      submit.disabled = false;
+      showErr(err.status === 403 ? "Not allowed to change that here." : "Couldn't save: " + err.message);
+      applyState(current); // revert the rocker to the last saved value
     }
+  }
+
+  // Persist on toggle. The three enforcement toggles hit the self-service settings
+  // surface (manager-level, honoring the self-service lock); the lock itself is
+  // admin-only and goes through the admin tenant patch. initRockers here marks the
+  // rockers ready, so the panel's later global initRockers(view) skips them.
+  initRockers(frag, (btn, seg) => {
+    const val = btn.textContent.trim().toLowerCase();
+    if (seg === staleSeg) save(`/tenants/${t.id}/settings`, { staleness_mode: val });
+    else if (seg === dupSeg) save(`/tenants/${t.id}/settings`, { duplicate_guard: val === "on" });
+    else if (seg === cleanSeg) save(`/tenants/${t.id}/settings`, { cleanup_scan_enabled: val === "on" });
+    else if (seg === lockSeg) save(`/admin/tenants/${t.id}`, { self_service_policy: val === "admin-only" ? "admin_only" : "open" });
   });
-  return form;
+
+  // Load current settings; reveal only to a caller who may manage them. The lock
+  // is admin-only to CHANGE, so non-admins see it read-only (still informative).
+  apiFetch(`/tenants/${t.id}/settings`).then((s) => {
+    current = s;
+    lockSec.hidden = false; enf.hidden = false;
+    applyState(s);
+    if (!isAdmin) { lockSeg.style.pointerEvents = "none"; lockSeg.style.opacity = "0.55"; }
+  }).catch(() => { /* not manageable by this caller: leave settings hidden */ });
+
+  return frag;
 }
 
 // aclDocumentSection renders the per-document guest-sharing section of the
@@ -1175,26 +1691,45 @@ function tenantGrantForm(tenantID, onGranted) {
 // the caller's readable tenants. A plain id input (paste the UUID from the doc's
 // URL or the API) is the simplest picker that doesn't imply a capability the
 // backend doesn't have.
+// aclDocumentSection — per-document guest sharing for a shared tenant. There is
+// no tenant-wide grant-list endpoint (lookup is by document id), so a "+ grant"
+// addform (email + document id + access rocker → POST /acl/documents/{id}/grants)
+// sits above a document-id loader that renders that doc's grants as .grant-rows.
 function aclDocumentSection() {
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "Document sharing" }));
-  sec.append(el("p", {
-    className: "meta",
-    textContent: "Share one document with a specific user, read or write — independent of tenant membership. Enter the document's id (from its URL or the API); lookup is scoped to your own tenant.",
-  }));
+  const sec = el("div", { className: "section" });
+  const toggle = el("button", { className: "add-toggle", type: "button", textContent: "+ grant" });
+  sec.append(el("div", { className: "sec-head-row" },
+    el("span", { className: "eyebrow", textContent: "access beyond members · single documents" }), toggle));
 
-  const idInput = el("input", { className: "admin-input", type: "text", placeholder: "document id" });
-  const loadBtn = el("button", { textContent: "Load", className: "sec-btn", type: "button" });
+  const form = el("div", { className: "addform" });
+  form.hidden = true;
+  const gEmail = el("input", { className: "text-input", type: "email", placeholder: "name@example.com" });
+  const gDocId = el("input", { className: "text-input", placeholder: "document id (from its URL or the API)" });
+  const accessSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", className: "active", textContent: "read" }),
+    el("button", { type: "button", textContent: "read + write" }));
+  form.append(
+    el("div", { className: "af-row" }, el("label", { textContent: "User email" }), gEmail),
+    el("div", { className: "af-row" }, el("label", { textContent: "Document" }), gDocId, el("span", { className: "hint", textContent: "a single document in this tenant, by id" })),
+    el("div", { className: "af-row" }, el("label", { textContent: "Access" }), accessSeg));
+  const gCancel = el("button", { className: "btn af-cancel", type: "button", textContent: "Cancel" });
+  const gCommit = el("button", { className: "btn btn--primary af-commit", type: "button", textContent: "Grant" });
+  form.append(el("div", { className: "af-actions" }, gCancel, gCommit));
+  sec.append(form);
+  wireAddToggle(toggle, form);
+
+  const idInput = el("input", { className: "text-input", type: "text", placeholder: "document id" });
+  const loadBtn = el("button", { className: "btn", type: "button", textContent: "Load grants" });
   sec.append(el("div", { className: "admin-form-fields" },
-    el("span", { className: "admin-form-label", textContent: "Document:" }), idInput, loadBtn,
-  ));
+    el("span", { className: "admin-form-label", textContent: "Document:" }), idInput, loadBtn));
 
   const body = el("div");
   sec.append(body);
 
-  async function load() {
-    const docID = idInput.value.trim();
+  async function load(docID) {
+    docID = (docID || idInput.value).trim();
     if (!docID) return;
+    idInput.value = docID;
     body.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
     let doc, grants;
     try {
@@ -1209,34 +1744,46 @@ function aclDocumentSection() {
     body.replaceChildren();
     const path = [doc.category, doc.subcategory, doc.slug].filter(Boolean).join("/");
     body.append(el("div", { className: "meta", textContent: `${doc.title || doc.slug}  ·  ${path}` }));
-    body.append(documentGrantsTable(docID, grants || [], load));
-    body.append(documentGrantForm(docID, load));
+    const list = grants || [];
+    if (!list.length) { body.append(el("p", { className: "meta", textContent: "no guest grants" })); return; }
+    for (const g of list) body.append(grantRow(docID, doc, g, () => load(docID)));
   }
 
   loadBtn.addEventListener("click", () => load().catch(showError));
-  idInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); load().catch(showError); }
+  idInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); load().catch(showError); } });
+
+  gCommit.addEventListener("click", async () => {
+    const email = gEmail.value.trim(), docID = gDocId.value.trim();
+    if (!email || !docID) { alert("Email and document id are required."); return; }
+    gCommit.disabled = true;
+    const relation = segActive(accessSeg).includes("write") ? "editor" : "viewer";
+    try {
+      await apiFetch(`/acl/documents/${docID}/grants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, relation }),
+      });
+      gEmail.value = ""; form.hidden = true; toggle.classList.remove("open");
+      await load(docID);
+    } catch (err) {
+      alert("Grant failed: " + err.message);
+    } finally {
+      gCommit.disabled = false;
+    }
   });
 
   return sec;
 }
 
-function documentGrantsTable(docID, grants, onRevoked) {
-  const table = el("table", { className: "admin-table" });
-  const thead = el("thead", {}, el("tr", {},
-    el("th", { textContent: "Email" }),
-    el("th", { textContent: "Relation" }),
-    el("th", { textContent: "" }),
-  ));
-  const tbody = el("tbody");
-  for (const g of grants) tbody.append(documentGrantRow(docID, g, onRevoked));
-  table.append(thead, tbody);
-  return grants.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no guest grants" });
-}
-
-function documentGrantRow(docID, g, onRevoked) {
-  const tr = el("tr");
-  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
+// grantRow renders one per-document guest grant as a .grant-row: the subject on
+// the left, the document→access chain on the right, and a hover-overlaid Revoke
+// (DELETE /acl/documents/{id}/grants).
+function grantRow(docID, doc, g, onRevoked) {
+  const prefix = [doc.category, doc.subcategory].filter(Boolean).join("/");
+  const chain = el("span", { className: "gchain" });
+  if (prefix) chain.append(document.createTextNode(prefix + " · "));
+  chain.append(el("b", { textContent: doc.slug || "" }), document.createTextNode(" · "), el("span", { className: "gacc", textContent: g.relation === "editor" ? "rw" : "r" }));
+  const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Revoke" });
   revoke.addEventListener("click", async () => {
     if (!confirm(`Revoke ${g.relation} for ${g.email}?`)) return;
     revoke.disabled = true;
@@ -1252,41 +1799,7 @@ function documentGrantRow(docID, g, onRevoked) {
       alert("Revoke failed: " + err.message);
     }
   });
-  tr.append(
-    el("td", { textContent: g.email || "" }),
-    el("td", { textContent: g.relation || "" }),
-    el("td", { className: "admin-actions" }, revoke),
-  );
-  return tr;
-}
-
-function documentGrantForm(docID, onGranted) {
-  const form = el("form", { className: "admin-form-fields" });
-  const email = el("input", { className: "admin-input", type: "email", placeholder: "email", required: true });
-  const relation = el("select", { className: "admin-input" },
-    el("option", { value: "viewer", textContent: "read (viewer)" }),
-    el("option", { value: "editor", textContent: "write (editor)" }),
-  );
-  const submit = el("button", { textContent: "Share", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(el("span", { className: "admin-form-label", textContent: "Share with:" }), email, relation, submit);
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    submit.disabled = true;
-    try {
-      await apiFetch(`/acl/documents/${docID}/grants`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.value.trim(), relation: relation.value }),
-      });
-      email.value = "";
-      await onGranted();
-    } catch (err) {
-      alert("Share failed: " + err.message);
-    } finally {
-      submit.disabled = false;
-    }
-  });
-  return form;
+  return el("div", { className: "grant-row" }, el("span", { className: "subj", textContent: g.email || "" }), chain, el("div", { className: "row-actions" }, revoke));
 }
 
 // wrapScroll — horizontal-scroll container so wide tables never scroll the page.
@@ -1295,60 +1808,100 @@ function wrapScroll(node) {
 }
 
 function keysSection(t, keys, refresh) {
-  refresh = refresh || (() => renderTenantPanel(t.id)); // callers pass an explicit refresh; default re-renders the tenant panel
-  const sec = el("section", { className: "admin-section" });
-  sec.append(el("h2", { textContent: "API keys" }));
+  refresh = refresh || (() => renderTenantPanel(t.id)); // default re-renders the tenant panel
+  const sec = el("div", { className: "section" });
+  const toggle = el("button", { className: "add-toggle", type: "button", textContent: "+ create key" });
+  sec.append(el("div", { className: "sec-head-row" }, el("span", { className: "eyebrow", textContent: "api keys" }), toggle));
 
-  const table = el("table", { className: "admin-table" });
-  const thead = el("thead", {}, el("tr", {},
-    el("th", { textContent: "Label" }),
-    el("th", { textContent: "Prefix" }),
-    el("th", { textContent: "Created" }),
-    el("th", { textContent: "Last used" }),
-    el("th", { textContent: "Expires" }),
-    el("th", { textContent: "Status" }),
-    el("th", { textContent: "" }),
-  ));
-  const tbody = el("tbody");
-  for (const k of keys) tbody.append(keyRow(t, k, refresh));
-  table.append(thead, tbody);
-  sec.append(keys.length ? wrapScroll(table) : el("p", { className: "meta", textContent: "no keys" }));
+  // create addform: .key-config collects label/TTL; .key-create swaps in the
+  // .key-reveal that shows the plaintext exactly once.
+  const form = el("div", { className: "addform" });
+  form.hidden = true;
+  const labelI = el("input", { className: "text-input", placeholder: "e.g. laptop, ci" });
+  const ttlI = el("input", { className: "text-input", type: "number", min: "1", placeholder: "TTL days (optional)" });
+  const kcCancel = el("button", { className: "btn af-cancel", type: "button", textContent: "Cancel" });
+  const kcCreate = el("button", { className: "btn btn--primary key-create", type: "button", textContent: "Create key" });
+  const cfg = el("div", { className: "key-config" },
+    el("div", { className: "af-row" }, el("label", { textContent: "Label" }), labelI, el("span", { className: "hint", textContent: "names the key so you can tell them apart later" })),
+    el("div", { className: "af-row" }, el("label", { textContent: "TTL (days)" }), ttlI),
+    el("div", { className: "af-actions" }, kcCancel, kcCreate));
+  form.append(cfg);
 
-  const form = el("form", { className: "admin-form-fields" });
-  const label = el("input", { className: "admin-input", type: "text", placeholder: "label", required: true });
-  const ttl = el("input", { className: "admin-input admin-input-num", type: "number", min: "1", placeholder: "TTL days (optional)" });
-  const submit = el("button", { textContent: "Issue key", className: "sec-btn sec-btn-primary", type: "submit" });
-  form.append(el("span", { className: "admin-form-label", textContent: "Issue key:" }), label, ttl, submit);
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    submit.disabled = true;
-    const body = { label: label.value.trim() };
-    if (ttl.value) body.expires_in_days = parseInt(ttl.value, 10);
+  // The secret shows once: it lives only in this closure and the visible code
+  // node — never in a data-* attribute, sessionStorage, or elsewhere.
+  let secret = null;
+  const secretCode = el("code", { textContent: "" });
+  const copyBtn = el("button", { className: "copy-id", type: "button", title: "Copy key" },
+    el("span", { className: "idtext", textContent: "copy" }), icon(ICON_COPY));
+  const doneBtn = el("button", { className: "btn btn--primary af-commit", type: "button", textContent: "Done" });
+  const reveal = el("div", { className: "key-reveal" },
+    el("div", { className: "af-title", textContent: "copy it now — shown once" }),
+    el("div", { className: "kv" }, secretCode, copyBtn),
+    el("div", { className: "warn-line" }, icon(ICON_WARN), document.createTextNode("Store it in your secret manager — you won't be able to see it again. Rotate to replace.")),
+    el("div", { className: "af-actions" }, doneBtn));
+  reveal.hidden = true;
+  form.append(reveal);
+  sec.append(form);
+  wireAddToggle(toggle, form);
+
+  // key list
+  const list = el("div");
+  sec.append(list);
+  if (!keys.length) list.append(el("p", { className: "meta", textContent: "no keys" }));
+  else for (const k of keys) list.append(keyRow(t, k, refresh));
+
+  copyBtn.addEventListener("click", async () => {
+    if (!secret) return;
+    try { await navigator.clipboard.writeText(secret); } catch (e) { /* clipboard blocked */ }
+    const tx = copyBtn.querySelector(".idtext");
+    tx.textContent = "copied ✓"; copyBtn.classList.add("copied");
+    setTimeout(() => { tx.textContent = "copy"; copyBtn.classList.remove("copied"); }, 1200);
+  });
+  kcCreate.addEventListener("click", async () => {
+    const label = labelI.value.trim();
+    if (!label) { alert("Label is required."); return; }
+    kcCreate.disabled = true;
+    const body = { label };
+    if (ttlI.value) body.expires_in_days = parseInt(ttlI.value, 10);
     try {
       const result = await apiFetch(`/admin/tenants/${t.id}/keys`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      showKeyModal(result); // plaintext shown once; modal outlives the view refresh below
-      refresh();
+      secret = (result && result.key) || "";
+      secretCode.textContent = secret;
+      cfg.hidden = true; reveal.hidden = false;
     } catch (err) {
-      submit.disabled = false;
+      kcCreate.disabled = false;
       alert("Issue key failed: " + err.message);
     }
   });
-  sec.append(form);
+  doneBtn.addEventListener("click", () => {
+    secret = null; secretCode.textContent = ""; // drop the plaintext before rebuilding
+    form.hidden = true; toggle.classList.remove("open");
+    refresh();
+  });
+
   return sec;
 }
 
 function keyRow(t, k, refresh) {
-  refresh = refresh || (() => renderTenantPanel(t.id)); // keysSection always passes an explicit refresh; safe default
-
-  const tr = el("tr", { className: k.revoked_at ? "admin-key-revoked" : "" });
+  refresh = refresh || (() => renderTenantPanel(t.id)); // safe default
   const revoked = !!k.revoked_at;
-  const status = revoked ? `revoked ${fmtDate(k.revoked_at)}` : "active";
+  const row = el("div", { className: "key-row" + (revoked ? " revoked" : "") });
 
-  const rotate = el("button", { textContent: "Rotate", className: "sec-btn", type: "button" });
+  const label = el("span", { className: "k" }, el("b", { textContent: k.prefix || "key" }));
+  if (k.label) label.append(document.createTextNode(" · " + k.label));
+  row.append(label);
+
+  if (revoked) {
+    row.append(el("span", { className: "pill pill--danger", textContent: "revoked " + (fmtDate(k.revoked_at) || "") }));
+    row.append(el("div", { className: "row-actions" }));
+    return row;
+  }
+
+  const rotate = el("button", { className: "btn", type: "button", textContent: "Rotate" });
   rotate.addEventListener("click", async () => {
     const g = prompt("Rotate key. Optional grace period in hours (blank = none):", "");
     if (g === null) return; // cancelled
@@ -1369,8 +1922,7 @@ function keyRow(t, k, refresh) {
       alert("Rotate failed: " + err.message);
     }
   });
-
-  const revoke = el("button", { textContent: "Revoke", className: "sec-btn sec-btn-danger", type: "button" });
+  const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Revoke" });
   revoke.addEventListener("click", async () => {
     if (!confirm(`Revoke key "${k.label || ""}" (${k.prefix || ""})?`)) return;
     revoke.disabled = true;
@@ -1382,20 +1934,8 @@ function keyRow(t, k, refresh) {
       alert("Revoke key failed: " + err.message);
     }
   });
-
-  const actions = el("td", { className: "admin-actions" });
-  if (!revoked) actions.append(rotate, revoke);
-
-  tr.append(
-    el("td", { textContent: k.label || "" }),
-    el("td", { textContent: k.prefix || "" }),
-    el("td", { textContent: fmtDate(k.created_at) || "—" }),
-    el("td", { textContent: fmtDate(k.last_used_at) || "—" }),
-    el("td", { textContent: fmtDate(k.expires_at) || "—" }),
-    el("td", { textContent: status }),
-    actions,
-  );
-  return tr;
+  row.append(el("div", { className: "row-actions" }, rotate, revoke));
+  return row;
 }
 
 // showKeyModal displays a freshly minted plaintext key exactly once. The secret
@@ -1449,6 +1989,7 @@ function showKeyModal(result) {
       return;
     }
     wireSearch();
+    wireChrome();
     await checkAdmin();
     await checkWritable();
     renderTabBar();
