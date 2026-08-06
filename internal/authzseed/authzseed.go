@@ -51,6 +51,19 @@ func TenantAdmin(tenantID uuid.UUID, subjectID string) authz.Tuple {
 	}
 }
 
+// TenantOwner returns tenant:<T>#owner@user:<subjectID>, the personal-tenant
+// owner grant. An owner folds up into manager (owner ⇒ manager) but not admin,
+// so it confers full self-management without system-admin reach.
+func TenantOwner(tenantID uuid.UUID, subjectID string) authz.Tuple {
+	return authz.Tuple{
+		ObjectType:  authz.TypeTenant,
+		ObjectID:    tenantID.String(),
+		Relation:    authz.RelOwner,
+		SubjectType: authz.TypeUser,
+		SubjectID:   subjectID,
+	}
+}
+
 // TenantManager returns tenant:<T>#manager@user:<subjectID>.
 func TenantManager(tenantID uuid.UUID, subjectID string) authz.Tuple {
 	return authz.Tuple{
@@ -150,7 +163,7 @@ func APIKeySubjectID(k models.APIKey) string {
 // store, so it can run inside the migration tx (pass authz.PostgresStore(tx), tx).
 //
 //   - each tenant           -> system parent edge + svc:<tenant> membership
-//   - each tenant_user      -> membership (+ admin when role == admin)
+//   - each tenant_user      -> membership (+ admin when role == admin, + owner when role == owner)
 //   - admin tenant_user     -> system#admin for its tenant's svc principal
 //   - each document         -> document#tenant parent edge
 //   - each api_key          -> its subject's membership
@@ -182,8 +195,13 @@ func Backfill(ctx context.Context, store authz.Store, db *gorm.DB) error {
 		if err := store.Write(ctx, TenantMember(tu.TenantID, tu.ID.String())); err != nil {
 			return err
 		}
-		if tu.Role == models.TenantUserRoleAdmin {
+		switch tu.Role {
+		case models.TenantUserRoleAdmin:
 			if err := store.Write(ctx, TenantAdmin(tu.TenantID, tu.ID.String())); err != nil {
+				return err
+			}
+		case models.TenantUserRoleOwner:
+			if err := store.Write(ctx, TenantOwner(tu.TenantID, tu.ID.String())); err != nil {
 				return err
 			}
 		}

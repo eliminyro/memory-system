@@ -6,16 +6,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// Tenant user role constants — member vs admin at the email->tenant mapping layer.
+// Tenant user role constants at the email->tenant mapping layer. member/admin
+// apply to any tenant; owner is personal-tenant only — a full self-manager of
+// their own tenant (owner ⇒ manager) that is NOT a system admin.
 const (
 	TenantUserRoleMember = "member"
 	TenantUserRoleAdmin  = "admin"
+	TenantUserRoleOwner  = "owner"
 )
 
 // ValidTenantUserRoles is the accepted set for TenantUser.Role.
 var ValidTenantUserRoles = map[string]struct{}{
 	TenantUserRoleMember: {},
 	TenantUserRoleAdmin:  {},
+	TenantUserRoleOwner:  {},
 }
 
 // TenantUser maps a verified upstream Google email to a tenant. The authlet AS

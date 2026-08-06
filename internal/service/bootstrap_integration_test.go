@@ -157,9 +157,9 @@ func TestBootstrapNoLog(t *testing.T) {
 }
 
 // TestBootstrapAdminEmailSeedsWhenOAuthConfigured: with OAuth configured and an
-// AdminEmail supplied, Bootstrap maps the email to the new tenant as admin — a
-// tenant_users row plus the tenant admin tuple (design D4) — so the operator can
-// log in via /ui. Uses a local-admin context (no token needed on that path).
+// AdminEmail supplied, Bootstrap maps the email to the new personal tenant as its
+// owner — a tenant_users row plus the tenant owner tuple (personal-owner-role) —
+// so the operator can log in via /ui. Uses a local-admin context (no token on that path).
 func TestBootstrapAdminEmailSeedsWhenOAuthConfigured(t *testing.T) {
 	db := openServicePG(t)
 	clearAdmins(t, db)
@@ -180,8 +180,11 @@ func TestBootstrapAdminEmailSeedsWhenOAuthConfigured(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, users, 1, "the admin email must be mapped to the new tenant")
 	require.Equal(t, email, users[0].Email)
-	require.Equal(t, models.TenantUserRoleAdmin, users[0].Role)
-	requireTuple(t, store, authzseed.TenantAdmin(key.TenantID, users[0].ID.String()))
+	// The founding personal tenant makes its operator an owner, not an admin
+	// (personal-owner-role); system-wide reach comes from system#admin instead.
+	require.Equal(t, models.TenantUserRoleOwner, users[0].Role)
+	requireTuple(t, store, authzseed.TenantOwner(key.TenantID, users[0].ID.String()))
+	requireNoTuple(t, store, authzseed.TenantAdmin(key.TenantID, users[0].ID.String()))
 }
 
 // TestBootstrapAdminEmailBecomesSystemAdmin: with OAuth configured and an

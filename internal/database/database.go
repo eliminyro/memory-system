@@ -197,11 +197,58 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		}
 	}
 
+	// Personal tenants use the owner relation instead of admin (personal-owner-role).
+	// Flip roles BEFORE authzseed.Backfill so it derives tenant#owner (not #admin)
+	// tuples for personal tenants. Shared tenants and all system#admin tuples/roles
+	// are left untouched. Idempotent + re-runnable (a second boot finds no admin
+	// rows on personal tenants).
+	if err := tx.Exec(
+		`UPDATE tenant_users SET role = ? WHERE role = ? AND tenant_id IN (SELECT id FROM tenants WHERE type = ?)`,
+		models.TenantUserRoleOwner, models.TenantUserRoleAdmin, models.TenantTypePersonal,
+	).Error; err != nil {
+		return fmt.Errorf("personal-owner backfill (roles): %w", err)
+	}
+
 	// Backfill authz relation tuples from existing domain rows. Same transaction,
 	// idempotent, safe on every migrate. Pass 1: tuples populated but not yet
 	// driving any authorization decision.
 	if err := authzseed.Backfill(context.Background(), authz.NewPostgresStore(tx), tx); err != nil {
 		return fmt.Errorf("authz backfill: %w", err)
+	}
+
+	// After Backfill seeds the tenant#owner tuples, drop any stale tenant#admin
+	// tuples left on personal tenants by a pre-owner-role deploy, so the end state
+	// is owner-only. Scoped to object_type='tenant' + relation='admin' on personal
+	// tenants; never touches object_type='system', so the founding operator retains
+	// system#admin. Idempotent (a re-run finds nothing to delete).
+	if err := tx.Exec(
+		`DELETE FROM relation_tuples WHERE object_type = ? AND relation = ? AND object_id IN (SELECT id::text FROM tenants WHERE type = ?)`,
+		authz.TypeTenant, authz.RelAdmin, models.TenantTypePersonal,
+	).Error; err != nil {
+		return fmt.Errorf("personal-owner backfill (stale admin tuples): %w", err)
+	}
+
+	// Revoke the residual system#admin left on personal tenants' service principals
+	// by a pre-owner-role deploy's seedAdminServicePrincipals (granted while personal
+	// owners were role=admin). Now that owners are `owner`, it no longer re-derives,
+	// but the tuple persists and would make an owner-minted svc:<tenant> key a global
+	// admin. Delete it — EXCEPT where an actual API key still resolves to that svc
+	// principal (nil or explicit svc subject): that is the founding/bootstrap admin
+	// key (or an operator-created svc key) and must keep its reach. Idempotent.
+	if err := tx.Exec(
+		`DELETE FROM relation_tuples rt
+		 WHERE rt.object_type = ? AND rt.object_id = ? AND rt.relation = ? AND rt.subject_type = ?
+		   AND rt.subject_id LIKE 'svc:%'
+		   AND substring(rt.subject_id FROM 5) IN (SELECT id::text FROM tenants WHERE type = ?)
+		   AND NOT EXISTS (
+		     SELECT 1 FROM api_keys k
+		     WHERE k.tenant_id::text = substring(rt.subject_id FROM 5)
+		       AND (k.subject_id IS NULL OR k.subject_id = rt.subject_id)
+		   )`,
+		authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin, authz.TypeUser,
+		models.TenantTypePersonal,
+	).Error; err != nil {
+		return fmt.Errorf("personal-owner backfill (residual svc system#admin): %w", err)
 	}
 
 	return nil

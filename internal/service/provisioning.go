@@ -136,9 +136,9 @@ func provisionCandidateName(base, domain string, attempt int) string {
 // allowedDomains (honoring the Google `hd` hosted-domain claim when non-empty);
 // on block it returns ErrSignupNotAllowed and creates nothing. On pass it runs,
 // in ONE transaction, CreateTenant(type=personal, name=<base>) then
-// GrantTenantUser(email, tenant, admin) — the same pair the bootstrap path uses,
+// GrantTenantUser(email, tenant, owner) — the same pair the bootstrap path uses,
 // so the resolved subject (tenant_users.id) and tuples match a hand-provisioned
-// admin. It returns the tenant id (UUID string).
+// owner (personal-owner-role). It returns the tenant id (UUID string).
 //
 // The name base is displayName when non-empty (the OIDC `name` claim, the
 // product's primary source), else the email local-part.
@@ -203,7 +203,7 @@ func (s *MemoryService) ProvisionPersonalTenant(ctx context.Context, email, disp
 			if err != nil {
 				return err
 			}
-			if _, err := txSvc.GrantTenantUser(adminCtx, email, tenant.ID, models.TenantUserRoleAdmin); err != nil {
+			if _, err := txSvc.GrantTenantUser(adminCtx, email, tenant.ID, models.TenantUserRoleOwner); err != nil {
 				return err
 			}
 			tenantID = tenant.ID.String()

@@ -18,7 +18,8 @@ func TestDefaultNamespace_Rewrites(t *testing.T) {
 
 		{TypeTenant, RelSystem, []Rewrite{thisRewrite()}},
 		{TypeTenant, RelAdmin, []Rewrite{thisRewrite(), from(RelSystem, RelAdmin)}},
-		{TypeTenant, RelManager, []Rewrite{thisRewrite(), computed(RelAdmin)}},
+		{TypeTenant, RelOwner, []Rewrite{thisRewrite()}},
+		{TypeTenant, RelManager, []Rewrite{thisRewrite(), computed(RelAdmin), computed(RelOwner)}},
 		{TypeTenant, RelMember, []Rewrite{thisRewrite(), computed(RelManager)}},
 		{TypeTenant, RelViewer, []Rewrite{thisRewrite(), computed(RelMember)}},
 
@@ -180,6 +181,59 @@ func TestCheck_SystemAdminResolvesDocumentViewer(t *testing.T) {
 	}
 	if !got5 {
 		t.Error("chain should resolve within depth 5, got deny")
+	}
+}
+
+// TestCheck_OwnerFoldsIntoManagerNotAdmin asserts the personal-owner-role model:
+// a tenant#owner is a full manager (owner ⇒ manager ⇒ member ⇒ viewer) but NOT an
+// admin (owner ⊄ admin), a system admin still resolves admin on the same tenant via
+// the system parent edge, and shared-tenant direct-admin resolution is unchanged.
+func TestCheck_OwnerFoldsIntoManagerNotAdmin(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	// Personal tenant "town": a direct owner + the system parent edge so a global
+	// admin reaches it. A global admin subject "sa".
+	mustWrite(t, store, tup(TypeTenant, "town", RelOwner, TypeUser, "owner", ""))
+	mustWrite(t, store, tup(TypeTenant, "town", RelSystem, TypeSystem, SystemObjectID, ""))
+	mustWrite(t, store, tup(TypeSystem, SystemObjectID, RelAdmin, TypeUser, "sa", ""))
+	// Shared tenant "tshared": a direct admin (resolution must be unchanged).
+	mustWrite(t, store, tup(TypeTenant, "tshared", RelAdmin, TypeUser, "shadm", ""))
+	e := NewEngine(store)
+
+	tests := []struct {
+		name     string
+		objID    string
+		relation string
+		subjID   string
+		want     bool
+	}{
+		// owner ⇒ manager/member/viewer
+		{"owner is manager", "town", RelManager, "owner", true},
+		{"owner is member", "town", RelMember, "owner", true},
+		{"owner is viewer", "town", RelViewer, "owner", true},
+		// owner ⊄ admin — the security boundary
+		{"owner is NOT admin", "town", RelAdmin, "owner", false},
+		// system admin still administers a personal tenant (admin from system)
+		{"system admin is admin of personal tenant", "town", RelAdmin, "sa", true},
+		{"system admin is manager of personal tenant", "town", RelManager, "sa", true},
+		// owner has no reach into any other tenant
+		{"owner is not viewer of a foreign tenant", "tshared", RelViewer, "owner", false},
+		{"stranger is not viewer of town", "town", RelViewer, "nobody", false},
+		// shared-tenant direct admin resolution unchanged
+		{"shared admin is admin", "tshared", RelAdmin, "shadm", true},
+		{"shared admin is manager", "tshared", RelManager, "shadm", true},
+		{"shared admin is member", "tshared", RelMember, "shadm", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.Check(ctx, TypeTenant, tc.objID, tc.relation, TypeUser, tc.subjID)
+			if err != nil {
+				t.Fatalf("Check(tenant:%s#%s@user:%s) error: %v", tc.objID, tc.relation, tc.subjID, err)
+			}
+			if got != tc.want {
+				t.Errorf("Check(tenant:%s#%s@user:%s) = %v, want %v", tc.objID, tc.relation, tc.subjID, got, tc.want)
+			}
+		})
 	}
 }
 
