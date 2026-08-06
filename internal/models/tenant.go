@@ -55,6 +55,27 @@ func IsValidTenantType(t string) bool {
 	return ok
 }
 
+// Self-service policy constants. The optional lock over the two self-service
+// surfaces (feature-toggle editing, API-key creation): "open" keeps today's
+// member/owner self-service; "admin_only" raises both to admin.
+const (
+	SelfServicePolicyOpen      = "open"
+	SelfServicePolicyAdminOnly = "admin_only"
+)
+
+// ValidSelfServicePolicies is the accepted set for the self-service policy —
+// both the global config default and the per-tenant override.
+var ValidSelfServicePolicies = map[string]struct{}{
+	SelfServicePolicyOpen:      {},
+	SelfServicePolicyAdminOnly: {},
+}
+
+// IsValidSelfServicePolicy reports whether p is an accepted self-service policy.
+func IsValidSelfServicePolicy(p string) bool {
+	_, ok := ValidSelfServicePolicies[p]
+	return ok
+}
+
 type Tenant struct {
 	ID    uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	Name  string    `gorm:"size:200;not null;uniqueIndex" json:"name"`
@@ -74,8 +95,30 @@ type Tenant struct {
 	DuplicateGuard     bool   `gorm:"not null;default:false" json:"duplicate_guard"`
 	CleanupScanEnabled bool   `gorm:"not null;default:false" json:"cleanup_scan_enabled"`
 
+	// SelfServicePolicy is the per-tenant override of the global self-service
+	// gate: NULL = inherit the global default; else "open" | "admin_only". Set
+	// and cleared by system admins only — never self-editable.
+	SelfServicePolicy *string `gorm:"column:self_service_policy" json:"self_service_policy"`
+
+	// EffectivePolicy is the resolved self-service policy (override ?? global),
+	// computed on read paths — never persisted (gorm:"-").
+	EffectivePolicy string `gorm:"-" json:"effective_self_service_policy,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EffectiveSelfServicePolicy resolves the tenant's effective self-service
+// policy: the per-tenant override when set and valid, else the global default
+// when valid, else "open" (so unset everywhere means open — today's behavior).
+func (t Tenant) EffectiveSelfServicePolicy(globalDefault string) string {
+	if t.SelfServicePolicy != nil && IsValidSelfServicePolicy(*t.SelfServicePolicy) {
+		return *t.SelfServicePolicy
+	}
+	if IsValidSelfServicePolicy(globalDefault) {
+		return globalDefault
+	}
+	return SelfServicePolicyOpen
 }
 
 func (Tenant) TableName() string {

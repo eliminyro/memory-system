@@ -71,6 +71,11 @@ type MemoryService struct {
 	// through the service. Set once at startup from config.TenantDefaults; a zero
 	// value (unset — offline CLI / tests) leaves creation to the model/DB default.
 	TenantDefaults models.TenantDefaults
+	// SelfServicePolicyDefault is the operator-chosen global default self-service
+	// policy ("open" | "admin_only"); a per-tenant override resolves against it.
+	// Set once at startup from config.SelfServicePolicy. Empty (offline CLI /
+	// tests) resolves to "open" — no lockout.
+	SelfServicePolicyDefault string
 }
 
 // NewMemoryService constructs the service. Optional deps may be nil outside the
@@ -201,6 +206,26 @@ func (s *MemoryService) isAdmin(ctx context.Context) bool {
 		return true
 	}
 	return s.authorize(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin)
+}
+
+// requireSelfService is the single gate over the tenant's self-service surfaces
+// (feature-toggle editing, API-key creation). A system admin always passes.
+// Otherwise the caller must hold openRel when the effective policy is "open", or
+// admin when it is "admin_only" — which, via the owner model (owner ⇏ admin),
+// excludes personal owners while admitting shared tenant-admins + system admins,
+// with no tenant-type branch. Every self-service mutation MUST route through here.
+func (s *MemoryService) requireSelfService(ctx context.Context, tenant *models.Tenant, openRel string) error {
+	if s.isAdmin(ctx) {
+		return nil
+	}
+	need := openRel
+	if tenant.EffectiveSelfServicePolicy(s.SelfServicePolicyDefault) == models.SelfServicePolicyAdminOnly {
+		need = authz.RelAdmin
+	}
+	if s.authorize(ctx, authz.TypeTenant, tenant.ID.String(), need) {
+		return nil
+	}
+	return fmt.Errorf("%w: self-service is restricted to admins on this tenant", apperr.ErrInvalidInput)
 }
 
 // tenantSettings holds per-tenant feature toggles. When the tenants repo is
@@ -786,7 +811,15 @@ func (s *MemoryService) ListTenants(ctx context.Context) ([]models.Tenant, error
 	if err := s.requireAdmin(ctx); err != nil {
 		return nil, err
 	}
-	return s.tenants.List(ctx)
+	tenants, err := s.tenants.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Surface the resolved effective policy (override ?? global) alongside the stored value.
+	for i := range tenants {
+		tenants[i].EffectivePolicy = tenants[i].EffectiveSelfServicePolicy(s.SelfServicePolicyDefault)
+	}
+	return tenants, nil
 }
 
 // applyCreationDefaults stamps the operator-chosen toggle defaults onto a new
@@ -1597,6 +1630,9 @@ type UpdateTenantFields struct {
 	StalenessMode      *string
 	DuplicateGuard     *bool
 	CleanupScanEnabled *bool
+	// SelfServicePolicy accepts "open" | "admin_only" | "inherit" (the last clears
+	// the per-tenant override to NULL). Admin-only — never wired to self-service.
+	SelfServicePolicy *string
 }
 
 // UpdateTenant is the admin-only patcher. It can touch any field.
@@ -1616,11 +1652,20 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
 	}
 	// No fields = status read: return the current row without touching the DB or
-	// audit log (avoids a "noop" override_log entry and an updated_at bump).
+	// audit log (avoids a "noop" override_log entry and an updated_at bump). A
+	// read is always allowed regardless of the self-service policy.
 	if stalenessMode == nil && duplicateGuard == nil && cleanupScanEnabled == nil {
 		return s.tenants.GetByID(ctx, tid)
 	}
-	tenant, err := s.applyTenantPatch(ctx, tid, UpdateTenantFields{
+	// Self-service gate: toggle edits are member-level when open, admin when locked.
+	tenant, err := s.tenants.GetByID(ctx, tid)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireSelfService(ctx, tenant, authz.RelMember); err != nil {
+		return nil, err
+	}
+	tenant, err = s.applyTenantPatch(ctx, tid, UpdateTenantFields{
 		StalenessMode:      stalenessMode,
 		DuplicateGuard:     duplicateGuard,
 		CleanupScanEnabled: cleanupScanEnabled,
@@ -1664,6 +1709,13 @@ func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fiel
 	if fields.Type != nil && !models.IsValidTenantType(*fields.Type) {
 		return nil, fmt.Errorf("%w: tenant type must be personal or shared", apperr.ErrInvalidInput)
 	}
+	if fields.SelfServicePolicy != nil {
+		switch *fields.SelfServicePolicy {
+		case models.SelfServicePolicyOpen, models.SelfServicePolicyAdminOnly, "inherit":
+		default:
+			return nil, fmt.Errorf("%w: self_service_policy must be open, admin_only, or inherit", apperr.ErrInvalidInput)
+		}
+	}
 	tenant, err := s.tenants.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1689,6 +1741,15 @@ func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fiel
 	if fields.CleanupScanEnabled != nil {
 		tenant.CleanupScanEnabled = *fields.CleanupScanEnabled
 	}
+	if fields.SelfServicePolicy != nil {
+		// "inherit" clears the override to NULL; Save persists a nil pointer as NULL.
+		if *fields.SelfServicePolicy == "inherit" {
+			tenant.SelfServicePolicy = nil
+		} else {
+			v := *fields.SelfServicePolicy
+			tenant.SelfServicePolicy = &v
+		}
+	}
 	if err := s.tenants.Update(ctx, tenant); err != nil {
 		return nil, fmt.Errorf("update tenant: %w", err)
 	}
@@ -1709,19 +1770,20 @@ func (s *MemoryService) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 // subject; nil/empty defaults to the tenant service principal ("svc:<tenant_id>").
 // The subject is granted tenant membership (idempotent).
 func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, label string, subjectID *string, expiresAt *time.Time) (string, *models.APIKey, error) {
-	// Authorization (personal-owner-role D4): a system admin may mint a key for any
-	// (personal) tenant and pin it to any subject. A non-system-admin must resolve
-	// to manager on the target tenant — personal owners qualify via owner ⇒ manager,
-	// enabling owner self-service — and may only mint a key for the tenant's own
-	// service principal (the foreign-subject pin below is admin-only).
-	isSysAdmin := s.isAdmin(ctx)
-	if !isSysAdmin && !s.authorize(ctx, authz.TypeTenant, tenantID.String(), authz.RelManager) {
-		return "", nil, fmt.Errorf("%w: not authorized to create an API key for tenant %s", apperr.ErrInvalidInput, tenantID)
-	}
 	tenant, err := s.tenants.GetByID(ctx, tenantID)
 	if err != nil {
 		return "", nil, err
 	}
+	// Authorization (personal-owner-role D4 + tenant-self-service-lock): a system
+	// admin may mint a key for any (personal) tenant and pin it to any subject. A
+	// non-system-admin must satisfy the tenant's self-service policy — "open" ⇒
+	// manager (personal owners qualify via owner ⇒ manager, enabling owner
+	// self-service), "admin_only" ⇒ admin (excludes personal owners) — and may only
+	// mint a key for their OWN subject (the foreign-subject pin below is admin-only).
+	if err := s.requireSelfService(ctx, tenant, authz.RelManager); err != nil {
+		return "", nil, err
+	}
+	isSysAdmin := s.isAdmin(ctx)
 	// Operation-validity (not an access decision — type never gates Check): API
 	// keys are a personal-tenant affordance. A shared tenant is reached via its
 	// members' own identities + ACL, so a tenant-scoped key has no purpose.

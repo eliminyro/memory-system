@@ -300,6 +300,42 @@ func TestLoadRejectsRetentionBelowLowerBound(t *testing.T) {
 	}
 }
 
+func TestLoadSelfServicePolicy(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string // "" means leave unset (exercise the envDefault)
+		set     bool
+		want    string
+		wantErr string
+	}{
+		{name: "default is open", set: false, want: "open"},
+		{name: "explicit open", value: "open", set: true, want: "open"},
+		{name: "explicit admin_only", value: "admin_only", set: true, want: "admin_only"},
+		{name: "unknown rejected", value: "locked", set: true, wantErr: "MEMORY_SELF_SERVICE_POLICY must be open or admin_only"},
+		{name: "empty falls back to default open", value: "", set: true, want: "open"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("MEMORY_SELF_SERVICE_POLICY", tc.value)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.SelfServicePolicy != tc.want {
+				t.Fatalf("SelfServicePolicy = %q, want %q", cfg.SelfServicePolicy, tc.want)
+			}
+		})
+	}
+}
+
 func TestBaselineTenantDefaults(t *testing.T) {
 	got := models.BaselineTenantDefaults()
 	want := models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
