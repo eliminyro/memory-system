@@ -11,6 +11,12 @@ import (
 // signingKeyStore implements storage.SigningKeyStore against GORM.
 type signingKeyStore struct{ db *gorm.DB }
 
+// signingKeyActivateLock is a fixed advisory-lock key that serializes
+// concurrent signing-key ACTIVATION across replicas, so the deactivate-all +
+// insert-active sequence can't interleave into two active rows (READ COMMITTED
+// alone doesn't serialize it). Transaction-scoped: auto-released at tx end.
+const signingKeyActivateLock = 0x5347_4b45_4143_54 // arbitrary stable int64 ("SGKEACT")
+
 func toStorageKey(r AuthletSigningKey) storage.SigningKey {
 	return storage.SigningKey{
 		ID:                  r.ID,
@@ -54,6 +60,15 @@ func (s *signingKeyStore) GetSigner(ctx context.Context) (storage.SigningKey, er
 func (s *signingKeyStore) Insert(ctx context.Context, k storage.SigningKey) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if k.IsActive {
+			// Serialize activation across replicas so deactivate-all + insert-active
+			// can't interleave into two active rows. Postgres-only: sqlite (the unit
+			// tests) has no advisory locks and already serializes transactions on a
+			// single connection, so the lock is unnecessary and absent there.
+			if tx.Dialector.Name() == "postgres" {
+				if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(signingKeyActivateLock)).Error; err != nil {
+					return err
+				}
+			}
 			if err := tx.Model(&AuthletSigningKey{}).
 				Where("is_active = ?", true).
 				Update("is_active", false).Error; err != nil {

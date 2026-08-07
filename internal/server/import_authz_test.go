@@ -50,21 +50,21 @@ func TestRelationalImportEnqueue_SysAdminAnyTenant(t *testing.T) {
 	}
 }
 
-// TestRelationalImportEnqueue_ManagerOfTarget proves a tenant#manager (not a
-// system admin) may enqueue into the tenant they manage.
-func TestRelationalImportEnqueue_ManagerOfTarget(t *testing.T) {
+// TestRelationalImportEnqueue_NoImportTargetForbidden proves the cheap
+// identity-level pre-check (apiHandler.hasAnyImportTarget) refuses a caller who
+// manages NO tenant at all with 403 BEFORE the (up to 32MiB) archive is
+// buffered — no job is ever enqueued. A fresh subject with no tenant tuples and
+// no system-admin grant resolves to zero writable tenants without a DB round
+// trip (ReadBySubject is empty), so this stays a nil-DB unit test. The
+// manager-succeeds path needs the DB and lives in the integration suite.
+func TestRelationalImportEnqueue_NoImportTargetForbidden(t *testing.T) {
 	store := authz.NewMemoryStore()
 	svc := newImportAuthzSvc(store)
 	fake := &fakeImportJobs{}
 	h := &apiHandler{memory: svc, importJobs: fake, maxUploadBytes: 1 << 20}
 
-	target := uuid.New()
-	subj := "mgr-" + uuid.NewString()
-	if err := store.Write(context.Background(), authzseed.TenantManager(target, subj)); err != nil {
-		t.Fatalf("seed manager tuple: %v", err)
-	}
-
-	body, ct := multipartArchiveWithTenant(t, []byte("PK\x03\x04 payload"), target.String())
+	subj := "orphan-" + uuid.NewString() // no tenant tuples, not a system admin
+	body, ct := multipartArchiveWithTenant(t, []byte("PK\x03\x04 payload"), uuid.NewString())
 	req := httptest.NewRequest(http.MethodPost, "/import", body)
 	req.Header.Set("Content-Type", ct)
 	req = req.WithContext(auth.WithSubject(req.Context(), auth.Subject{Type: auth.SubjectTypeUser, ID: subj}))
@@ -72,11 +72,11 @@ func TestRelationalImportEnqueue_ManagerOfTarget(t *testing.T) {
 
 	h.enqueueImport(rec, req)
 
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a caller who manages no tenant; body=%s", rec.Code, rec.Body.String())
 	}
-	if fake.created == nil || fake.created.TenantID != target {
-		t.Fatalf("expected a job created for tenant %s, got %+v", target, fake.created)
+	if fake.created != nil {
+		t.Error("no job should be enqueued when the identity pre-check refuses the caller")
 	}
 }
 

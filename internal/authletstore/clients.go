@@ -75,8 +75,12 @@ func (s *clientStore) Touch(ctx context.Context, id string) error {
 
 // DeleteExpired removes clients with last_used_at older than olderThan; returns the count deleted.
 func (s *clientStore) DeleteExpired(ctx context.Context, olderThan time.Time) (int, error) {
+	// Never idle-reap the seeded public UI client: it carries the far-future
+	// uiClientExpiresAt sentinel (seed.go) and is only re-seeded at boot, so
+	// reaping it by last_used_at would break every /ui login until the pod
+	// restarts. DCR clients carry realistic expiries, so this spares only the seed.
 	res := s.db.WithContext(ctx).
-		Where("last_used_at < ?", olderThan).
+		Where("last_used_at < ? AND expires_at <> ?", olderThan, uiClientExpiresAt).
 		Delete(&OAuthClient{})
 	return int(res.RowsAffected), res.Error
 }

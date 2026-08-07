@@ -106,7 +106,22 @@ func (h *apiHandler) listTenants(w http.ResponseWriter, r *http.Request) {
 // mechanics (enqueueImportShared), but the resolved target tenant is
 // authorized via canImportInto instead of being trusted unconditionally.
 func (h *apiHandler) enqueueImport(w http.ResponseWriter, r *http.Request) {
-	enqueueImportShared(w, r, h.importJobs, h.maxUploadBytes, h.canImportInto)
+	enqueueImportShared(w, r, h.importJobs, h.maxUploadBytes, h.canImportInto, h.hasAnyImportTarget)
+}
+
+// hasAnyImportTarget reports whether the caller could import ANYWHERE — a
+// cheap identity-level gate run before the (up to 32MiB) archive is buffered,
+// so a caller who manages no tenant is refused without the memory cost. It does
+// NOT authorize the specific target tenant (that stays canImportInto after the
+// body is parsed for tenant_id); a caller who manages some tenant but targets
+// one they don't manage still buffers once (bounded by MaxBytesReader + the
+// rate limiter).
+func (h *apiHandler) hasAnyImportTarget(ctx context.Context) bool {
+	if h.memory.IsAdmin(ctx) {
+		return true
+	}
+	ts, err := h.memory.WritableTenants(ctx)
+	return err == nil && len(ts) > 0
 }
 
 // importStatus is the relational counterpart of adminAPIHandler.importStatus

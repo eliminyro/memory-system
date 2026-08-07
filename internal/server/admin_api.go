@@ -282,7 +282,7 @@ func allowAnyTenant(context.Context, uuid.UUID) bool { return true }
 // enqueueImportShared for the upload/authorize/enqueue mechanics shared with
 // the relational /api/import surface (apiHandler.enqueueImport, design.md §8).
 func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) {
-	enqueueImportShared(w, r, h.importJobs, h.maxUploadBytes, allowAnyTenant)
+	enqueueImportShared(w, r, h.importJobs, h.maxUploadBytes, allowAnyTenant, nil)
 }
 
 // enqueueImportShared implements the archive-upload + enqueue mechanics
@@ -292,7 +292,15 @@ func (h *adminAPIHandler) enqueueImport(w http.ResponseWriter, r *http.Request) 
 // target via authorize, then persist a queued import_jobs row. Oversized
 // uploads are rejected 413 via http.MaxBytesReader; a missing/malformed
 // tenant or archive is 400; an authorize failure is 403.
-func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobStore, maxUploadBytes int64, authorize importAuthorizer) {
+func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobStore, maxUploadBytes int64, authorize importAuthorizer, preAuthorize func(context.Context) bool) {
+	// Cheap identity-level gate BEFORE the (up to maxUploadBytes) archive is
+	// buffered, so a caller who could never import anywhere is refused without
+	// the memory cost. The specific target tenant is still authorized by
+	// `authorize` after the body is parsed for tenant_id.
+	if preAuthorize != nil && !preAuthorize(r.Context()) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to import"})
+		return
+	}
 	// Cap the whole request body: MaxBytesReader makes reads past the limit fail
 	// with *http.MaxBytesError, surfaced below as 413. Passing the same cap as
 	// ParseMultipartForm's maxMemory keeps the file part in memory (no temp-file
