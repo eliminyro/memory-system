@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -48,7 +50,7 @@ func (n *Notifier) SendScanSummary(ctx context.Context, stats ScanStats) error {
 }
 
 func (n *Notifier) send(ctx context.Context, text string) error {
-	url := "https://api.telegram.org/bot" + n.botToken + "/sendMessage"
+	endpoint := "https://api.telegram.org/bot" + n.botToken + "/sendMessage"
 	payload := map[string]string{
 		"chat_id": n.chatID,
 		"text":    text,
@@ -57,7 +59,7 @@ func (n *Notifier) send(ctx context.Context, text string) error {
 	if err != nil {
 		return fmt.Errorf("marshal telegram payload: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build telegram request: %w", err)
 	}
@@ -65,7 +67,14 @@ func (n *Notifier) send(ctx context.Context, text string) error {
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram request: %w", err)
+		// net/http returns *url.Error here, whose Error() embeds the full request
+		// URL — which contains the bot token. Return only the underlying cause so
+		// the token never reaches an error string / the scanner's WARN log.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return fmt.Errorf("telegram request failed: %w", ue.Err)
+		}
+		return fmt.Errorf("telegram request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {

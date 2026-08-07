@@ -108,6 +108,56 @@ func TestZipDocSource_RejectsZipBomb(t *testing.T) {
 	}
 }
 
+// TestZipDocSourceLimited_RejectsTooManyEntries proves the entry-count cap trips
+// at construction: a small archive carrying more than maxImportEntries markdown
+// entries is rejected before any draining, closing the tiny/empty-entry DoS the
+// decompressed-byte guard alone never catches.
+func TestZipDocSourceLimited_RejectsTooManyEntries(t *testing.T) {
+	files := make(map[string]string, maxImportEntries+1)
+	for i := 0; i <= maxImportEntries; i++ { // maxImportEntries+1 entries; empty content keeps the zip tiny
+		files[fmt.Sprintf("doc%05d.md", i)] = ""
+	}
+	archive := buildZip(t, files)
+
+	_, _, err := zipDocSourceLimited(archive, maxDecompressedBytes)
+	if err == nil {
+		t.Fatal("expected an error rejecting an over-large entry count, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), fmt.Sprintf("%d limit", maxImportEntries)) {
+		t.Errorf("error = %q, want it to mention exceeding the %d limit", err, maxImportEntries)
+	}
+}
+
+// TestZipDocSourceLimited_SkipsEmptyEntries proves empty / whitespace-only .md
+// entries are dropped during drain so they never create a 0-section document;
+// the returned count stays len(entries) (a harmless progress-seed overcount).
+func TestZipDocSourceLimited_SkipsEmptyEntries(t *testing.T) {
+	archive := buildZip(t, map[string]string{
+		"empty.md":      "",
+		"whitespace.md": "  \n\t ",
+		"real.md":       "actual content",
+	})
+
+	src, total, err := zipDocSourceLimited(archive, maxDecompressedBytes)
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("total = %d, want 3 (count is len(entries); empties are a seed overcount)", total)
+	}
+
+	var emitted []string
+	if err := src(func(path string, content []byte) error {
+		emitted = append(emitted, path)
+		return nil
+	}); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if len(emitted) != 1 || emitted[0] != "real.md" {
+		t.Fatalf("emitted = %v, want only [real.md] (empty/whitespace entries skipped)", emitted)
+	}
+}
+
 // fakeQueue is a no-DB stand-in for the import_jobs repository, capturing the
 // worker's status transitions.
 type fakeQueue struct {
