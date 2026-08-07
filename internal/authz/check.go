@@ -117,13 +117,19 @@ func (e *Engine) evalRewrite(ctx context.Context, rw Rewrite, objType, objID, re
 }
 
 // evalThis resolves the `this` clause: direct tuples on (objType, objID, relation).
-// A tuple grants if it names the subject directly, is a wildcard for the
-// subject's type (id "*"), or is a userset the subject belongs to (resolved recursively).
+// A tuple grants if it names the subject directly, is a wildcard the relation's
+// model permits for the subject's type (DirectSubjects lists "<type>:*"), or is a
+// userset the subject belongs to (resolved recursively).
 func (e *Engine) evalThis(ctx context.Context, objType, objID, relation, subjType, subjID string, depth int, visited, memo map[string]bool) (bool, error) {
 	tuples, err := e.store.ReadByObjectRelation(ctx, objType, objID, relation)
 	if err != nil {
 		return false, err
 	}
+	// Relation def drives wildcard subject-typing enforcement below. check()
+	// already verified the relation exists before recursing here; if it somehow
+	// isn't found, def.DirectSubjects is empty and any wildcard tuple is skipped
+	// (fail closed).
+	def, _ := e.ns.Relation(objType, relation)
 	var firstErr error
 	for _, tp := range tuples {
 		if tp.SubjectRelation == "" {
@@ -131,8 +137,21 @@ func (e *Engine) evalThis(ctx context.Context, objType, objID, relation, subjTyp
 			if tp.SubjectType != subjType {
 				continue
 			}
-			if tp.SubjectID == subjID || tp.SubjectID == Wildcard {
+			if tp.SubjectID == subjID {
 				return true, nil
+			}
+			// Wildcard tuple (e.g. user:*): honor it ONLY when this relation's
+			// model actually permits a wildcard of that subject type. This makes
+			// the engine enforce the model's own subject typing, so a user:* tuple
+			// grants public read on tenant#viewer only and can NEVER grant on
+			// member/editor/admin, even if such a tuple were somehow written.
+			if tp.SubjectID == Wildcard {
+				want := subjType + ":" + Wildcard
+				for _, ds := range def.DirectSubjects {
+					if ds == want {
+						return true, nil
+					}
+				}
 			}
 			continue
 		}

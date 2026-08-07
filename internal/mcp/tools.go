@@ -91,7 +91,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_my_tenant_settings",
-		Description: "Update feature toggles on your own tenant: staleness_mode (off|advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool). Any field you omit stays unchanged. Defaults are the safest — opt in to enforcement explicitly.",
+		Description: "Read or update feature toggles on your own tenant: staleness_mode (off|advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool). Any field you omit stays unchanged; omit all three for a status read. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies) — these toggles arm destructive behavior (staleness_mode=hard arms the retention sweep that hard-deletes documents), so a plain member of a shared tenant is refused. Defaults are the safest — opt in to enforcement explicitly.",
 	}, s.UpdateMyTenantSettings)
 }
 

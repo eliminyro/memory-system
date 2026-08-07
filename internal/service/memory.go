@@ -1824,12 +1824,15 @@ type Grant struct {
 
 // listGrants is the shared body of ListTenantGrants/ListDocumentGrants: for each
 // relation in order, read the direct tuples on objectType:objectID, keep the
-// concrete-user subjects (skip userset/wildcard/non-user), resolve their emails
-// in ONE batch query, and render one Grant per resolvable subject in tuple
-// order. Subjects with no resolvable email (stale tenant_users, service
-// principals) are skipped rather than failing the list — matching the per-id
-// subjectEmail skip-on-error behavior. Callers own the authz==nil guard and the
-// CanManageTenant gate before delegating here.
+// concrete-user subjects, resolve their emails in ONE batch query, and render one
+// Grant per resolvable subject in tuple order. A public wildcard USER subject
+// (user:*) is INCLUDED as an auditable grant (SubjectID "*", a recognizable
+// label, no email lookup) so an ACL listing/UI can surface public access rather
+// than silently dropping it — display/audit only, authz behavior is unchanged.
+// Usersets and non-user subjects are still skipped. Subjects with no resolvable
+// email (stale tenant_users, service principals) are skipped rather than failing
+// the list — matching the per-id subjectEmail skip-on-error behavior. Callers own
+// the authz==nil guard and the CanManageTenant gate before delegating here.
 func (s *MemoryService) listGrants(ctx context.Context, objectType, objectID string, relations []string) ([]Grant, error) {
 	type pending struct {
 		subjectID string
@@ -1837,13 +1840,24 @@ func (s *MemoryService) listGrants(ctx context.Context, objectType, objectID str
 	}
 	var items []pending
 	var ids []string
+	var wildcards []Grant
 	for _, rel := range relations {
 		tuples, err := s.authz.ReadByObjectRelation(ctx, objectType, objectID, rel)
 		if err != nil {
 			return nil, err
 		}
 		for _, t := range tuples {
-			if t.SubjectType != authz.TypeUser || t.IsUserset() || t.IsWildcard() {
+			if t.SubjectType != authz.TypeUser || t.IsUserset() {
+				continue
+			}
+			if t.IsWildcard() {
+				// Public wildcard grant (user:*): surface it as auditable, bypassing
+				// the email lookup (there is no user to resolve).
+				wildcards = append(wildcards, Grant{
+					Email:     "(public wildcard)",
+					SubjectID: authz.Wildcard,
+					Relation:  rel,
+				})
 				continue
 			}
 			items = append(items, pending{subjectID: t.SubjectID, relation: rel})
@@ -1862,14 +1876,16 @@ func (s *MemoryService) listGrants(ctx context.Context, objectType, objectID str
 		}
 		grants = append(grants, Grant{Email: email, SubjectID: it.subjectID, Relation: it.relation})
 	}
+	grants = append(grants, wildcards...)
 	return grants, nil
 }
 
 // ListTenantGrants lists every direct viewer/member/manager grant on tenantID
 // (tenant#admin is out of scope here — that's the GrantTenantUser admin
-// flow). Caller must CanManageTenant(tenantID). Wildcard/userset subjects and
-// subjects with no resolvable email (stale tenant_users, service principals)
-// are skipped rather than failing the whole list.
+// flow). Caller must CanManageTenant(tenantID). A public wildcard (user:*) grant
+// is included as an auditable entry; usersets and subjects with no resolvable
+// email (stale tenant_users, service principals) are skipped rather than failing
+// the whole list.
 func (s *MemoryService) ListTenantGrants(ctx context.Context, tenantID uuid.UUID) ([]Grant, error) {
 	if !s.CanManageTenant(ctx, tenantID) {
 		return nil, fmt.Errorf("%w: not authorized to list grants for tenant %s", apperr.ErrInvalidInput, tenantID)
@@ -1924,9 +1940,16 @@ func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields U
 	return tenant, nil
 }
 
-// UpdateMyTenantSettings lets any authenticated caller adjust their own tenant's
-// toggles (staleness, duplicate guard, cleanup scan); name/email stay admin-only.
-// Every call is audited to override_log (compromised-key trail).
+// UpdateMyTenantSettings edits the caller's OWN tenant's toggles (staleness,
+// duplicate guard, cleanup scan); name/email stay admin-only. A field-less call
+// is a status read and is always allowed. Writes require MANAGE rights (manager)
+// via requireSelfService, NOT bare membership: these toggles arm destructive
+// behavior — staleness_mode="hard" arms the retention sweep that archives then
+// hard-deletes documents — so they are not member-level self-service. A personal
+// tenant's owner still passes (owner ⇒ manager), keeping personal self-service
+// intact; a shared tenant's plain member is refused. This matches the by-id
+// sibling UpdateTenantSettings (also manager). Every call is audited to
+// override_log (compromised-key trail).
 func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
@@ -1938,12 +1961,15 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 	if stalenessMode == nil && duplicateGuard == nil && cleanupScanEnabled == nil {
 		return s.tenants.GetByID(ctx, tid)
 	}
-	// Self-service gate: toggle edits are member-level when open, admin when locked.
+	// Self-service gate: toggle edits require manager (admin_only escalates to
+	// admin). Manager-level because these toggles arm destructive retention, so
+	// they are not bare-member self-service; personal owners still pass via
+	// owner ⇒ manager.
 	tenant, err := s.tenants.GetByID(ctx, tid)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.requireSelfService(ctx, tenant, authz.RelMember); err != nil {
+	if err := s.requireSelfService(ctx, tenant, authz.RelManager); err != nil {
 		return nil, err
 	}
 	tenant, err = s.applyTenantPatch(ctx, tid, UpdateTenantFields{
@@ -2135,6 +2161,14 @@ func (s *MemoryService) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, la
 			return "", nil, fmt.Errorf("%w: only a system admin may pin an API key to another subject", apperr.ErrInvalidInput)
 		}
 		subjectID = &subj.ID
+	}
+	// A wildcard subject would seed a user:* tuple — public membership. Even
+	// though Check no longer honors user:* on privileged relations (subject
+	// typing), this is the only reachable write path that could create such a
+	// tuple, so reject it at the source. Only a system admin could reach here
+	// with "*" (a non-admin's subject is forced to their own id above).
+	if subjectID != nil && *subjectID == authz.Wildcard {
+		return "", nil, fmt.Errorf(`%w: subject_id cannot be the wildcard "*"`, apperr.ErrInvalidInput)
 	}
 	plaintext, hash, err := auth.GenerateAPIKey()
 	if err != nil {
