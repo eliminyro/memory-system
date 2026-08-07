@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/eliminyro/memory-system/internal/authz"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 )
@@ -141,6 +142,14 @@ func (r *DocumentRepository) Delete(ctx context.Context, tenantID uuid.UUID, id 
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("%w: document %s", apperr.ErrNotFound, id)
+	}
+	// Prune the document's authz tuples: the document->tenant parent edge and any
+	// guest viewer/editor grants. relation_tuples has no FK cascade to documents
+	// (mirrors the tenant-delete prune in tenant.go:76-83).
+	if err := r.db.WithContext(ctx).Exec(
+		`DELETE FROM relation_tuples WHERE object_type = ? AND object_id = ?`,
+		authz.TypeDocument, id.String()).Error; err != nil {
+		return fmt.Errorf("delete document tuples: %w", err)
 	}
 	return nil
 }

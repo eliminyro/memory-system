@@ -155,6 +155,31 @@ func (s *MemoryService) unseedTuple(ctx context.Context, t authz.Tuple) {
 	}
 }
 
+// syncServicePrincipalAdmin reconciles a tenant's service-principal
+// system#admin grant with whether the tenant still has any admin tenant_user.
+// The svc principal (svc:<tenant>) is what a subject-less operator API key
+// resolves to; its global-admin tuple is seeded add-only at boot
+// (authzseed.seedAdminServicePrincipals), so runtime admin grants/removals
+// must keep it in sync or the operator key keeps admin after the last admin
+// is gone (H1). Counts against the passed tx so it sees the just-applied
+// change. Idempotent: Write/Delete are no-ops when the tuple already matches.
+func (s *MemoryService) syncServicePrincipalAdmin(ctx context.Context, tx *gorm.DB, tenantID uuid.UUID) error {
+	if s.authz == nil {
+		return nil
+	}
+	var admins int64
+	if err := tx.WithContext(ctx).Model(&models.TenantUser{}).
+		Where("tenant_id = ? AND role = ?", tenantID, models.TenantUserRoleAdmin).
+		Count(&admins).Error; err != nil {
+		return fmt.Errorf("count tenant admins: %w", err)
+	}
+	svc := authzseed.SystemAdmin(authz.ServicePrincipalID(tenantID.String()))
+	if admins > 0 {
+		return s.authz.Write(ctx, svc)
+	}
+	return s.authz.Delete(ctx, svc)
+}
+
 // authorize reports whether the request's subject holds relation on objType:objID.
 // The single authorization choke point; fails closed on any uncertainty (nil
 // engine, subjectless request, or Check error all deny).
@@ -1256,7 +1281,8 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 				return fmt.Errorf("seed tenant %s tuple: %w", role, err)
 			}
 		}
-		return nil
+		// A runtime admin grant must seed the svc-admin tuple now, not wait for boot.
+		return s.syncServicePrincipalAdmin(ctx, tx, tenantID)
 	})
 	if err != nil {
 		return nil, err
@@ -1298,20 +1324,50 @@ func (s *MemoryService) UpdateTenantUserRole(ctx context.Context, email, role st
 	if tu.Role == role {
 		return &tu, nil // idempotent
 	}
-	if err := s.db.WithContext(ctx).Model(&tu).Update("role", role).Error; err != nil {
-		return nil, fmt.Errorf("update tenant_user role: %w", err)
+
+	// No authz store: keep the historical DB-only path (no tuples to reconcile).
+	if s.authz == nil {
+		if err := s.db.WithContext(ctx).Model(&tu).Update("role", role).Error; err != nil {
+			return nil, fmt.Errorf("update tenant_user role: %w", err)
+		}
+		tu.Role = role
+		return &tu, nil
 	}
-	// Seed the elevated tuple for the new role (if any) and remove every other
-	// elevated tuple, so the stored tuples always match exactly one role (the
-	// member tuple is untouched — every role is a member).
-	if tuple, ok := roleElevatedTuple(tu.TenantID, role, tu.ID.String()); ok {
-		s.seedTuple(ctx, tuple)
-	}
-	if role != models.TenantUserRoleAdmin {
-		s.unseedTuple(ctx, authzseed.TenantAdmin(tu.TenantID, tu.ID.String()))
-	}
-	if role != models.TenantUserRoleOwner {
-		s.unseedTuple(ctx, authzseed.TenantOwner(tu.TenantID, tu.ID.String()))
+
+	// The role UPDATE and all tuple writes/deletes must be all-or-nothing.
+	// Previously the row was committed via s.db.Update and the tuple sync went
+	// through best-effort seed/unseed, which LOGS-and-SWALLOWS authz errors —
+	// leaving a committed role that disagrees with its tuples in the fail-OPEN
+	// direction (row says member, admin tuple retained). The tuple store is a
+	// separate abstraction (authz.Store) from the gorm tx, so the DB transaction
+	// guards the observable invariant: a committed role never disagrees with its
+	// tuples in the fail-open direction. Any authz failure rolls the row back —
+	// worst case is fail-CLOSED (row says admin, admin tuple already gone), which
+	// is safe and strictly better than the old best-effort path that retained
+	// privilege on a swallowed error.
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.TenantUser{}).Where("id = ?", tu.ID).Update("role", role).Error; err != nil {
+			return fmt.Errorf("update tenant_user role: %w", err)
+		}
+		if tuple, ok := roleElevatedTuple(tu.TenantID, role, tu.ID.String()); ok {
+			if err := s.authz.Write(ctx, tuple); err != nil {
+				return fmt.Errorf("seed role tuple: %w", err)
+			}
+		}
+		if role != models.TenantUserRoleAdmin {
+			if err := s.authz.Delete(ctx, authzseed.TenantAdmin(tu.TenantID, tu.ID.String())); err != nil {
+				return fmt.Errorf("remove admin tuple: %w", err)
+			}
+		}
+		if role != models.TenantUserRoleOwner {
+			if err := s.authz.Delete(ctx, authzseed.TenantOwner(tu.TenantID, tu.ID.String())); err != nil {
+				return fmt.Errorf("remove owner tuple: %w", err)
+			}
+		}
+		return s.syncServicePrincipalAdmin(ctx, tx, tu.TenantID)
+	})
+	if err != nil {
+		return nil, err
 	}
 	tu.Role = role
 	return &tu, nil
@@ -1327,12 +1383,37 @@ func (s *MemoryService) RevokeTenantUser(ctx context.Context, email string) erro
 	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&tu).Error; err != nil {
 		return fmt.Errorf("%w: no user mapping for %s", apperr.ErrNotFound, email)
 	}
-	if err := s.db.WithContext(ctx).Delete(&tu).Error; err != nil {
-		return fmt.Errorf("delete tenant_user: %w", err)
+
+	// No authz store: keep the historical DB-only delete (no tuples to reconcile).
+	if s.authz == nil {
+		if err := s.db.WithContext(ctx).Delete(&tu).Error; err != nil {
+			return fmt.Errorf("delete tenant_user: %w", err)
+		}
+		return nil
 	}
-	s.unseedTuple(ctx, authzseed.TenantMember(tu.TenantID, tu.ID.String()))
-	if tuple, ok := roleElevatedTuple(tu.TenantID, tu.Role, tu.ID.String()); ok {
-		s.unseedTuple(ctx, tuple)
+
+	// The row delete and its tuple removals must be all-or-nothing (mirrors
+	// UpdateTenantUserRole): a swallowed unseed used to leave live membership/admin
+	// tuples for a revoked user. The gorm tx guards the DB row; any authz Delete
+	// failure rolls the row back — worst case is fail-CLOSED (tuple gone, row still
+	// present), which is safe. syncServicePrincipalAdmin reconciles the svc-admin
+	// grant against the tx (revoking the last admin drops it).
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", tu.ID).Delete(&models.TenantUser{}).Error; err != nil {
+			return fmt.Errorf("delete tenant_user: %w", err)
+		}
+		if err := s.authz.Delete(ctx, authzseed.TenantMember(tu.TenantID, tu.ID.String())); err != nil {
+			return fmt.Errorf("remove member tuple: %w", err)
+		}
+		if tuple, ok := roleElevatedTuple(tu.TenantID, tu.Role, tu.ID.String()); ok {
+			if err := s.authz.Delete(ctx, tuple); err != nil {
+				return fmt.Errorf("remove role tuple: %w", err)
+			}
+		}
+		return s.syncServicePrincipalAdmin(ctx, tx, tu.TenantID)
+	})
+	if err != nil {
+		return err
 	}
 	return nil
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/eliminyro/memory-system/internal/authz"
 )
 
 // RetentionRepository runs the retention sweep SQL: archive expired docs and
@@ -49,8 +51,8 @@ func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.
 
 // DeleteArchived hard-deletes docs archived before `before` in one atomic
 // statement: writes a deletion_events audit row per victim, purges cleanup_queue
-// rows referencing a victim, then deletes the docs (sections cascade). Returns
-// count deleted.
+// rows referencing a victim, prunes the victims' relation_tuples, then deletes
+// the docs (sections cascade). Returns count deleted.
 func (r *RetentionRepository) DeleteArchived(ctx context.Context, tenantID uuid.UUID, before time.Time) (int64, error) {
 	const sql = `
 		WITH victims AS (
@@ -69,10 +71,14 @@ func (r *RetentionRepository) DeleteArchived(ctx context.Context, tenantID uuid.
 			DELETE FROM cleanup_queue
 			WHERE doc_a_id IN (SELECT id FROM victims)
 			   OR doc_b_id IN (SELECT id FROM victims)
+		),
+		tuples AS (
+			DELETE FROM relation_tuples
+			WHERE object_type = ? AND object_id IN (SELECT id::text FROM victims)
 		)
 		DELETE FROM documents WHERE id IN (SELECT id FROM victims)
 	`
-	res := r.db.WithContext(ctx).Exec(sql, tenantID, before, tenantID)
+	res := r.db.WithContext(ctx).Exec(sql, tenantID, before, tenantID, authz.TypeDocument)
 	if res.Error != nil {
 		return 0, fmt.Errorf("delete archived: %w", res.Error)
 	}
