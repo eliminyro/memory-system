@@ -72,11 +72,11 @@ func decodeGrantBody(r *http.Request) (aclGrantBody, error) {
 func writeACLErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apperr.ErrInvalidRelation):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, apperr.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, apperr.ErrInvalidInput):
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusForbidden, err.Error())
 	default:
 		writeErr(w, err)
 	}
@@ -102,7 +102,7 @@ func (h *aclAPIHandler) grantTenantAccess(w http.ResponseWriter, r *http.Request
 	}
 	body, err := decodeGrantBody(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := h.memory.GrantTenantAccess(r.Context(), id, body.Email, body.Relation); err != nil {
@@ -119,7 +119,7 @@ func (h *aclAPIHandler) revokeTenantAccess(w http.ResponseWriter, r *http.Reques
 	}
 	body, err := decodeGrantBody(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := h.memory.RevokeTenantAccess(r.Context(), id, body.Email, body.Relation); err != nil {
@@ -149,7 +149,7 @@ func (h *aclAPIHandler) grantDocumentAccess(w http.ResponseWriter, r *http.Reque
 	}
 	body, err := decodeGrantBody(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := h.memory.GrantDocumentAccess(r.Context(), id, body.Email, body.Relation); err != nil {
@@ -166,7 +166,7 @@ func (h *aclAPIHandler) revokeDocumentAccess(w http.ResponseWriter, r *http.Requ
 	}
 	body, err := decodeGrantBody(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := h.memory.RevokeDocumentAccess(r.Context(), id, body.Email, body.Relation); err != nil {

@@ -34,7 +34,10 @@ type adminAPIHandler struct {
 // tests can stub it without a database.
 type importJobStore interface {
 	Create(ctx context.Context, job *models.ImportJob) error
-	GetByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error)
+	// GetStatusByID backs the status/poll path; it omits the archive blob (the
+	// status response never serializes it — json:"-"). The worker's full-row
+	// load stays on the repository's ClaimNext/GetByID, not on this interface.
+	GetStatusByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error)
 }
 
 // adminOnly refuses non-admins with a clean 403 before dispatch. Service methods
@@ -44,7 +47,7 @@ func adminOnly(svc *service.MemoryService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !svc.IsAdmin(r.Context()) {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin privileges required"})
+				writeError(w, http.StatusForbidden, "admin privileges required")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -134,7 +137,7 @@ func (h *adminAPIHandler) createKey(w http.ResponseWriter, r *http.Request) {
 	var expiresAt *time.Time
 	if body.ExpiresInDays != nil {
 		if *body.ExpiresInDays <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expires_in_days must be > 0"})
+			writeError(w, http.StatusBadRequest, "expires_in_days must be > 0")
 			return
 		}
 		t := time.Now().Add(time.Duration(*body.ExpiresInDays) * 24 * time.Hour)
@@ -161,7 +164,7 @@ func (h *adminAPIHandler) rotateKey(w http.ResponseWriter, r *http.Request) {
 	var grace time.Duration
 	if body.GraceHours != nil {
 		if *body.GraceHours < 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "grace_hours must be >= 0"})
+			writeError(w, http.StatusBadRequest, "grace_hours must be >= 0")
 			return
 		}
 		grace = time.Duration(*body.GraceHours) * time.Hour
@@ -197,7 +200,7 @@ func (h *adminAPIHandler) grantUser(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID, err := uuid.Parse(body.TenantID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	tu, err := h.memory.GrantTenantUser(r.Context(), body.Email, tenantID, body.Role)
@@ -252,7 +255,7 @@ func (h *adminAPIHandler) updateUserRole(w http.ResponseWriter, r *http.Request)
 func (h *adminAPIHandler) revokeUser(w http.ResponseWriter, r *http.Request) {
 	email := r.URL.Query().Get("email")
 	if email == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email query parameter is required"})
+		writeError(w, http.StatusBadRequest, "email query parameter is required")
 		return
 	}
 	if err := h.memory.RevokeTenantUser(r.Context(), email); err != nil {
@@ -298,7 +301,7 @@ func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobS
 	// the memory cost. The specific target tenant is still authorized by
 	// `authorize` after the body is parsed for tenant_id.
 	if preAuthorize != nil && !preAuthorize(r.Context()) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to import"})
+		writeError(w, http.StatusForbidden, "not authorized to import")
 		return
 	}
 	// Cap the whole request body: MaxBytesReader makes reads past the limit fail
@@ -311,28 +314,28 @@ func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobS
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "archive exceeds the upload size limit"})
+			writeError(w, http.StatusRequestEntityTooLarge, "archive exceeds the upload size limit")
 			return
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `invalid archive upload (expected multipart form file field "archive")`})
+		writeError(w, http.StatusBadRequest, `invalid archive upload (expected multipart form file field "archive")`)
 		return
 	}
 
 	tenantID := auth.TenantIDFromContext(r.Context())
 	override, err := parseOptionalTenantID(strings.TrimSpace(r.FormValue("tenant_id")))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	if override != nil {
 		tenantID = *override
 	}
 	if tenantID == uuid.Nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no target tenant: pass tenant_id or authenticate with a tenant-scoped key"})
+		writeError(w, http.StatusBadRequest, "no target tenant: pass tenant_id or authenticate with a tenant-scoped key")
 		return
 	}
 	if !authorize(r.Context(), tenantID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to import into this tenant"})
+		writeError(w, http.StatusForbidden, "not authorized to import into this tenant")
 		return
 	}
 
@@ -346,7 +349,7 @@ func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobS
 		return
 	}
 	// tenant_id is echoed so a client that targeted another tenant can poll its
-	// status: importStatus scopes GetByID by tenant (see its ?tenant_id handling).
+	// status: importStatus scopes GetStatusByID by tenant (see its ?tenant_id handling).
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": job.ID, "status": job.Status, "tenant_id": job.TenantID})
 }
 
@@ -378,9 +381,10 @@ func (h *adminAPIHandler) importStatus(w http.ResponseWriter, r *http.Request) {
 // GET /api/admin/import/{id} and GET /api/import/{id}: resolve the job id and
 // the target tenant (context default, optionally overridden by a "tenant_id"
 // query param — echoed by enqueueImportShared), authorize the resolved target
-// via authorize, then fetch the tenant-scoped job. GetByID is tenant-scoped,
-// so the archive bytes never leave the server (json:"-") and an unknown or
-// wrong-tenant id yields 404 via writeErr.
+// via authorize, then fetch the tenant-scoped job. GetStatusByID is
+// tenant-scoped and omits the archive blob (the status response never
+// serializes it — json:"-"), so an unknown or wrong-tenant id yields 404 via
+// writeErr.
 func importStatusShared(w http.ResponseWriter, r *http.Request, jobs importJobStore, authorize importAuthorizer) {
 	id, ok := pathUUID(w, r, "id", "job")
 	if !ok {
@@ -392,17 +396,17 @@ func importStatusShared(w http.ResponseWriter, r *http.Request, jobs importJobSt
 	// wrong scope and surface as a misleading 404 (B15).
 	override, err := parseOptionalTenantID(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	if override != nil {
 		tenantID = *override
 	}
 	if !authorize(r.Context(), tenantID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to view this tenant's import jobs"})
+		writeError(w, http.StatusForbidden, "not authorized to view this tenant's import jobs")
 		return
 	}
-	job, err := jobs.GetByID(r.Context(), id, tenantID)
+	job, err := jobs.GetStatusByID(r.Context(), id, tenantID)
 	if err != nil {
 		writeErr(w, err)
 		return

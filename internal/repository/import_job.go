@@ -149,3 +149,21 @@ func (r *ImportJobRepository) GetByID(ctx context.Context, id, tenantID uuid.UUI
 	}
 	return &job, nil
 }
+
+// GetStatusByID returns a job WITHOUT its Archive blob — for the status/poll
+// path, which never needs the (up to ~32MiB) archive. ClaimNext/GetByID keep
+// loading the full row for the worker. Same tenant scoping and not-found
+// mapping as GetByID: a job is visible only to its owning tenant.
+func (r *ImportJobRepository) GetStatusByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error) {
+	var job models.ImportJob
+	if err := r.db.WithContext(ctx).
+		Omit("Archive").
+		Where("id = ? AND tenant_id = ?", id, tenantID).
+		First(&job).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: import job %s", apperr.ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("get import job: %w", err)
+	}
+	return &job, nil
+}

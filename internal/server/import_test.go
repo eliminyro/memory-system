@@ -23,9 +23,10 @@ type fakeImportJobs struct {
 	createErr error
 	getJob    *models.ImportJob
 	getErr    error
-	// getByIDTenant records the tenant the handler scoped the last GetByID to,
-	// so a test can assert importStatus honored the tenant_id query param.
-	getByIDTenant uuid.UUID
+	// getStatusTenant records the tenant the handler scoped the last
+	// GetStatusByID to, so a test can assert importStatus honored the tenant_id
+	// query param.
+	getStatusTenant uuid.UUID
 }
 
 func (f *fakeImportJobs) Create(ctx context.Context, job *models.ImportJob) error {
@@ -37,8 +38,8 @@ func (f *fakeImportJobs) Create(ctx context.Context, job *models.ImportJob) erro
 	return nil
 }
 
-func (f *fakeImportJobs) GetByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error) {
-	f.getByIDTenant = tenantID
+func (f *fakeImportJobs) GetStatusByID(ctx context.Context, id, tenantID uuid.UUID) (*models.ImportJob, error) {
+	f.getStatusTenant = tenantID
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -286,9 +287,9 @@ func TestImportEnqueue_InvalidTargetTenant(t *testing.T) {
 	}
 }
 
-// importStatus scopes GetByID to the tenant_id query param (echoed by enqueue),
-// so a job an admin sent to another tenant is pollable even though the caller's
-// own context tenant differs.
+// importStatus scopes GetStatusByID to the tenant_id query param (echoed by
+// enqueue), so a job an admin sent to another tenant is pollable even though the
+// caller's own context tenant differs.
 func TestImportStatus_TargetTenantQuery(t *testing.T) {
 	id := uuid.New()
 	target := uuid.New()
@@ -305,8 +306,8 @@ func TestImportStatus_TargetTenantQuery(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if fake.getByIDTenant != target {
-		t.Errorf("GetByID tenant = %s, want %s (from the query param, not context)", fake.getByIDTenant, target)
+	if fake.getStatusTenant != target {
+		t.Errorf("GetStatusByID tenant = %s, want %s (from the query param, not context)", fake.getStatusTenant, target)
 	}
 }
 
@@ -332,7 +333,7 @@ func TestImportStatus_InvalidTargetTenant(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for malformed tenant_id", rec.Code)
 	}
-	if fake.getByIDTenant != uuid.Nil {
-		t.Errorf("GetByID was called (tenant=%s); a malformed tenant_id must reject before lookup", fake.getByIDTenant)
+	if fake.getStatusTenant != uuid.Nil {
+		t.Errorf("GetStatusByID was called (tenant=%s); a malformed tenant_id must reject before lookup", fake.getStatusTenant)
 	}
 }

@@ -145,13 +145,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError writes a JSON {"error": msg} body with the given status.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
 // pathUUID parses the {name} path segment as a UUID. On failure it writes a 400
 // with an "invalid <label> id" body and returns ok=false; the caller must return
 // immediately when ok is false.
 func pathUUID(w http.ResponseWriter, r *http.Request, name, label string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue(name))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid " + label + " id"})
+		writeError(w, http.StatusBadRequest, "invalid "+label+" id")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -163,7 +168,7 @@ func pathUUID(w http.ResponseWriter, r *http.Request, name, label string) (uuid.
 // this — they ignore the decode error rather than 400 on it.
 func decodeJSON[T any](w http.ResponseWriter, r *http.Request, dst *T) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return false
 	}
 	return true
@@ -187,12 +192,12 @@ func jsonList[T any](s []T) []T {
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apperr.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, apperr.ErrInvalidInput):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		slog.Error("api: internal error", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		writeError(w, http.StatusInternalServerError, "internal error")
 	}
 }
 
@@ -225,13 +230,13 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query := q.Get("q")
 	if query == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q is required"})
+		writeError(w, http.StatusBadRequest, "q is required")
 		return
 	}
 	// Mirror MCP search_memory's input bounds (shared service consts): reject an
 	// over-long query and clamp the limit so an unbounded ?limit can't be abused.
 	if len(query) > service.MaxQueryLen {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q exceeds maximum length"})
+		writeError(w, http.StatusBadRequest, "q exceeds maximum length")
 		return
 	}
 	var category, subcategory *string
@@ -250,7 +255,7 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID, err := tenantFilter(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	results, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", tenantID)
@@ -268,7 +273,7 @@ func (h *apiHandler) getDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID, err := tenantFilter(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	doc, err := h.memory.GetDocumentByID(r.Context(), id, false, "", tenantID)
@@ -290,7 +295,7 @@ func (h *apiHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID, err := tenantFilter(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	docs, err := h.memory.ListDocuments(r.Context(), category, subcategory, tenantID)
@@ -312,7 +317,7 @@ func (h *apiHandler) getIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID, err := tenantFilter(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	entries, err := h.memory.GenerateIndex(r.Context(), depth, category, tenantID)
@@ -336,7 +341,7 @@ func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Content == nil && body.Heading == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content or heading is required"})
+		writeError(w, http.StatusBadRequest, "content or heading is required")
 		return
 	}
 	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, body.Heading, nil)
@@ -414,7 +419,7 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimSpace(body.Slug)
 	content := strings.TrimSpace(body.Content)
 	if category == "" || slug == "" || content == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "category, slug and content are required"})
+		writeError(w, http.StatusBadRequest, "category, slug and content are required")
 		return
 	}
 	subcategory := body.Subcategory
@@ -425,7 +430,7 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 	// HTTP surface previously skipped it, letting malformed slugs through and
 	// turning an over-long category into a Postgres 500 instead of a 400.
 	if err := models.ValidateDocumentPath(category, slug, subcategory); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -433,14 +438,14 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 	tenantID := auth.TenantIDFromContext(ctx)
 	override, err := parseOptionalTenantID(body.TenantID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	if override != nil {
 		tenantID = *override
 	}
 	if !h.canImportInto(ctx, tenantID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to write to this tenant"})
+		writeError(w, http.StatusForbidden, "not authorized to write to this tenant")
 		return
 	}
 	ctx = auth.WithTenantID(ctx, tenantID)

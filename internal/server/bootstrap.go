@@ -64,7 +64,7 @@ func bootstrapPostHandler(memory *service.MemoryService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := parseBootstrapRequest(r)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+			writeError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
 
@@ -73,12 +73,12 @@ func bootstrapPostHandler(memory *service.MemoryService) http.HandlerFunc {
 		if err != nil {
 			switch {
 			case errors.Is(err, service.ErrBootstrapForbidden):
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "bootstrap forbidden"})
+				writeError(w, http.StatusForbidden, "bootstrap forbidden")
 			case errors.Is(err, service.ErrAlreadyBootstrapped):
-				writeJSON(w, http.StatusConflict, map[string]string{"error": "already bootstrapped"})
+				writeError(w, http.StatusConflict, "already bootstrapped")
 			default:
 				slog.Error("bootstrap: internal error", "error", err)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+				writeError(w, http.StatusInternalServerError, "internal error")
 			}
 			return
 		}

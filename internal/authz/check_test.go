@@ -193,3 +193,67 @@ func TestCheck_UnknownRelation(t *testing.T) {
 		t.Errorf("want ErrUnknownRelation, got %v", err)
 	}
 }
+
+// TestCheck_DiamondMemoization locks that the Check-scoped memo (which caches
+// definitive, error-free results so a node reached via two rewrite paths isn't
+// recomputed) does NOT change any Check outcome. document#viewer is a natural
+// diamond: the owning tenant's member subtree is reachable via BOTH
+// computed(editor) -> "member from tenant" AND "viewer from tenant" ->
+// computed(member). Each case forces the diamond and asserts the result matches
+// the un-memoized semantics — a granting case and a denying case both.
+func TestCheck_DiamondMemoization(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	writes := []Tuple{
+		// tgrant: a direct member, no wildcard. Its #member subtree is the diamond
+		// re-convergence node — reached via the editor branch first (memoized),
+		// then again via the viewer branch's computed(member).
+		tup(TypeTenant, "tgrant", RelMember, TypeUser, "gmember", ""),
+		tup(TypeDocument, "dgrant", RelTenant, TypeTenant, "tgrant", ""),
+		// tpub: public wildcard read on the tenant#viewer relation, so the grant
+		// arrives via the viewer-from-tenant branch AFTER the editor branch has
+		// explored and memoized the (denying) member subtree.
+		tup(TypeTenant, "tpub", RelViewer, TypeUser, Wildcard, ""),
+		tup(TypeDocument, "dpub", RelTenant, TypeTenant, "tpub", ""),
+	}
+	for _, w := range writes {
+		if err := store.Write(ctx, w); err != nil {
+			t.Fatalf("seed write %+v: %v", w, err)
+		}
+	}
+	e := NewEngine(store)
+
+	tests := []struct {
+		name     string
+		objType  string
+		objID    string
+		relation string
+		subjID   string
+		want     bool
+	}{
+		// Grant via editor -> member-from-tenant (diamond node #member is true).
+		{"member views doc (grant via editor path)", TypeDocument, "dgrant", RelViewer, "gmember", true},
+		{"member edits doc (member from tenant)", TypeDocument, "dgrant", RelEditor, "gmember", true},
+		// Deny: the editor branch memoizes tenant#member as deny, then the viewer
+		// branch's computed(member) hits that memo — result must stay deny.
+		{"non-member denied doc view (memo re-converges on member)", TypeDocument, "dgrant", RelViewer, "nobody", false},
+		{"non-member denied doc edit", TypeDocument, "dgrant", RelEditor, "nobody", false},
+		// Grant via viewer-from-tenant (wildcard), after the editor branch explored
+		// and memoized the member subtree as deny.
+		{"stranger views public doc (grant via tenant-viewer wildcard)", TypeDocument, "dpub", RelViewer, "nobody", true},
+		// A wildcard on tenant#viewer does NOT confer edit (editor needs member).
+		{"stranger cannot edit public doc", TypeDocument, "dpub", RelEditor, "nobody", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.Check(ctx, tc.objType, tc.objID, tc.relation, TypeUser, tc.subjID)
+			if err != nil {
+				t.Fatalf("Check(%s:%s#%s@user:%s) error: %v", tc.objType, tc.objID, tc.relation, tc.subjID, err)
+			}
+			if got != tc.want {
+				t.Errorf("Check(%s:%s#%s@user:%s) = %v, want %v", tc.objType, tc.objID, tc.relation, tc.subjID, got, tc.want)
+			}
+		})
+	}
+}
