@@ -87,11 +87,6 @@ type Wiring struct {
 	// when it exits (after ctx is canceled).
 	RunCleanup func(ctx context.Context) <-chan struct{}
 
-	// db backs UserContextBridge's verified-email -> tenant_users.id lookup so
-	// the JWT path can attach a unified auth.Subject. Nil in unit tests: the
-	// bridge attaches only tenant id + email (no subject) and Pass 2 fails closed.
-	db *gorm.DB
-
 	// prmURL is the absolute PRM URL; WWWAuth401 embeds it in the Bearer
 	// challenge so OAuth-discovering clients find the AS. Empty in unit-test
 	// Wiring (challenge then omits resource_metadata).
@@ -117,10 +112,13 @@ func (w *Wiring) Mount(mux *http.ServeMux) {
 // Setup builds the authlet AS, bearer middleware, PRM handler, and cleanup
 // launcher; caller mounts routes with Wiring.Mount. Reads AUTHLET_MASTER_KEY
 // from env and does synchronous Google OIDC discovery — an unreachable Google
-// is a startup failure. idTokenClaims/AdditionalClaims embed the resolved
-// email (looked up by tenant_id `sub`; treated as verified since a
-// tenant_users row only exists via a verified Google email) so the JWT path
-// reaches parity with the API-key path. logger flows to as.Config.Logger.
+// is a startup failure. The JWT `sub` is the per-user tenant_users.id (set by
+// MemoryUserResolver). idTokenClaims/additionalClaims look the email up by that
+// unique id, and additionalClaims also embeds a signed `tenant_id` claim so
+// UserContextBridge can attach tenant+subject+email from the token alone — no DB
+// read on the request path. Email is treated as verified since a tenant_users
+// row only exists via a verified Google email, giving the JWT path parity with
+// the API-key path. logger flows to as.Config.Logger.
 func Setup(
 	ctx context.Context,
 	db *gorm.DB,
@@ -169,26 +167,29 @@ func Setup(
 		return nil, fmt.Errorf("upstream oidc: %w", err)
 	}
 
-	// idTokenClaims runs when the AS mints an ID token. A lookup miss returns
-	// zero values (ID token loses email/name; access token unaffected). Email
-	// is verified because a tenant_users row only exists via a verified Google
-	// email (MemoryUserResolver enforces EmailVerified=true).
+	// idTokenClaims runs when the AS mints an ID token. userID is the
+	// tenant_users.id (`sub`); the email is looked up by that unique id. A lookup
+	// miss returns zero values (ID token loses email/name; access token
+	// unaffected). Email is verified because a tenant_users row only exists via a
+	// verified Google email (MemoryUserResolver enforces EmailVerified=true).
 	idTokenClaims := func(ctx context.Context, userID string) (email string, emailVerified bool, name, picture string) {
-		e := lookupTenantEmail(ctx, db, logger, userID)
-		if e == "" {
+		e, _, found := lookupUserClaims(ctx, db, logger, userID)
+		if !found {
 			return "", false, "", ""
 		}
 		return e, true, "", ""
 	}
 
-	// additionalClaims puts the resolved email in the access token's custom
-	// claims; UserContextBridge reads it from jwt.Claims.Extra into auth.WithEmail.
+	// additionalClaims puts the resolved email AND tenant_id in the access
+	// token's custom claims — both read from the SAME tenant_users row (by unique
+	// id, no LIMIT ambiguity). UserContextBridge reads them from jwt.Claims.Extra
+	// into auth.WithEmail / auth.WithTenantID, so the JWT path needs no DB read.
 	additionalClaims := func(ctx context.Context, userID, _, _ string) map[string]any {
-		e := lookupTenantEmail(ctx, db, logger, userID)
-		if e == "" {
+		email, tenantID, found := lookupUserClaims(ctx, db, logger, userID)
+		if !found {
 			return nil
 		}
-		return map[string]any{"email": e}
+		return map[string]any{"email": email, "tenant_id": tenantID}
 	}
 
 	// Construct the resolver as a local so it can be exposed on Wiring; the
@@ -233,52 +234,34 @@ func Setup(
 		RunCleanup: func(ctx context.Context) <-chan struct{} {
 			return server.RunCleanup(ctx, cleanupInterval)
 		},
-		db:     db,
 		prmURL: urls.prmURL,
 	}, nil
 }
 
-// lookupTenantEmail returns the email for a tenant_user row matching tenantID,
-// or "" when none exists or on any DB error (logged at warn). Callers map ""
-// to a missing claim.
-func lookupTenantEmail(ctx context.Context, db *gorm.DB, logger *slog.Logger, tenantID string) string {
+// lookupUserClaims returns the email and tenant_id for the tenant_users row
+// keyed by its unique id (the JWT `sub`). found is false when no row matches or
+// on any DB error (logged at warn); callers map that to a missing claim. Keying
+// on the unique id — never `tenant_id` with LIMIT 1 — is what makes the claim
+// unambiguous in a shared tenant with multiple members.
+func lookupUserClaims(ctx context.Context, db *gorm.DB, logger *slog.Logger, userID string) (email, tenantID string, found bool) {
 	var row struct {
-		Email string `gorm:"column:email"`
+		Email    string `gorm:"column:email"`
+		TenantID string `gorm:"column:tenant_id"`
 	}
 	if err := db.WithContext(ctx).
 		Table("tenant_users").
-		Select("email").
-		Where("tenant_id = ?", tenantID).
+		Select("email", "tenant_id").
+		Where("id = ?", userID).
 		Limit(1).
 		Scan(&row).Error; err != nil {
 		logger.Warn("authletas: tenant_user email lookup failed",
-			"tenant_id", tenantID, "err", err)
-		return ""
+			"id", userID, "err", err)
+		return "", "", false
 	}
-	return row.Email
-}
-
-// lookupTenantUserID returns the tenant_users.id (the unified subject id for
-// the JWT human path) for a verified email. Returns ("", false) on no row or
-// DB error (logged at warn), so the bridge attaches no subject and Pass 2
-// fails closed.
-func lookupTenantUserID(ctx context.Context, db *gorm.DB, logger *slog.Logger, email string) (string, bool) {
-	var row struct {
-		ID string `gorm:"column:id"`
+	if row.Email == "" {
+		return "", "", false
 	}
-	if err := db.WithContext(ctx).
-		Table("tenant_users").
-		Select("id").
-		Where("email = ?", email).
-		Limit(1).
-		Scan(&row).Error; err != nil {
-		logger.Warn("authletas: tenant_user id lookup failed", "err", err)
-		return "", false
-	}
-	if row.ID == "" {
-		return "", false
-	}
-	return row.ID, true
+	return row.Email, row.TenantID, true
 }
 
 // loadMasterKey reads and hex-decodes AUTHLET_MASTER_KEY, which must be exactly

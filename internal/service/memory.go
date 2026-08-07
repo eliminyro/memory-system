@@ -783,6 +783,47 @@ func (s *MemoryService) DeleteDocument(ctx context.Context, category string, sub
 	})
 }
 
+// DeleteDocumentByID removes a document and all its sections, addressed by UUID
+// and deleted from its OWNING tenant. It exists because DeleteDocument re-resolves
+// a (category, subcategory, slug) path against the caller's home tenant, so an id
+// that resolves to a foreign (common-pool or granted) doc would otherwise delete a
+// same-path home-tenant doc instead. Here the doc is located across the caller's
+// read scope, and a doc outside the caller's home tenant requires document#editor.
+func (s *MemoryService) DeleteDocumentByID(ctx context.Context, id uuid.UUID, overrideID *uuid.UUID) error {
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return err
+	}
+	scope, err := s.readScope(ctx, overrideID)
+	if err != nil {
+		return err
+	}
+	if len(scope) == 0 {
+		return fmt.Errorf("%w: document %s", apperr.ErrNotFound, id)
+	}
+	doc, err := s.docs.GetByID(ctx, scope, id)
+	if err != nil {
+		return err
+	}
+	if doc.TenantID != tid && !s.authorize(ctx, authz.TypeDocument, doc.ID.String(), authz.RelEditor) {
+		return fmt.Errorf("%w: not authorized to delete document %s", apperr.ErrInvalidInput, id)
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txDocs := repository.NewDocumentRepository(tx)
+		txSections := repository.NewSectionRepository(tx)
+
+		if err := txSections.DeleteByDocumentID(ctx, doc.ID); err != nil {
+			return fmt.Errorf("delete sections: %w", err)
+		}
+		if err := txDocs.Delete(ctx, doc.TenantID, doc.ID); err != nil {
+			return fmt.Errorf("delete document: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // ListDocuments lists documents across the caller's readable tenant set,
 // optionally filtered. Each returned document already carries its owning
 // TenantID; a nil overrideID aggregates, a set overrideID narrows to one

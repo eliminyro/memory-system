@@ -24,9 +24,10 @@ func TestUserContextBridge_SetsTenantIDFromClaims(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	// Tenant + email come from the signed custom claims; sub is the user id.
 	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{
-		Subject: tid.String(),
-		Extra:   map[string]any{"email": "admin@example.com"},
+		Subject: "user-id-1",
+		Extra:   map[string]any{"tenant_id": tid.String(), "email": "admin@example.com"},
 	})
 	req = req.WithContext(ctx)
 
@@ -52,9 +53,10 @@ func TestUserContextBridge_NoEmailExtraStillSetsTenant(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
-	// Claims with no Extra map (or no "email" key) — tenant must still be set.
+	// tenant_id claim present, no email claim — tenant must still be set.
 	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{
-		Subject: tid.String(),
+		Subject: "user-id-1",
+		Extra:   map[string]any{"tenant_id": tid.String()},
 	})
 	req = req.WithContext(ctx)
 
@@ -85,20 +87,28 @@ func TestUserContextBridge_NoClaimsIsNoOp(t *testing.T) {
 	}
 }
 
-func TestUserContextBridge_SubjectNotUUIDIsNoOp(t *testing.T) {
+// A claims set whose tenant_id is absent/unparseable must be a no-op passthrough
+// (fail secure for legacy pre-fix tokens that lack the tenant_id claim).
+func TestUserContextBridge_MissingTenantIDClaimIsNoOp(t *testing.T) {
 	w := &Wiring{}
 
 	var seenTenant uuid.UUID
+	var seenSubjectOK bool
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seenTenant = auth.TenantIDFromContext(r.Context())
+		_, seenSubjectOK = auth.SubjectFromContext(r.Context())
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
-	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{Subject: "not-a-uuid"})
+	// sub present but NO tenant_id claim (legacy token shape).
+	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{Subject: "user-id-1"})
 	req = req.WithContext(ctx)
 	w.UserContextBridge()(inner).ServeHTTP(httptest.NewRecorder(), req)
 
 	if seenTenant != uuid.Nil {
-		t.Fatalf("non-UUID subject must not populate tenant id; got %s", seenTenant)
+		t.Fatalf("missing tenant_id claim must not populate tenant id; got %s", seenTenant)
+	}
+	if seenSubjectOK {
+		t.Fatal("missing tenant_id claim must not populate a subject (fail secure)")
 	}
 }
