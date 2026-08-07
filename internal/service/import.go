@@ -55,6 +55,15 @@ func (s *MemoryService) ImportDocuments(ctx context.Context, tenantID uuid.UUID,
 			return nil
 		}
 
+		// Enforce the same path contract as HTTP createDocument and MCP
+		// store_memory: a space-bearing or over-long segment is Skipped, not
+		// silently stored with a malformed identifier.
+		if err := models.ValidateDocumentPath(category, slug, subcategory); err != nil {
+			slog.Default().Warn("skipping invalid import path", "path", path, "error", err)
+			result.Skipped++
+			return nil
+		}
+
 		// Bulk import bypasses the duplicate guard — the operator's intent is to
 		// ingest files as-authored, not to prompt on every near-duplicate.
 		if _, err := s.StoreDocument(ctx, category, subcategory, slug, string(content), true, "bulk import", nil); err != nil {

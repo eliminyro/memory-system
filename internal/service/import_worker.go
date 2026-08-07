@@ -149,6 +149,16 @@ func (w *ImportWorker) process(ctx context.Context, job *models.ImportJob) {
 		return
 	}
 
+	// A batch where every parseable document failed to store (e.g. embedding
+	// backend down) is terminal-Failed, not Succeeded-with-imported=0. A mixed
+	// partial success (some imported) still finishes Succeeded.
+	if res.Imported == 0 && res.Failed > 0 {
+		w.finish(ctx, job.ID, models.ImportJobStatusFailed,
+			fmt.Sprintf("all %d document(s) failed to import", res.Failed),
+			total, res.Imported, res.Skipped, res.Failed)
+		return
+	}
+
 	w.finish(ctx, job.ID, models.ImportJobStatusSucceeded, "", total, res.Imported, res.Skipped, res.Failed)
 }
 
