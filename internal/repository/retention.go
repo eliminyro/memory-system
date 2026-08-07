@@ -25,6 +25,12 @@ func NewRetentionRepository(db *gorm.DB) *RetentionRepository {
 // the doc_type cutoff. "Freshest" = latest of verified_at/updated_at/created_at,
 // so editing a section (bumps updated_at, not verified_at) keeps a doc alive, not
 // just mark_verified. One UPDATE per doc_type.
+//
+// Zero-section fallback: a doc with NO sections satisfies NOT EXISTS trivially and
+// would otherwise be archived on its very next sweep regardless of its own age. The
+// extra guard makes the zero-section case fall back to the document's own
+// created_at/updated_at, so a freshly-created empty doc is not archived until it is
+// itself older than the cutoff. Docs that have sections are unaffected.
 func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.UUID, cutoffs map[string]time.Time) (int64, error) {
 	const sql = `
 		UPDATE documents d
@@ -37,10 +43,14 @@ func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.
 			WHERE s.document_id = d.id
 			  AND GREATEST(COALESCE(s.verified_at, s.created_at), s.updated_at) >= ?
 		  )
+		  AND (
+			EXISTS (SELECT 1 FROM sections s2 WHERE s2.document_id = d.id)
+			OR GREATEST(d.updated_at, d.created_at) < ?
+		  )
 	`
 	var total int64
 	for docType, cutoff := range cutoffs {
-		res := r.db.WithContext(ctx).Exec(sql, tenantID, docType, cutoff)
+		res := r.db.WithContext(ctx).Exec(sql, tenantID, docType, cutoff, cutoff)
 		if res.Error != nil {
 			return total, fmt.Errorf("archive expired (%s): %w", docType, res.Error)
 		}

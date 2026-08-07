@@ -24,7 +24,7 @@ func NewDocumentRepository(db *gorm.DB) *DocumentRepository {
 // readTenants returns the tenant IDs to include in reads: the requesting tenant
 // plus the common (bootstrap) pool of legacy/seed docs.
 //
-// idx_doc_tenant_path is per-tenant, so a tenant can override a bootstrap path
+// idx_doc_tenant_path_active is per-tenant, so a tenant can override a bootstrap path
 // with its own doc; GetByPath orders the requesting tenant first so it wins.
 //
 // Dedup side effect: list/scan can return two docs at one path with different

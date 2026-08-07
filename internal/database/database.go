@@ -153,7 +153,16 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		// Drop old path index (not tenant-scoped) and create tenant-scoped one
 		`DROP INDEX IF EXISTS idx_doc_path_with_null`,
 		`DROP INDEX IF EXISTS idx_doc_path`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_tenant_path ON documents (tenant_id, category, COALESCE(subcategory, ''), slug)`,
+		// Partial on `archived_at IS NULL` so uniqueness covers only ONE ACTIVE doc
+		// per (tenant, path); an archived row no longer occupies the slot, so
+		// re-storing at an archived path takes StoreDocument's Create branch cleanly
+		// (no 23505). Mirrors idx_cleanup_pending_pair below. New index NAME (`_active`)
+		// is deliberate: `CREATE ... IF NOT EXISTS idx_doc_tenant_path` on an existing
+		// DB would skip (name present) and silently keep the old NON-partial index, so
+		// drop the old name once and create the partial under a new name — both
+		// statements are then no-ops on every subsequent boot.
+		`DROP INDEX IF EXISTS idx_doc_tenant_path`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_tenant_path_active ON documents (tenant_id, category, COALESCE(subcategory, ''), slug) WHERE archived_at IS NULL`,
 		// One unresolved cleanup_queue row per (tenant, doc_a, doc_b): makes the
 		// check-then-insert Upsert race-safe across replicas (a concurrent second
 		// insert hits this and is treated as a no-op). Partial so resolved rows don't
