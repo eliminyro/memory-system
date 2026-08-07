@@ -63,6 +63,22 @@ steps:
       - kill $SERVER_PID 2>/dev/null || true
     depends_on: []
 
+  - name: govulncheck
+    image: golang:1.26-alpine
+    pull: true
+    volumes:
+      - /tmp/memory-system-ci/go-cache:/root/.cache/go-build
+      - /tmp/memory-system-ci/go-mod:/go/pkg/mod
+    commands:
+      # Known-CVE gate. Scan the DEPLOYED binaries' reachable graph (./cmd/... —
+      # production code only, so no test-only CGO deps like go-sqlite3 need a C
+      # toolchain) on the same Go 1.26 line the Dockerfile builds with, so stdlib
+      # findings reflect what actually ships. Fails the pipeline on any known
+      # vulnerability reachable from the binaries; gates auto-merge + build-push.
+      - apk add --no-cache git
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./cmd/...
+    depends_on: []
+
   - name: auto-merge
     image: ghcr.io/eliminyro/ci-tool:latest
     pull: true
@@ -75,6 +91,7 @@ steps:
       - test
       - fmt
       - smoke
+      - govulncheck
     when:
       - event: pull_request
 
@@ -92,5 +109,6 @@ steps:
       - test
       - fmt
       - smoke
+      - govulncheck
     when:
       - event: push
