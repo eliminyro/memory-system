@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -316,14 +316,21 @@ func (s *Server) RevokeUser(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 
 // toolErr maps a service error to an MCP tool result: the safe sentinels
 // (ErrNotFound / ErrInvalidInput) become a clean errorResult (isError tool
-// result, mirroring the HTTP surface's writeErr 404/400), while anything else
-// is wrapped as a Go error under prefix so the SDK reports a JSON-RPC internal
-// error and the raw message never reaches the client.
+// result, mirroring the HTTP surface's writeErr 404/400). Anything else is
+// logged server-side and returned as a generic "<prefix>: internal error"
+// isError result — never a returned Go error carrying the raw message. This
+// mirrors HTTP writeErr's {"error":"internal error"}: because the go-sdk
+// surfaces a handler's returned error by marshaling err.Error() into the tool
+// result's TextContent (with a nil transport error), returning a Go error here
+// would leak the wrapped internal message (SQL/driver/endpoint text) to the
+// client. Returning a generic errorResult keeps the raw message off the wire
+// regardless of SDK surfacing.
 func toolErr(prefix string, err error) (*mcpsdk.CallToolResult, any, error) {
 	if errors.Is(err, apperr.ErrInvalidInput) || errors.Is(err, apperr.ErrNotFound) {
 		return errorResult(err.Error()), nil, nil
 	}
-	return nil, nil, fmt.Errorf("%s: %w", prefix, err)
+	slog.Default().Error("mcp tool internal error", "prefix", prefix, "error", err)
+	return errorResult(prefix + ": internal error"), nil, nil
 }
 
 // handleAdminError is the admin/ACL handlers' error mapper: toolErr under the

@@ -10,13 +10,13 @@ import (
 
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/service"
 )
 
-const (
-	maxContentSize = 10 << 20 // 10 MB
-	maxQueryLen    = 10_000
-	maxSearchLimit = 100
-)
+// maxContentSize caps a section/document body. The search limit and query-length
+// bounds live in the service package (service.MaxSearchLimit / service.MaxQueryLen)
+// so the MCP and HTTP read surfaces share one source of truth.
+const maxContentSize = 10 << 20 // 10 MB
 
 func (s *Server) registerTools(srv *mcpsdk.Server) {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -167,7 +167,7 @@ type StoreMemoryInput struct {
 
 type UpdateSectionInput struct {
 	SectionID string  `json:"section_id" jsonschema:"the section UUID to update"`
-	Content   string  `json:"content" jsonschema:"the new markdown content for the section"`
+	Content   *string `json:"content,omitempty" jsonschema:"optional new markdown content for the section; omit to leave content (and its embedding) untouched for a heading-only edit"`
 	Heading   *string `json:"heading,omitempty" jsonschema:"optional new heading for the section; empty string clears it"`
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
@@ -219,11 +219,11 @@ func parseTenantOverride(raw *string) (*uuid.UUID, error) {
 // --- Handlers ---
 
 func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, input SearchMemoryInput) (*mcpsdk.CallToolResult, any, error) {
-	if input.Query == "" || len(input.Query) > maxQueryLen {
+	if input.Query == "" || len(input.Query) > service.MaxQueryLen {
 		return errorResult("query is required and must be <= 10000 characters"), nil, nil
 	}
-	if input.Limit > maxSearchLimit {
-		input.Limit = maxSearchLimit
+	if input.Limit > service.MaxSearchLimit {
+		input.Limit = service.MaxSearchLimit
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
 	if err != nil {
@@ -292,8 +292,8 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 }
 
 func (s *Server) GetCleanupQueue(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetCleanupQueueInput) (*mcpsdk.CallToolResult, any, error) {
-	if input.Limit > maxSearchLimit {
-		input.Limit = maxSearchLimit
+	if input.Limit > service.MaxSearchLimit {
+		input.Limit = service.MaxSearchLimit
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
 	if err != nil {
@@ -408,10 +408,15 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 }
 
 func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, input UpdateSectionInput) (*mcpsdk.CallToolResult, any, error) {
-	if input.SectionID == "" || input.Content == "" {
-		return errorResult("section_id and content are required"), nil, nil
+	if input.SectionID == "" {
+		return errorResult("section_id is required"), nil, nil
 	}
-	if len(input.Content) > maxContentSize {
+	// Content nil means "heading-only edit, skip re-embedding" (matches HTTP
+	// patchSection); require at least one mutable field so the call isn't a no-op.
+	if input.Content == nil && input.Heading == nil {
+		return errorResult("at least one of content or heading is required"), nil, nil
+	}
+	if input.Content != nil && len(*input.Content) > maxContentSize {
 		return errorResult("content exceeds 10MB limit"), nil, nil
 	}
 	id, err := uuid.Parse(input.SectionID)
@@ -422,7 +427,7 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	section, err := s.memory.UpdateSection(ctx, id, &input.Content, input.Heading, tenantOverride)
+	section, err := s.memory.UpdateSection(ctx, id, input.Content, input.Heading, tenantOverride)
 	if err != nil {
 		return toolErr("update section", err)
 	}
@@ -497,8 +502,8 @@ func (s *Server) GetRelated(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 	if err != nil {
 		return errorResult("invalid document_id: " + err.Error()), nil, nil
 	}
-	if input.Limit > maxSearchLimit {
-		input.Limit = maxSearchLimit
+	if input.Limit > service.MaxSearchLimit {
+		input.Limit = service.MaxSearchLimit
 	}
 	tenantOverride, err := parseTenantOverride(input.TenantID)
 	if err != nil {
