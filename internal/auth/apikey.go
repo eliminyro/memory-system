@@ -85,9 +85,14 @@ func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (KeyInfo,
 		return KeyInfo{}, fmt.Errorf("invalid or revoked API key")
 	}
 	// Best-effort last-used stamp for the admin listing — never fail auth on it.
+	// Throttled to at most ~once/minute via a staleness predicate: without it,
+	// every authenticated request (one hot key drives most traffic) turns a read
+	// into a write + row-lock serialized on that single row. ~60s granularity is
+	// plenty for an admin "last used" display.
+	now := time.Now()
 	v.db.WithContext(ctx).Model(&models.APIKey{}).
-		Where("id = ?", ak.ID).
-		UpdateColumn("last_used_at", time.Now())
+		Where("id = ? AND (last_used_at IS NULL OR last_used_at < ?)", ak.ID, now.Add(-time.Minute)).
+		UpdateColumn("last_used_at", now)
 	var email string
 	if ak.Tenant != nil {
 		email = ak.Tenant.Email

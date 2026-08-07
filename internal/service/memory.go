@@ -1508,8 +1508,13 @@ func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, er
 			}
 		}
 	}
+	// First pass: collect the distinct tenant ids that pass the manager Check,
+	// remembering each one's owner-vs-manager label and a stable order (the order
+	// ReadBySubject returned the tuples in). Then resolve them all in ONE GetByIDs
+	// instead of a per-candidate GetByID (N+1).
 	seen := make(map[uuid.UUID]struct{}, len(tuples))
-	var result []TenantAccess
+	orderedIDs := make([]uuid.UUID, 0, len(tuples))
+	labelByID := make(map[uuid.UUID]string, len(tuples))
 	for _, t := range tuples {
 		if t.ObjectType != authz.TypeTenant {
 			continue
@@ -1525,16 +1530,34 @@ func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, er
 		if !s.authorize(ctx, authz.TypeTenant, tid.String(), authz.RelManager) {
 			continue
 		}
-		tenant, err := s.tenants.GetByID(ctx, tid)
-		if err != nil {
-			// Stale tuple pointing at a deleted tenant; skip rather than fail the list.
-			continue
-		}
 		label := authz.RelManager
 		if _, owned := ownerTenants[tid]; owned {
 			label = authz.RelOwner
 		}
-		result = append(result, TenantAccess{Tenant: *tenant, Relation: label})
+		orderedIDs = append(orderedIDs, tid)
+		labelByID[tid] = label
+	}
+	if len(orderedIDs) == 0 {
+		return nil, nil
+	}
+	tenants, err := s.tenants.GetByIDs(ctx, orderedIDs)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
+	for _, t := range tenants {
+		byID[t.ID] = t
+	}
+	// Build in the collected order (GetByIDs may return rows unordered). A tuple
+	// pointing at a deleted tenant is simply absent from byID; skip it rather
+	// than fail the whole list.
+	var result []TenantAccess
+	for _, tid := range orderedIDs {
+		tenant, ok := byID[tid]
+		if !ok {
+			continue
+		}
+		result = append(result, TenantAccess{Tenant: tenant, Relation: labelByID[tid]})
 	}
 	return result, nil
 }
@@ -1565,6 +1588,41 @@ func (s *MemoryService) subjectEmail(ctx context.Context, subjectID string) (str
 		return "", fmt.Errorf("%w: no tenant_user for subject %s", apperr.ErrNotFound, subjectID)
 	}
 	return tu.Email, nil
+}
+
+// subjectEmails resolves many tenant_users subject ids to emails in one query.
+// Ids with no row are simply absent from the map (same skip semantics as the
+// per-id subjectEmail, whose error → the caller skips the grant). Non-UUID
+// subjects (e.g. "svc:<tenant>" service principals) never parse and are absent
+// too. The map is keyed by the original input id string so callers can look up
+// by the tuple's SubjectID directly.
+func (s *MemoryService) subjectEmails(ctx context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	byUUID := make(map[uuid.UUID][]string, len(ids))
+	uuids := make([]uuid.UUID, 0, len(ids))
+	for _, raw := range ids {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if _, ok := byUUID[id]; !ok {
+			uuids = append(uuids, id)
+		}
+		byUUID[id] = append(byUUID[id], raw)
+	}
+	if len(uuids) == 0 {
+		return out, nil
+	}
+	var users []models.TenantUser
+	if err := s.db.WithContext(ctx).Where("id IN ?", uuids).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		for _, raw := range byUUID[u.ID] {
+			out[raw] = u.Email
+		}
+	}
+	return out, nil
 }
 
 // documentTenantID resolves a document's owning tenant by ID alone (no tenant
@@ -1764,6 +1822,49 @@ type Grant struct {
 	Relation  string `json:"relation"`
 }
 
+// listGrants is the shared body of ListTenantGrants/ListDocumentGrants: for each
+// relation in order, read the direct tuples on objectType:objectID, keep the
+// concrete-user subjects (skip userset/wildcard/non-user), resolve their emails
+// in ONE batch query, and render one Grant per resolvable subject in tuple
+// order. Subjects with no resolvable email (stale tenant_users, service
+// principals) are skipped rather than failing the list — matching the per-id
+// subjectEmail skip-on-error behavior. Callers own the authz==nil guard and the
+// CanManageTenant gate before delegating here.
+func (s *MemoryService) listGrants(ctx context.Context, objectType, objectID string, relations []string) ([]Grant, error) {
+	type pending struct {
+		subjectID string
+		relation  string
+	}
+	var items []pending
+	var ids []string
+	for _, rel := range relations {
+		tuples, err := s.authz.ReadByObjectRelation(ctx, objectType, objectID, rel)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tuples {
+			if t.SubjectType != authz.TypeUser || t.IsUserset() || t.IsWildcard() {
+				continue
+			}
+			items = append(items, pending{subjectID: t.SubjectID, relation: rel})
+			ids = append(ids, t.SubjectID)
+		}
+	}
+	emails, err := s.subjectEmails(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	var grants []Grant
+	for _, it := range items {
+		email, ok := emails[it.subjectID]
+		if !ok {
+			continue
+		}
+		grants = append(grants, Grant{Email: email, SubjectID: it.subjectID, Relation: it.relation})
+	}
+	return grants, nil
+}
+
 // ListTenantGrants lists every direct viewer/member/manager grant on tenantID
 // (tenant#admin is out of scope here — that's the GrantTenantUser admin
 // flow). Caller must CanManageTenant(tenantID). Wildcard/userset subjects and
@@ -1776,24 +1877,7 @@ func (s *MemoryService) ListTenantGrants(ctx context.Context, tenantID uuid.UUID
 	if s.authz == nil {
 		return nil, nil
 	}
-	var grants []Grant
-	for _, rel := range []string{authz.RelViewer, authz.RelMember, authz.RelManager} {
-		tuples, err := s.authz.ReadByObjectRelation(ctx, authz.TypeTenant, tenantID.String(), rel)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range tuples {
-			if t.SubjectType != authz.TypeUser || t.IsUserset() || t.IsWildcard() {
-				continue
-			}
-			email, err := s.subjectEmail(ctx, t.SubjectID)
-			if err != nil {
-				continue
-			}
-			grants = append(grants, Grant{Email: email, SubjectID: t.SubjectID, Relation: rel})
-		}
-	}
-	return grants, nil
+	return s.listGrants(ctx, authz.TypeTenant, tenantID.String(), []string{authz.RelViewer, authz.RelMember, authz.RelManager})
 }
 
 // ListDocumentGrants lists every direct per-document guest viewer/editor grant
@@ -1810,24 +1894,7 @@ func (s *MemoryService) ListDocumentGrants(ctx context.Context, docID uuid.UUID)
 	if s.authz == nil {
 		return nil, nil
 	}
-	var grants []Grant
-	for _, rel := range []string{authz.RelViewer, authz.RelEditor} {
-		tuples, err := s.authz.ReadByObjectRelation(ctx, authz.TypeDocument, docID.String(), rel)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range tuples {
-			if t.SubjectType != authz.TypeUser || t.IsUserset() || t.IsWildcard() {
-				continue
-			}
-			email, err := s.subjectEmail(ctx, t.SubjectID)
-			if err != nil {
-				continue
-			}
-			grants = append(grants, Grant{Email: email, SubjectID: t.SubjectID, Relation: rel})
-		}
-	}
-	return grants, nil
+	return s.listGrants(ctx, authz.TypeDocument, docID.String(), []string{authz.RelViewer, authz.RelEditor})
 }
 
 // UpdateTenantFields bundles the optional patches admin/self tools may apply.
