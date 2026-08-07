@@ -220,7 +220,7 @@ The server is configured entirely through environment variables (parsed by
 | `CLEANUP_ENABLED`, `CLEANUP_INTERVAL_HOURS` | Enable and schedule the cleanup scanner. |
 | `RETENTION_MULTIPLIER`, `RETENTION_DELETE_GRACE_DAYS` | Retention window tuning. |
 | `MAX_REQUEST_BYTES`, `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` | Request-size and rate limits. |
-| `RATE_LIMIT_TRUSTED_PROXY_DEPTH` | Trusted reverse-proxy/CDN hop count for spoof-safe rate-limit client-IP keying; `0` (default) ignores `X-Forwarded-For` and keys on `RemoteAddr`. |
+| `RATE_LIMIT_TRUSTED_PROXY_DEPTH` | Trusted reverse-proxy/CDN hop count for spoof-safe rate-limit client-IP keying; `0` (default) ignores `X-Forwarded-For` and keys on `RemoteAddr`. Behind a proxy/CDN it MUST be set to the real hop count, or every client shares one token bucket (their common source is the proxy's `RemoteAddr`). |
 | `MEMORY_DEFAULT_OPTS` | Default per-tenant toggles (staleness mode, duplicate guard, cleanup scan). |
 | `PUBLIC_BASE_URL` | Public origin of the deployment; used to derive OAuth issuer, audience, and redirect URIs. |
 | `AUTHLET_MASTER_KEY` | 32-byte hex key that seals OAuth signing keys at rest. |
