@@ -130,6 +130,30 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// pathUUID parses the {name} path segment as a UUID. On failure it writes a 400
+// with an "invalid <label> id" body and returns ok=false; the caller must return
+// immediately when ok is false.
+func pathUUID(w http.ResponseWriter, r *http.Request, name, label string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue(name))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid " + label + " id"})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// decodeJSON decodes the request body into dst. On failure it writes a 400
+// "invalid body" and returns false; the caller must return immediately when it
+// returns false. Handlers with a deliberately optional/tolerant body must NOT use
+// this — they ignore the decode error rather than 400 on it.
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request, dst *T) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return false
+	}
+	return true
+}
+
 // jsonList coerces a nil slice to a non-nil empty slice so list endpoints always
 // marshal to a JSON array ([]), never null. A null body breaks the /ui client on an
 // empty corpus (design D2); this keeps the "a list endpoint always returns an array"
@@ -214,9 +238,8 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandler) getDocument(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+	id, ok := pathUUID(w, r, "id", "document")
+	if !ok {
 		return
 	}
 	tenantID, err := tenantFilter(r)
@@ -277,17 +300,15 @@ func (h *apiHandler) getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid section id"})
+	id, ok := pathUUID(w, r, "id", "section")
+	if !ok {
 		return
 	}
 	var body struct {
 		Content *string `json:"content"`
 		Heading *string `json:"heading"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	if body.Content == nil && body.Heading == nil {
@@ -303,16 +324,14 @@ func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandler) patchDocument(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+	id, ok := pathUUID(w, r, "id", "document")
+	if !ok {
 		return
 	}
 	var body struct {
 		Title string `json:"title"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	doc, err := h.memory.UpdateDocumentTitle(r.Context(), id, body.Title, nil)
@@ -324,9 +343,8 @@ func (h *apiHandler) patchDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid section id"})
+	id, ok := pathUUID(w, r, "id", "section")
+	if !ok {
 		return
 	}
 	if err := h.memory.MarkVerified(r.Context(), id, nil); err != nil {
@@ -341,9 +359,8 @@ func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
 // foreign (common-pool or granted) id whose path collides with a home-tenant doc
 // would silently delete the wrong document.
 func (h *apiHandler) deleteDocument(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+	id, ok := pathUUID(w, r, "id", "document")
+	if !ok {
 		return
 	}
 	if err := h.memory.DeleteDocumentByID(r.Context(), id, nil); err != nil {
@@ -366,8 +383,7 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 		Slug        string  `json:"slug"`
 		Content     string  `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	category := strings.TrimSpace(body.Category)
@@ -448,9 +464,8 @@ func settingsResponse(t *models.Tenant) tenantSettingsResponse {
 // read denial surfaces as 400 (ErrInvalidInput) via writeErr — deliberately not
 // writeACLErr, which would misclassify a validation error as 403.
 func (h *apiHandler) getTenantSettings(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	t, err := h.memory.UpdateTenantSettings(r.Context(), id, nil, nil, nil)
@@ -465,9 +480,8 @@ func (h *apiHandler) getTenantSettings(w http.ResponseWriter, r *http.Request) {
 // UpdateTenantSettings, gated by the tenant's self-service policy (manager, or
 // admin when locked). The self-service-lock denial surfaces as 400 via writeErr.
 func (h *apiHandler) patchTenantSettings(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -475,8 +489,7 @@ func (h *apiHandler) patchTenantSettings(w http.ResponseWriter, r *http.Request)
 		DuplicateGuard     *bool   `json:"duplicate_guard"`
 		CleanupScanEnabled *bool   `json:"cleanup_scan_enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	t, err := h.memory.UpdateTenantSettings(r.Context(), id, body.StalenessMode, body.DuplicateGuard, body.CleanupScanEnabled)

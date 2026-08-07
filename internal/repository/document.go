@@ -145,23 +145,6 @@ func (r *DocumentRepository) Delete(ctx context.Context, tenantID uuid.UUID, id 
 	return nil
 }
 
-func (r *DocumentRepository) DeleteByPath(ctx context.Context, tenantID uuid.UUID, category string, subcategory *string, slug string) error {
-	q := r.db.WithContext(ctx).Where("tenant_id = ? AND category = ? AND slug = ?", tenantID, category, slug)
-	if subcategory != nil {
-		q = q.Where("subcategory = ?", *subcategory)
-	} else {
-		q = q.Where("subcategory IS NULL")
-	}
-	result := q.Delete(&models.Document{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("%w: document %s/%s", apperr.ErrNotFound, category, slug)
-	}
-	return nil
-}
-
 // IndexDepth controls the aggregation level of GenerateIndex output.
 type IndexDepth string
 

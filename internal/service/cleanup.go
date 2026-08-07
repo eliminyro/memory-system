@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -94,7 +95,6 @@ func (s *MemoryService) MergeDocuments(
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txDocs := repository.NewDocumentRepository(tx)
-		txSections := repository.NewSectionRepository(tx)
 
 		winner, err := txDocs.GetByID(ctx, repository.ReadTenants(tid), winnerID)
 		if err != nil {
@@ -126,17 +126,24 @@ func (s *MemoryService) MergeDocuments(
 			}
 		}
 
-		// Reassign ordinals and move loser-side sections into winner.
+		// Reassign ordinals and move loser-side sections into the winner in a
+		// SINGLE statement: document_id -> winner for every kept section, with the
+		// ordinal set per id via a CASE. K kept sections cost one round-trip, not K.
+		var ordinalCase strings.Builder
+		ordinalCase.WriteString("CASE id")
+		caseArgs := make([]any, 0, len(ordered)*2)
 		for i, id := range ordered {
-			updates := map[string]any{
-				"ordinal":     i,
+			ordinalCase.WriteString(" WHEN ? THEN ?")
+			caseArgs = append(caseArgs, id, i)
+		}
+		ordinalCase.WriteString(" END")
+		if err := tx.Model(&models.Section{}).
+			Where("id IN ?", ordered).
+			Updates(map[string]any{
 				"document_id": winnerID,
-			}
-			if err := tx.Model(&models.Section{}).
-				Where("id = ?", id).
-				Updates(updates).Error; err != nil {
-				return fmt.Errorf("update section %s: %w", id, err)
-			}
+				"ordinal":     gorm.Expr(ordinalCase.String(), caseArgs...),
+			}).Error; err != nil {
+			return fmt.Errorf("reassign kept sections: %w", err)
 		}
 
 		// Delete sections that weren't kept.
@@ -145,10 +152,9 @@ func (s *MemoryService) MergeDocuments(
 			return fmt.Errorf("delete dropped sections: %w", err)
 		}
 
-		// Delete the loser document. No sections reference it anymore.
-		if err := txSections.DeleteByDocumentID(ctx, loserID); err != nil {
-			return fmt.Errorf("delete loser sections (safety): %w", err)
-		}
+		// Delete the loser document. Its kept sections were reassigned to the winner
+		// above and its dropped sections removed just now, so nothing references it —
+		// the previous trailing DeleteByDocumentID(loserID) matched zero rows.
 		if err := txDocs.Delete(ctx, tid, loserID); err != nil {
 			return fmt.Errorf("delete loser doc: %w", err)
 		}

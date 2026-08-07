@@ -390,18 +390,26 @@ func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repo
 	return modeByTenant
 }
 
-// tenantLabel resolves a single tenant's display name/type for labeling a
-// document view. Fail-safe: an unreadable tenants repo or lookup miss yields
-// empty strings rather than failing the read.
-func (s *MemoryService) tenantLabel(ctx context.Context, id uuid.UUID) (name, typ string) {
+// tenantModeAndLabel fetches a document's owning tenant ONCE and derives both the
+// resolved staleness mode (for the staleness view) and the display name/type (for
+// labeling) — replacing the two separate GetByID calls (staleness + label) that a
+// single-document read previously issued for the same row. It preserves the exact
+// fail-safe defaults of the old paths: an unwired tenants repo or a lookup
+// miss/error yields staleness "off" and empty name/type, and an unrecognised
+// staleness value degrades to "off" — never refusing the read on a config glitch.
+func (s *MemoryService) tenantModeAndLabel(ctx context.Context, id uuid.UUID) (stalenessMode, name, typ string) {
 	if s.tenants == nil {
-		return "", ""
+		return models.StalenessModeOff, "", ""
 	}
 	t, err := s.tenants.GetByID(ctx, id)
 	if err != nil {
-		return "", ""
+		return models.StalenessModeOff, "", ""
 	}
-	return t.Name, t.Type
+	mode := t.StalenessMode
+	if _, ok := models.ValidStalenessModes[mode]; !ok {
+		mode = models.StalenessModeOff
+	}
+	return mode, t.Name, t.Type
 }
 
 // Search performs hybrid semantic + keyword search, applying staleness filter.
@@ -469,13 +477,14 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	if err != nil {
 		return nil, err
 	}
-	// Staleness + labeling use the doc's OWNING tenant, not the caller's home.
-	settings := s.tenantSettings(ctx, doc.TenantID)
-	view, err := buildDocumentView(ctx, s.thresholds, doc, settings.StalenessMode, forceRead)
+	// Staleness + labeling use the doc's OWNING tenant, not the caller's home —
+	// one tenant fetch drives both the mode and the display label.
+	mode, name, typ := s.tenantModeAndLabel(ctx, doc.TenantID)
+	view, err := buildDocumentView(ctx, s.thresholds, doc, mode, forceRead)
 	if err != nil {
 		return nil, err
 	}
-	view.TenantName, view.TenantType = s.tenantLabel(ctx, doc.TenantID)
+	view.TenantName, view.TenantType = name, typ
 	if forceRead {
 		docID := doc.ID
 		s.logOverride(ctx, repository.OverrideEvent{
@@ -507,13 +516,14 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	if err != nil {
 		return nil, err
 	}
-	// Staleness + labeling use the doc's OWNING tenant, not the caller's home.
-	settings := s.tenantSettings(ctx, doc.TenantID)
-	view, err := buildDocumentView(ctx, s.thresholds, doc, settings.StalenessMode, forceRead)
+	// Staleness + labeling use the doc's OWNING tenant, not the caller's home —
+	// one tenant fetch drives both the mode and the display label.
+	mode, name, typ := s.tenantModeAndLabel(ctx, doc.TenantID)
+	view, err := buildDocumentView(ctx, s.thresholds, doc, mode, forceRead)
 	if err != nil {
 		return nil, err
 	}
-	view.TenantName, view.TenantType = s.tenantLabel(ctx, doc.TenantID)
+	view.TenantName, view.TenantType = name, typ
 	if forceRead {
 		docID := doc.ID
 		s.logOverride(ctx, repository.OverrideEvent{

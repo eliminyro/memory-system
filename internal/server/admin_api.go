@@ -93,9 +93,8 @@ func (h *adminAPIHandler) createTenant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPIHandler) listUsers(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	users, err := h.memory.ListTenantUsers(r.Context(), id)
@@ -107,9 +106,8 @@ func (h *adminAPIHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPIHandler) listKeys(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	keys, err := h.memory.ListAPIKeys(r.Context(), id)
@@ -121,9 +119,8 @@ func (h *adminAPIHandler) listKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPIHandler) createKey(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	tenantID, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -131,8 +128,7 @@ func (h *adminAPIHandler) createKey(w http.ResponseWriter, r *http.Request) {
 		SubjectID     *string `json:"subject_id"`
 		ExpiresInDays *int    `json:"expires_in_days"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	var expiresAt *time.Time
@@ -153,9 +149,8 @@ func (h *adminAPIHandler) createKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPIHandler) rotateKey(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid key id"})
+	id, ok := pathUUID(w, r, "id", "key")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -180,9 +175,8 @@ func (h *adminAPIHandler) rotateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminAPIHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid key id"})
+	id, ok := pathUUID(w, r, "id", "key")
+	if !ok {
 		return
 	}
 	if err := h.memory.RevokeAPIKey(r.Context(), id); err != nil {
@@ -198,8 +192,7 @@ func (h *adminAPIHandler) grantUser(w http.ResponseWriter, r *http.Request) {
 		TenantID string `json:"tenant_id"`
 		Role     string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	tenantID, err := uuid.Parse(body.TenantID)
@@ -222,16 +215,14 @@ func (h *adminAPIHandler) grantUser(w http.ResponseWriter, r *http.Request) {
 // and UpdateTenant re-checks requireAdmin (defense in depth). The lock stays
 // admin-only by design — never wired to the self-service settings surface.
 func (h *adminAPIHandler) updateTenant(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	var body struct {
 		SelfServicePolicy *string `json:"self_service_policy"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	t, err := h.memory.UpdateTenant(r.Context(), id, service.UpdateTenantFields{SelfServicePolicy: body.SelfServicePolicy})
@@ -247,8 +238,7 @@ func (h *adminAPIHandler) updateUserRole(w http.ResponseWriter, r *http.Request)
 		Email string `json:"email"`
 		Role  string `json:"role"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	tu, err := h.memory.UpdateTenantUserRole(r.Context(), body.Email, body.Role)
@@ -384,9 +374,8 @@ func (h *adminAPIHandler) importStatus(w http.ResponseWriter, r *http.Request) {
 // so the archive bytes never leave the server (json:"-") and an unknown or
 // wrong-tenant id yields 404 via writeErr.
 func importStatusShared(w http.ResponseWriter, r *http.Request, jobs importJobStore, authorize importAuthorizer) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job id"})
+	id, ok := pathUUID(w, r, "id", "job")
+	if !ok {
 		return
 	}
 	tenantID := auth.TenantIDFromContext(r.Context())

@@ -191,7 +191,12 @@ func Backfill(ctx context.Context, store authz.Store, db *gorm.DB) error {
 
 	// Admin tenant_users also make their tenant's svc principal a global admin so
 	// operator API keys (svc:<tenant>) keep the admin tool surface — see
-	// seedAdminServicePrincipals.
+	// seedAdminServicePrincipals. BootstrapAdmins runs this same pass, so on the
+	// server-start path (cmd/server) it executes twice per boot — idempotent, so
+	// harmless. The call is kept here DELIBERATELY: Migrate-only tools that never
+	// invoke BootstrapAdmins — notably cmd/import — rely on this Backfill pass as
+	// their ONLY source of admin svc-principal seeding, so dropping it to dedupe the
+	// server-path double would silently regress admin API-key access for them.
 	if err := seedAdminServicePrincipals(ctx, store, db); err != nil {
 		return err
 	}

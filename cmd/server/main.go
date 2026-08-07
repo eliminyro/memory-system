@@ -228,6 +228,24 @@ func main() {
 	// Global default self-service policy; per-tenant overrides resolve against it.
 	memorySvc.SelfServicePolicyDefault = cfg.SelfServicePolicy
 
+	// Root context for background work — cancelled on SIGINT/SIGTERM so the
+	// cleanup scanner and HTTP server shut down together.
+	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Break-glass reset (task 6.1): must run BEFORE the HasAnyAdmin / bootstrap-token
+	// arming below. MEMORY_RESET clears the admin set + system#admin tuple(s), so if
+	// this ran after the check, hasAdmin would reflect the pre-reset state and the
+	// token would be armed to "" (nothing logged) while the /bootstrap gate is left
+	// open — HTTP bootstrap unusable until the next restart. Running it here makes
+	// hasAdmin and the generated+logged token reflect the POST-reset state. DB is
+	// connected, migrations ran, and memorySvc is constructed above; this runs before
+	// anything else starts (scanners, authlet, HTTP server). See maybeResetBootstrap.
+	if err := maybeResetBootstrap(rootCtx, cfg.MemoryReset, memorySvc, slog.Default()); err != nil {
+		slog.Error("MEMORY_RESET: reset failed; refusing to start", "error", err)
+		os.Exit(1)
+	}
+
 	// First-run provisioning (design D1): on an un-bootstrapped instance generate a
 	// one-time bootstrap token and log it at WARN; when an admin already exists,
 	// generate/log nothing and leave BootstrapToken empty so the HTTP path fails closed.
@@ -242,19 +260,6 @@ func main() {
 		os.Exit(1)
 	}
 	memorySvc.BootstrapToken = bootstrapToken
-
-	// Root context for background work — cancelled on SIGINT/SIGTERM so the
-	// cleanup scanner and HTTP server shut down together.
-	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// Break-glass reset (task 6.1): DB is connected, migrations ran, and
-	// memorySvc is constructed above; this runs before anything else starts
-	// (scanners, authlet, HTTP server). See maybeResetBootstrap.
-	if err := maybeResetBootstrap(rootCtx, cfg.MemoryReset, memorySvc, slog.Default()); err != nil {
-		slog.Error("MEMORY_RESET: reset failed; refusing to start", "error", err)
-		os.Exit(1)
-	}
 
 	// Cleanup pipeline — nightly near-duplicate scan + Telegram summary. Notifier
 	// is nil (silent) when Telegram creds are unset.
@@ -340,16 +345,17 @@ func main() {
 	}
 
 	handler := server.NewHandler(server.Deps{
-		DB:              db,
-		MCPServer:       mcpServer,
-		KeyValidator:    keyValidator,
-		AuthletWiring:   authletWiring,
-		Memory:          memorySvc,
-		UIClientID:      cfg.UIClientID,
-		PublicBaseURL:   cfg.PublicBaseURL,
-		MaxRequestBytes: cfg.MaxRequestBytes,
-		RateLimitRPS:    cfg.RateLimitRPS,
-		RateLimitBurst:  cfg.RateLimitBurst,
+		DB:                         db,
+		MCPServer:                  mcpServer,
+		KeyValidator:               keyValidator,
+		AuthletWiring:              authletWiring,
+		Memory:                     memorySvc,
+		UIClientID:                 cfg.UIClientID,
+		PublicBaseURL:              cfg.PublicBaseURL,
+		MaxRequestBytes:            cfg.MaxRequestBytes,
+		RateLimitRPS:               cfg.RateLimitRPS,
+		RateLimitBurst:             cfg.RateLimitBurst,
+		RateLimitTrustedProxyDepth: cfg.RateLimitTrustedProxyDepth,
 
 		ImportJobs:           importJobRepo,
 		ImportMaxUploadBytes: cfg.ImportMaxUploadBytes,

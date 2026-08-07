@@ -69,9 +69,13 @@ type Config struct {
 
 	// HTTP hardening. MaxRequestBytes caps request bodies (0 disables). RateLimit*
 	// is a token-bucket throttle over the auth+write surface (RPS <= 0 disables).
-	MaxRequestBytes int64   `env:"MAX_REQUEST_BYTES" envDefault:"1048576"`
-	RateLimitRPS    float64 `env:"RATE_LIMIT_RPS" envDefault:"20"`
-	RateLimitBurst  int     `env:"RATE_LIMIT_BURST" envDefault:"40"`
+	// RateLimitTrustedProxyDepth is how many trusted reverse-proxy/CDN hops sit in
+	// front: 0 (default) trusts none and keys on RemoteAddr (X-Forwarded-For is
+	// ignored, unspoofable); N>=1 keys on the Nth-from-last X-Forwarded-For entry.
+	MaxRequestBytes            int64   `env:"MAX_REQUEST_BYTES" envDefault:"1048576"`
+	RateLimitRPS               float64 `env:"RATE_LIMIT_RPS" envDefault:"20"`
+	RateLimitBurst             int     `env:"RATE_LIMIT_BURST" envDefault:"40"`
+	RateLimitTrustedProxyDepth int     `env:"RATE_LIMIT_TRUSTED_PROXY_DEPTH" envDefault:"0"`
 
 	// Tenant-toggle defaults. Raw spec from env, overridable via --opts;
 	// ParseTenantDefaults yields the typed models.TenantDefaults applied at
