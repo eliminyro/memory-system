@@ -10,84 +10,92 @@ import (
 	"github.com/eliminyro/authlet/pkg/rs"
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
-// openBridgeTestDB returns a sqlite tenant_users table with a string id column
-// (matching the production uuid text id the bridge reads as the subject).
-func openBridgeTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB.SetMaxOpenConns(1)
-	type turow struct {
-		ID       string `gorm:"column:id;primaryKey"`
-		Email    string `gorm:"column:email"`
-		TenantID string `gorm:"column:tenant_id"`
-		Role     string `gorm:"column:role"`
-	}
-	if err := db.Table("tenant_users").AutoMigrate(&turow{}); err != nil {
-		t.Fatal(err)
-	}
-	return db
+// bridgeResult captures the auth context a request carried past the bridge.
+type bridgeResult struct {
+	subject   auth.Subject
+	subjectOK bool
+	tenant    uuid.UUID
+	email     string
 }
 
-// runBridge drives UserContextBridge with a JWT-claims context and reports the
-// resolved auth.Subject.
-func runBridge(t *testing.T, w *Wiring, tid uuid.UUID, email string) (auth.Subject, bool) {
+// runBridge drives UserContextBridge with a JWT-claims context (sub plus the
+// signed tenant_id/email custom claims) and reports the resolved auth context.
+// The bridge is DB-free: it reads everything from the signed token.
+func runBridge(t *testing.T, sub string, tid uuid.UUID, email string) bridgeResult {
 	t.Helper()
-	var subj auth.Subject
-	var ok bool
+	var res bridgeResult
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		subj, ok = auth.SubjectFromContext(r.Context())
+		res.subject, res.subjectOK = auth.SubjectFromContext(r.Context())
+		res.tenant = auth.TenantIDFromContext(r.Context())
+		res.email = auth.EmailFromContext(r.Context())
 	})
-	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
 	extra := map[string]any{}
+	if tid != uuid.Nil {
+		extra["tenant_id"] = tid.String()
+	}
 	if email != "" {
 		extra["email"] = email
 	}
-	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{Subject: tid.String(), Extra: extra})
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{Subject: sub, Extra: extra})
 	req = req.WithContext(ctx)
-	w.UserContextBridge()(inner).ServeHTTP(httptest.NewRecorder(), req)
-	return subj, ok
+	(&Wiring{}).UserContextBridge()(inner).ServeHTTP(httptest.NewRecorder(), req)
+	return res
 }
 
-func TestUserContextBridge_ResolvesSubjectFromEmail(t *testing.T) {
-	db := openBridgeTestDB(t)
+// TestUserContextBridge_ResolvesSubjectFromSub: sub becomes auth.Subject.ID
+// directly (no DB) when a valid tenant_id claim is present.
+func TestUserContextBridge_ResolvesSubjectFromSub(t *testing.T) {
 	tid := uuid.New()
 	uid := uuid.New().String()
-	if err := db.Exec(
-		"INSERT INTO tenant_users (id, email, tenant_id, role) VALUES (?, ?, ?, 'member')",
-		uid, "admin@example.com", tid.String(),
-	).Error; err != nil {
-		t.Fatal(err)
+	res := runBridge(t, uid, tid, "admin@example.com")
+	if !res.subjectOK {
+		t.Fatal("expected subject to be resolved from sub")
 	}
-
-	subj, ok := runBridge(t, &Wiring{db: db}, tid, "admin@example.com")
-	if !ok {
-		t.Fatal("expected subject to be resolved from verified email")
+	if res.subject.Type != auth.SubjectTypeUser || res.subject.ID != uid {
+		t.Fatalf("subject = %+v, want {user %s}", res.subject, uid)
 	}
-	if subj.Type != auth.SubjectTypeUser || subj.ID != uid {
-		t.Fatalf("subject = %+v, want {user %s}", subj, uid)
+	if res.tenant != tid {
+		t.Fatalf("tenant = %s, want %s", res.tenant, tid)
 	}
-}
-
-func TestUserContextBridge_NoTenantUserRowNoSubject(t *testing.T) {
-	db := openBridgeTestDB(t)
-	if _, ok := runBridge(t, &Wiring{db: db}, uuid.New(), "stranger@example.com"); ok {
-		t.Fatal("expected no subject when no tenant_user row exists (fail closed)")
+	if res.email != "admin@example.com" {
+		t.Fatalf("email = %q, want admin@example.com", res.email)
 	}
 }
 
-func TestUserContextBridge_NilDBNoSubject(t *testing.T) {
-	if _, ok := runBridge(t, &Wiring{}, uuid.New(), "admin@example.com"); ok {
-		t.Fatal("expected no subject when db is nil")
+// TestUserContextBridge_EmptySubNoSubject: a valid tenant_id but empty sub sets
+// the tenant yet attaches no subject (Pass 2 fails closed).
+func TestUserContextBridge_EmptySubNoSubject(t *testing.T) {
+	tid := uuid.New()
+	res := runBridge(t, "", tid, "")
+	if res.subjectOK {
+		t.Fatal("expected no subject when sub is empty")
+	}
+	if res.tenant != tid {
+		t.Fatalf("tenant = %s, want %s", res.tenant, tid)
+	}
+}
+
+// TestUserContextBridge_MultiUserTenant_SubjectIsPerUser is the bridge-level
+// regression for B1: member B's token (sub=idB, tenant_id=T, email=b@x) must
+// yield Subject.ID == idB, TenantID == T, email == b@x — the per-user identity,
+// never a co-tenant's.
+func TestUserContextBridge_MultiUserTenant_SubjectIsPerUser(t *testing.T) {
+	tenant := uuid.New()
+	const idB = "user-b-id"
+	res := runBridge(t, idB, tenant, "b@x")
+	if !res.subjectOK {
+		t.Fatal("expected subject from sub")
+	}
+	if res.subject.ID != idB {
+		t.Fatalf("subject id = %q, want %q", res.subject.ID, idB)
+	}
+	if res.tenant != tenant {
+		t.Fatalf("tenant = %s, want %s", res.tenant, tenant)
+	}
+	if res.email != "b@x" {
+		t.Fatalf("email = %q, want b@x", res.email)
 	}
 }

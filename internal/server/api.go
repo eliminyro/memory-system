@@ -328,20 +328,17 @@ func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// deleteDocument resolves the doc by id to its path, then deletes via the audited
-// by-path DeleteDocument (which also refuses common-pool docs).
+// deleteDocument deletes by id against the doc's OWNING tenant (DeleteDocumentByID),
+// not by re-resolving the path against the caller's home tenant — otherwise a
+// foreign (common-pool or granted) id whose path collides with a home-tenant doc
+// would silently delete the wrong document.
 func (h *apiHandler) deleteDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
 		return
 	}
-	doc, err := h.memory.GetDocumentByID(r.Context(), id, false, "", nil)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	if err := h.memory.DeleteDocument(r.Context(), doc.Category, doc.Subcategory, doc.Slug, nil); err != nil {
+	if err := h.memory.DeleteDocumentByID(r.Context(), id, nil); err != nil {
 		writeErr(w, err)
 		return
 	}

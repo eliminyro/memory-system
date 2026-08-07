@@ -1,7 +1,6 @@
 package authletas
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/eliminyro/authlet/pkg/rs"
@@ -10,11 +9,17 @@ import (
 )
 
 // UserContextBridge translates authlet's validated JWT claims (under
-// rs.ContextKey{}) into memory-system's auth context, so downstream handlers
-// see a tenant/email/subject for JWT requests. No-op when claims are absent
-// (legacy API-key path) or claims.Subject isn't a UUID — failing open lets
-// unrelated bearer-shaped requests fall through. Email comes from the signed
-// token's "email" custom claim (set in Setup) for parity with the API-key path.
+// rs.ContextKey{}) into memory-system's auth context, so downstream handlers see
+// a tenant/subject/email for JWT requests. Everything is read from the signed
+// token — the bridge does no DB work. The subject is the token `sub`
+// (tenant_users.id); the tenant and email come from the signed "tenant_id" and
+// "email" custom claims (set in Setup's additionalClaims).
+//
+// It is a no-op passthrough (original context, no auth attached) when claims are
+// absent (legacy API-key path) or the "tenant_id" claim is missing/unparseable.
+// That fails OPEN for unrelated bearer-shaped requests and fails SECURE for
+// legacy pre-fix tokens (which lack the tenant_id claim), forcing re-auth rather
+// than trusting a stale `sub`.
 func (w *Wiring) UserContextBridge() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -23,22 +28,19 @@ func (w *Wiring) UserContextBridge() func(http.Handler) http.Handler {
 				next.ServeHTTP(rw, r)
 				return
 			}
-			tid, err := uuid.Parse(claims.Subject)
+			tidStr, _ := claims.Extra["tenant_id"].(string)
+			tid, err := uuid.Parse(tidStr)
 			if err != nil {
 				next.ServeHTTP(rw, r)
 				return
 			}
 			ctx := auth.WithTenantID(r.Context(), tid)
+			// sub IS the unified subject (tenant_users.id).
+			if sub := claims.Subject; sub != "" {
+				ctx = auth.WithSubject(ctx, auth.Subject{Type: auth.SubjectTypeUser, ID: sub})
+			}
 			if email, ok := claims.Extra["email"].(string); ok && email != "" {
 				ctx = auth.WithEmail(ctx, email)
-				// Resolve verified email to the unified subject (tenant_users.id).
-				// No row -> no subject, so Pass 2 fails closed. Skipped when db is
-				// nil (unit tests): tenant+email only.
-				if w.db != nil {
-					if uid, ok := lookupTenantUserID(r.Context(), w.db, slog.Default(), email); ok {
-						ctx = auth.WithSubject(ctx, auth.Subject{Type: auth.SubjectTypeUser, ID: uid})
-					}
-				}
 			}
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})

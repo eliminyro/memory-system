@@ -60,10 +60,11 @@ func openTestDB(t *testing.T) *gorm.DB {
 	}
 	// Sqlite :memory: connections do not share state across connections.
 	sqlDB.SetMaxOpenConns(1)
-	// Private struct mirrors the tenant_users subset the resolver reads plus
-	// the email/role columns tests populate.
+	// Private struct mirrors the tenant_users subset the resolver reads. id is a
+	// text column (a uuid in production) — the resolver now returns it as the
+	// per-user subject.
 	type testTenantUserRow struct {
-		ID       int64  `gorm:"primaryKey;autoIncrement"`
+		ID       string `gorm:"column:id;primaryKey"`
 		Email    string `gorm:"column:email"`
 		TenantID string `gorm:"column:tenant_id"`
 		Role     string `gorm:"column:role"`
@@ -74,13 +75,13 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// seedTenantUser inserts an (email, tenant_id, role) row via raw SQL so the
+// seedTenantUser inserts an (id, email, tenant_id, role) row via raw SQL so the
 // test does not depend on internal/models.
-func seedTenantUser(t *testing.T, db *gorm.DB, email, tenantID, role string) {
+func seedTenantUser(t *testing.T, db *gorm.DB, id, email, tenantID, role string) {
 	t.Helper()
 	if err := db.Exec(
-		"INSERT INTO tenant_users (email, tenant_id, role) VALUES (?, ?, ?)",
-		email, tenantID, role,
+		"INSERT INTO tenant_users (id, email, tenant_id, role) VALUES (?, ?, ?, ?)",
+		id, email, tenantID, role,
 	).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func seedTenantUser(t *testing.T, db *gorm.DB, email, tenantID, role string) {
 
 func TestMemoryUserResolver_LooksUpByVerifiedEmail(t *testing.T) {
 	db := openTestDB(t)
-	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
+	seedTenantUser(t, db, "user-uuid-1", "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
 	id, err := r.Resolve(context.Background(), idp.Claims{
@@ -98,8 +99,8 @@ func TestMemoryUserResolver_LooksUpByVerifiedEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if id != "tenant-uuid-1" {
-		t.Fatalf("got %q, want tenant-uuid-1", id)
+	if id != "user-uuid-1" {
+		t.Fatalf("got %q, want user-uuid-1 (tenant_users.id, not tenant_id)", id)
 	}
 }
 
@@ -121,7 +122,7 @@ func TestMemoryUserResolver_UnknownEmailReturnsUnauthorized(t *testing.T) {
 // attacker could claim any email.
 func TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized(t *testing.T) {
 	db := openTestDB(t)
-	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
+	seedTenantUser(t, db, "user-uuid-1", "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
 	_, err := r.Resolve(context.Background(), idp.Claims{
@@ -138,7 +139,7 @@ func TestMemoryUserResolver_UnverifiedEmailReturnsUnauthorized(t *testing.T) {
 func TestMemoryUserResolver_EmptyEmailReturnsUnauthorized(t *testing.T) {
 	db := openTestDB(t)
 	// Seed a row to prove the guard short-circuits before the DB is consulted.
-	seedTenantUser(t, db, "admin@example.com", "tenant-uuid-1", "admin")
+	seedTenantUser(t, db, "user-uuid-1", "admin@example.com", "tenant-uuid-1", "admin")
 
 	r := &MemoryUserResolver{DB: db}
 	_, err := r.Resolve(context.Background(), idp.Claims{
@@ -189,7 +190,7 @@ func TestMemoryUserResolver_EmitsRejectEvent(t *testing.T) {
 	t.Run("happy path does not log a reject", func(t *testing.T) {
 		logger, buf := captureLogger(t)
 		db := openTestDB(t)
-		seedTenantUser(t, db, "ok@x", "tenant-uuid-1", "admin")
+		seedTenantUser(t, db, "user-uuid-1", "ok@x", "tenant-uuid-1", "admin")
 		r := &MemoryUserResolver{DB: db, Logger: logger}
 		if _, err := r.Resolve(context.Background(), idp.Claims{Email: "ok@x", EmailVerified: true}); err != nil {
 			t.Fatal(err)
@@ -225,11 +226,13 @@ func TestMemoryUserResolver_NilProvisionRejectsUnknownEmail(t *testing.T) {
 	}
 }
 
-// TestMemoryUserResolver_ProvisionResolvesTenant: a Provision callback that
-// returns a tenant id on a miss makes Resolve return that id with no error.
+// TestMemoryUserResolver_ProvisionResolvesTenant: a Provision callback creates
+// the tenant_users row (and returns the new tenant_id); Resolve must re-look-up
+// and return the per-user tenant_users.id, NOT the tenant_id Provision returned.
 func TestMemoryUserResolver_ProvisionResolvesTenant(t *testing.T) {
 	db := openTestDB(t)
 	called := false
+	const provisionedUserID = "user-provisioned-1"
 	r := &MemoryUserResolver{
 		DB: db,
 		Provision: func(_ context.Context, c idp.Claims) (string, error) {
@@ -237,6 +240,8 @@ func TestMemoryUserResolver_ProvisionResolvesTenant(t *testing.T) {
 			if c.Email != "new@example.com" {
 				t.Fatalf("provision got email %q", c.Email)
 			}
+			// Provision creates the tenant_users row and returns the tenant_id.
+			seedTenantUser(t, db, provisionedUserID, "new@example.com", "tenant-provisioned-1", "owner")
 			return "tenant-provisioned-1", nil
 		},
 	}
@@ -250,8 +255,46 @@ func TestMemoryUserResolver_ProvisionResolvesTenant(t *testing.T) {
 	if !called {
 		t.Fatal("Provision was not called on a tenant_users miss")
 	}
-	if id != "tenant-provisioned-1" {
-		t.Fatalf("got %q, want tenant-provisioned-1", id)
+	if id != provisionedUserID {
+		t.Fatalf("got %q, want %q (per-user id, not the provisioned tenant_id)", id, provisionedUserID)
+	}
+}
+
+// TestMemoryUserResolver_MultiUserTenant_ReturnsPerUserID is the regression test
+// for the shared-tenant privilege-escalation bug (B1): two members of ONE tenant
+// must resolve to their OWN distinct tenant_users.id — never the tenant_id, and
+// never a co-tenant's id. Fails against the old code (which returned tenant_id).
+func TestMemoryUserResolver_MultiUserTenant_ReturnsPerUserID(t *testing.T) {
+	db := openTestDB(t)
+	const tenantID = "tenant-shared-1"
+	const idA = "user-a-id"
+	const idB = "user-b-id"
+	seedTenantUser(t, db, idA, "a@x", tenantID, "admin")
+	seedTenantUser(t, db, idB, "b@x", tenantID, "member")
+
+	r := &MemoryUserResolver{DB: db}
+	got, err := r.Resolve(context.Background(), idp.Claims{Email: "b@x", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == tenantID {
+		t.Fatalf("resolved to tenant_id %q — the escalation bug is present", got)
+	}
+	if got == idA {
+		t.Fatalf("resolved to co-tenant admin id %q — the escalation bug is present", got)
+	}
+	if got != idB {
+		t.Fatalf("got %q, want member id %q", got, idB)
+	}
+
+	// The claim lookup feeding additionalClaims must key on the unique id and
+	// return B's OWN email plus the shared tenant_id — never A's arbitrary email.
+	email, tid, found := lookupUserClaims(context.Background(), db, slog.Default(), idB)
+	if !found {
+		t.Fatal("lookupUserClaims did not find seeded user B")
+	}
+	if email != "b@x" || tid != tenantID {
+		t.Fatalf("claims = (%q, %q), want (b@x, %s)", email, tid, tenantID)
 	}
 }
 

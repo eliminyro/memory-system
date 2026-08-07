@@ -11,7 +11,8 @@ import (
 )
 
 // openLookupTestDB returns an in-memory sqlite DB with a tenant_users table
-// mirroring the columns lookupTenantEmail reads (no internal/models import).
+// mirroring the columns lookupUserClaims reads (no internal/models import). id
+// is a text column matching the production uuid the lookup keys on.
 func openLookupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -24,7 +25,7 @@ func openLookupTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	type testTenantUserRow struct {
-		ID       int64  `gorm:"primaryKey;autoIncrement"`
+		ID       string `gorm:"column:id;primaryKey"`
 		Email    string `gorm:"column:email"`
 		TenantID string `gorm:"column:tenant_id"`
 		Role     string `gorm:"column:role"`
@@ -35,43 +36,52 @@ func openLookupTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func seedLookupRow(t *testing.T, db *gorm.DB, email, tenantID string) {
+func seedLookupRow(t *testing.T, db *gorm.DB, id, email, tenantID string) {
 	t.Helper()
 	if err := db.Exec(
-		"INSERT INTO tenant_users (email, tenant_id, role) VALUES (?, ?, 'member')",
-		email, tenantID,
+		"INSERT INTO tenant_users (id, email, tenant_id, role) VALUES (?, ?, ?, 'member')",
+		id, email, tenantID,
 	).Error; err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestLookupTenantEmail_HitReturnsEmail: a row exists for tenant_id, helper
-// returns its email.
-func TestLookupTenantEmail_HitReturnsEmail(t *testing.T) {
+// TestLookupUserClaims_HitReturnsClaims: a row exists for the id, helper returns
+// its email and tenant_id.
+func TestLookupUserClaims_HitReturnsClaims(t *testing.T) {
 	db := openLookupTestDB(t)
-	seedLookupRow(t, db, "u@example.com", "tenant-uuid-1")
+	seedLookupRow(t, db, "user-1", "u@example.com", "tenant-uuid-1")
 
-	got := lookupTenantEmail(context.Background(), db, slog.Default(), "tenant-uuid-1")
-	if got != "u@example.com" {
-		t.Fatalf("got %q, want u@example.com", got)
+	email, tid, found := lookupUserClaims(context.Background(), db, slog.Default(), "user-1")
+	if !found {
+		t.Fatal("expected found=true for seeded id")
+	}
+	if email != "u@example.com" {
+		t.Fatalf("email = %q, want u@example.com", email)
+	}
+	if tid != "tenant-uuid-1" {
+		t.Fatalf("tenant_id = %q, want tenant-uuid-1", tid)
 	}
 }
 
-// TestLookupTenantEmail_MissReturnsEmpty: no-row case returns "" (so
+// TestLookupUserClaims_MissReturnsNotFound: no-row case returns found=false (so
 // additionalClaims returns nil and idTokenClaims returns zero values).
-func TestLookupTenantEmail_MissReturnsEmpty(t *testing.T) {
+func TestLookupUserClaims_MissReturnsNotFound(t *testing.T) {
 	db := openLookupTestDB(t)
 	// No seed — the table is empty.
 
-	got := lookupTenantEmail(context.Background(), db, slog.Default(), "no-such-tenant")
-	if got != "" {
-		t.Fatalf("got %q, want empty string", got)
+	email, tid, found := lookupUserClaims(context.Background(), db, slog.Default(), "no-such-id")
+	if found {
+		t.Fatal("expected found=false on miss")
+	}
+	if email != "" || tid != "" {
+		t.Fatalf("got (%q, %q), want empty strings", email, tid)
 	}
 }
 
-// TestLookupTenantEmail_DBErrorReturnsEmptyAndLogs: a DB failure returns ""
-// plus a warn log, never a panic.
-func TestLookupTenantEmail_DBErrorReturnsEmptyAndLogs(t *testing.T) {
+// TestLookupUserClaims_DBErrorReturnsNotFoundAndLogs: a DB failure returns
+// found=false plus a warn log, never a panic.
+func TestLookupUserClaims_DBErrorReturnsNotFoundAndLogs(t *testing.T) {
 	db := openLookupTestDB(t)
 	// Force a query error by dropping the table after migration.
 	if err := db.Migrator().DropTable("tenant_users"); err != nil {
@@ -81,9 +91,12 @@ func TestLookupTenantEmail_DBErrorReturnsEmptyAndLogs(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	got := lookupTenantEmail(context.Background(), db, logger, "any-tenant")
-	if got != "" {
-		t.Fatalf("got %q, want empty string on DB error", got)
+	email, _, found := lookupUserClaims(context.Background(), db, logger, "any-id")
+	if found {
+		t.Fatal("expected found=false on DB error")
+	}
+	if email != "" {
+		t.Fatalf("got %q, want empty string on DB error", email)
 	}
 	if !bytes.Contains(buf.Bytes(), []byte("tenant_user email lookup failed")) {
 		t.Fatalf("expected warn log on DB error, got: %q", buf.String())
