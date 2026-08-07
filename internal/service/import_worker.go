@@ -24,6 +24,13 @@ import (
 // to gigabytes is rejected before it is read into memory.
 const maxDecompressedBytes = 16 * 32 << 20 // 512 MiB
 
+// maxImportEntries caps how many markdown docs one archive may create. Bounds a
+// DoS where a small compressed zip carries hundreds of thousands of tiny/empty
+// entries (the decompressed-byte guard alone never trips on zero-byte entries),
+// each of which would otherwise drive a full StoreDocument transaction + authz
+// write (and an embedder call for non-empty ones). Well above any real KB import.
+const maxImportEntries = 10000
+
 // importJobQueue is the slice of the import_jobs repository the worker drives.
 // An interface (not the concrete repo) so the worker's transition logic is
 // unit-testable with a fake and no database.
@@ -208,6 +215,9 @@ func zipDocSourceLimited(archive []byte, maxDecompressed int64) (DocSource, int,
 		}
 		entries = append(entries, f)
 	}
+	if len(entries) > maxImportEntries {
+		return nil, 0, fmt.Errorf("archive has %d markdown entries, exceeds the %d limit", len(entries), maxImportEntries)
+	}
 
 	src := func(emit func(path string, content []byte) error) error {
 		var totalDecompressed int64
@@ -228,6 +238,9 @@ func zipDocSourceLimited(archive []byte, maxDecompressed int64) (DocSource, int,
 			totalDecompressed += int64(len(content))
 			if totalDecompressed > maxDecompressed {
 				return fmt.Errorf("decompressed archive exceeds %d bytes at entry %q (possible zip bomb)", maxDecompressed, f.Name)
+			}
+			if len(bytes.TrimSpace(content)) == 0 {
+				continue // skip empty entries — they'd create 0-section docs and are a common padding/DoS vector
 			}
 			if err := emit(f.Name, content); err != nil {
 				return err
