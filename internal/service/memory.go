@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
@@ -2201,20 +2202,64 @@ func (s *MemoryService) RotateAPIKey(ctx context.Context, keyID uuid.UUID, grace
 	if err != nil {
 		return "", nil, err
 	}
-	// Issue the replacement first so a failure leaves the old key intact.
-	plaintext, newKey, err := s.CreateAPIKey(ctx, old.TenantID, old.Label, old.SubjectID, nil)
+	// Rotation must be atomic: previously the replacement was minted via a
+	// committed s.CreateAPIKey and only THEN was the predecessor retired via a
+	// separate autocommit write. A retire failure (e.g. old key already revoked ->
+	// ErrNotFound) left the new key committed while the caller was told rotation
+	// failed — an orphaned, unauditable live credential — and concurrent rotations
+	// both minted a key. Wrap create + retire in ONE transaction, locking the
+	// predecessor FOR UPDATE so concurrent rotations serialize and a retire failure
+	// rolls back the new key. s.CreateAPIKey / s.keys.* are autocommit against the
+	// pooled DB, so inline the writes on tx-bound repos (mirrors the B11 pattern).
+	var newKey *models.APIKey
+	var rotatedPlaintext string
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txKeys := repository.NewAPIKeyRepository(tx)
+		// Lock the predecessor so concurrent rotations of the same key serialize
+		// and only one replacement is ever minted.
+		var locked models.APIKey
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ?", old.ID).Error; err != nil {
+			return fmt.Errorf("lock old key: %w", err)
+		}
+		// Mint the replacement (same tenant/label/subject as old).
+		plaintext, hash, gerr := auth.GenerateAPIKey()
+		if gerr != nil {
+			return fmt.Errorf("generate key: %w", gerr)
+		}
+		newKey = &models.APIKey{
+			TenantID:  old.TenantID,
+			KeyHash:   hash,
+			Label:     old.Label,
+			Prefix:    auth.KeyPrefix(plaintext),
+			SubjectID: old.SubjectID,
+			ExpiresAt: nil,
+		}
+		if err := txKeys.Create(ctx, newKey); err != nil {
+			return fmt.Errorf("create key: %w", err)
+		}
+		// Seed the member tuple with HARD-FAILING authz.Write (like B11) so a tuple
+		// failure rolls back the new key. (old.SubjectID is a real subject, never "*".)
+		if s.authz != nil {
+			if err := s.authz.Write(ctx, authzseed.TenantMember(old.TenantID, authzseed.APIKeySubjectID(*newKey))); err != nil {
+				return fmt.Errorf("seed key member tuple: %w", err)
+			}
+		}
+		// Retire the predecessor inside the same tx.
+		if grace > 0 {
+			expiry := time.Now().Add(grace)
+			if err := txKeys.SetExpiry(ctx, old.ID, &expiry); err != nil {
+				return fmt.Errorf("set grace expiry on old key: %w", err)
+			}
+		} else if err := txKeys.Revoke(ctx, old.ID); err != nil {
+			return fmt.Errorf("revoke old key: %w", err)
+		}
+		rotatedPlaintext = plaintext
+		return nil
+	})
 	if err != nil {
 		return "", nil, err
 	}
-	if grace > 0 {
-		expiry := time.Now().Add(grace)
-		if err := s.keys.SetExpiry(ctx, old.ID, &expiry); err != nil {
-			return "", nil, fmt.Errorf("set grace expiry on old key: %w", err)
-		}
-	} else if err := s.keys.Revoke(ctx, old.ID); err != nil {
-		return "", nil, fmt.Errorf("revoke old key: %w", err)
-	}
-	return plaintext, newKey, nil
+	return rotatedPlaintext, newKey, nil
 }
 
 func (s *MemoryService) ListAPIKeys(ctx context.Context, tenantID uuid.UUID) ([]models.APIKey, error) {

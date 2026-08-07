@@ -94,6 +94,11 @@ func TestImportWorker_SweepMarksInterrupted(t *testing.T) {
 	jobs := repository.NewImportJobRepository(db)
 	stuck := &models.ImportJob{TenantID: tenant, Status: models.ImportJobStatusRunning, Archive: []byte("x")}
 	require.NoError(t, jobs.Create(context.Background(), stuck))
+	// Backdate past the stale threshold so the startup sweep treats it as a
+	// genuinely orphaned job (F3: the sweep no longer touches a fresh/live
+	// running row a peer replica may still be processing).
+	require.NoError(t, db.Exec("UPDATE import_jobs SET updated_at = ? WHERE id = ?",
+		time.Now().Add(-2*time.Hour), stuck.ID).Error)
 
 	// Live context: Start runs SweepRunningToFailed(ctx) synchronously, so a
 	// cancelled ctx would abort the sweep's DB write. The poll goroutines can't

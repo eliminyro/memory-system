@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -10,6 +11,12 @@ import (
 
 	"github.com/eliminyro/memory-system/internal/authz"
 )
+
+// retentionAdvisoryLock derives a stable int64 lock key from a tenant UUID so
+// per-tenant retention sweeps serialize across replicas via pg_advisory_xact_lock.
+func retentionAdvisoryLock(id uuid.UUID) int64 {
+	return int64(binary.BigEndian.Uint64(id[:8]))
+}
 
 // RetentionRepository runs the retention sweep SQL: archive expired docs and
 // hard-delete docs past the archive grace window. No LLM calls.
@@ -88,9 +95,24 @@ func (r *RetentionRepository) DeleteArchived(ctx context.Context, tenantID uuid.
 		)
 		DELETE FROM documents WHERE id IN (SELECT id FROM victims)
 	`
-	res := r.db.WithContext(ctx).Exec(sql, tenantID, before, tenantID, authz.TypeDocument)
-	if res.Error != nil {
-		return 0, fmt.Errorf("delete archived: %w", res.Error)
+	var deleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize concurrent retention sweeps of THIS tenant across replicas
+		// (the scanner runs per-replica). A tx-scoped advisory lock is held to
+		// COMMIT; the second sweep then sees the first's committed deletes (no
+		// victims) and writes no duplicate deletion_events audit rows.
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", retentionAdvisoryLock(tenantID)).Error; err != nil {
+			return err
+		}
+		res := tx.Exec(sql, tenantID, before, tenantID, authz.TypeDocument)
+		if res.Error != nil {
+			return res.Error
+		}
+		deleted = res.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete archived: %w", err)
 	}
-	return res.RowsAffected, nil
+	return deleted, nil
 }
