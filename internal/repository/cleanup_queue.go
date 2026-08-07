@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
@@ -103,9 +104,24 @@ func (r *CleanupQueueRepository) Upsert(ctx context.Context, entry *models.Clean
 	}
 
 	if err := r.db.WithContext(ctx).Create(entry).Error; err != nil {
+		// A peer replica may have inserted the same pending pair between our
+		// not-found check above and this Create. The partial unique index
+		// idx_cleanup_pending_pair turns that into a 23505; treat it as "already
+		// enqueued by a peer" — a no-op, not an error.
+		if isUniqueViolation(err) {
+			return false, nil
+		}
 		return false, fmt.Errorf("insert cleanup row: %w", err)
 	}
 	return true, nil
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint violation
+// (SQLSTATE 23505). gorm is not configured with TranslateError, so we unwrap to the
+// pgx driver error rather than relying on gorm.ErrDuplicatedKey.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // GetByID returns a queue entry by id, scoped to the caller's tenants (own +

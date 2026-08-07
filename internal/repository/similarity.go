@@ -29,11 +29,14 @@ func (c SimilarityCandidate) Path() string {
 	return c.Category + "/" + c.Slug
 }
 
-// FindSimilarDocuments scans the tenant's existing sections and returns documents
-// whose best section match against any of newEmbeddings meets the threshold. Pass
-// excludeCategory/Subcategory/Slug so updating an existing doc doesn't self-flag.
-// Returns up to `limit`, ordered by similarity desc. Runs as one query via a
-// CROSS JOIN over a Postgres vector array literal.
+// FindSimilarDocuments scans the WRITE tenant's OWN existing sections and returns
+// documents whose best section match against any of newEmbeddings meets the
+// threshold. It deliberately excludes the common (bootstrap) pool: this backs the
+// write-time duplicate guard, and a caller can't edit or merge common-pool docs, so
+// flagging a common-pool near-duplicate would block a legitimate write against an
+// un-editable doc. Pass excludeCategory/Subcategory/Slug so updating an existing doc
+// doesn't self-flag. Returns up to `limit`, ordered by similarity desc. Runs as one
+// query via a CROSS JOIN over a Postgres vector array literal.
 func (r *SectionRepository) FindSimilarDocuments(
 	ctx context.Context,
 	tenantID uuid.UUID,
@@ -51,7 +54,8 @@ func (r *SectionRepository) FindSimilarDocuments(
 		limit = 5
 	}
 
-	tenants := readTenants(tenantID)
+	// Write tenant only — never the common pool (see doc comment).
+	tenants := []uuid.UUID{tenantID}
 	arrayLit := buildVectorArrayLiteral(newEmbeddings)
 
 	sql := `

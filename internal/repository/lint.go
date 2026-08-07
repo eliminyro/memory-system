@@ -115,6 +115,7 @@ func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thr
 		       EXTRACT(DAY FROM NOW() - updated_at)::int AS days_since_update
 		FROM documents
 		WHERE tenant_id IN ?
+		  AND archived_at IS NULL
 		  AND updated_at < NOW() - make_interval(days => ?)
 		ORDER BY updated_at ASC
 	`
@@ -154,6 +155,7 @@ func (r *LintRepository) CheckSparse(ctx context.Context, tenantID uuid.UUID, th
 		FROM documents d
 		LEFT JOIN sections s ON s.document_id = d.id
 		WHERE d.tenant_id IN ?
+		  AND d.archived_at IS NULL
 		GROUP BY d.id, d.category, d.subcategory, d.slug
 		HAVING COUNT(s.id) < ? OR COALESCE(MAX(LENGTH(s.content)), 0) < ?
 		ORDER BY d.category, d.subcategory, d.slug
@@ -258,6 +260,7 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 			FROM documents d
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
 			  AND s.embedding IS NOT NULL
 			LIMIT ?
 		),
@@ -271,6 +274,7 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 				FROM documents d2
 				JOIN sections s2 ON s2.document_id = d2.id
 				WHERE d2.tenant_id IN ?
+				  AND d2.archived_at IS NULL
 				  AND s2.embedding IS NOT NULL
 				  AND s2.document_id <> c.document_id
 				ORDER BY s2.embedding <=> c.embedding
@@ -328,6 +332,7 @@ func (r *LintRepository) CheckEmptyCategories(ctx context.Context, tenantID uuid
 		SELECT category, subcategory, COUNT(*) AS doc_count
 		FROM documents
 		WHERE tenant_id IN ?
+		  AND archived_at IS NULL
 		GROUP BY category, subcategory
 		HAVING COUNT(*) < ?
 		ORDER BY category, subcategory
