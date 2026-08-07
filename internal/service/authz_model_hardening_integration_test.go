@@ -93,8 +93,12 @@ func TestListTenantGrantsIncludesWildcard(t *testing.T) {
 	tenant, err := svc.CreateTenant(adminCtx, "wild-grants-"+uuid.NewString(), "")
 	require.NoError(t, err)
 
-	// Seed a public wildcard viewer grant directly.
+	// Seed a public wildcard viewer grant directly. The service integration suite
+	// shares one DB and TestCrossTenantReads_FreshTenantPrivateByConstruction audits
+	// GLOBALLY that the ONLY viewer@user:* tuple is the common pool, so remove this
+	// one at test end (tests run sequentially) to preserve that invariant.
 	require.NoError(t, store.Write(context.Background(), authzseed.TenantViewer(tenant.ID, authz.Wildcard)))
+	defer func() { _ = store.Delete(context.Background(), authzseed.TenantViewer(tenant.ID, authz.Wildcard)) }()
 
 	// A manager lists grants and must see the wildcard as an auditable entry.
 	managerSubj := "mgr-" + uuid.NewString()
