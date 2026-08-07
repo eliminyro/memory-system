@@ -154,6 +154,11 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		`DROP INDEX IF EXISTS idx_doc_path_with_null`,
 		`DROP INDEX IF EXISTS idx_doc_path`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_tenant_path ON documents (tenant_id, category, COALESCE(subcategory, ''), slug)`,
+		// One unresolved cleanup_queue row per (tenant, doc_a, doc_b): makes the
+		// check-then-insert Upsert race-safe across replicas (a concurrent second
+		// insert hits this and is treated as a no-op). Partial so resolved rows don't
+		// block re-enqueue after a pair legitimately re-forms.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_cleanup_pending_pair ON cleanup_queue (tenant_id, doc_a_id, doc_b_id) WHERE resolved_at IS NULL`,
 		// Backfill verified_at for existing sections — treat first-time as verified at creation.
 		// Only sets NULL values, so re-runs are no-ops.
 		`UPDATE sections SET verified_at = created_at WHERE verified_at IS NULL`,

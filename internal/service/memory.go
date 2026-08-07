@@ -54,6 +54,11 @@ type MemoryService struct {
 	// authzEngine is the single authoritative gate for admin, tenant_id override,
 	// and cross-tenant/common-pool access. Nil (no authzStore) fails every Check closed.
 	authzEngine *authz.Engine
+	// inTx is true on a clone produced by withTx — i.e. this service is already
+	// bound to a caller's transaction. Lifecycle methods that would otherwise open
+	// their own transaction (GrantTenantUser) check this to avoid double-wrapping
+	// and to defer atomicity to the caller's tx.
+	inTx bool
 	// BootstrapToken is the generated first-run token the HTTP Bootstrap path
 	// compares the caller's token against (constant-time). Set once at startup in
 	// cmd/server/main.go when the instance has no admin yet (design D1); empty means
@@ -966,6 +971,7 @@ func (s *MemoryService) HasAnyAdmin(ctx context.Context) (bool, error) {
 func (s *MemoryService) withTx(tx *gorm.DB) *MemoryService {
 	clone := *s
 	clone.db = tx
+	clone.inTx = true
 	clone.tenants = repository.NewTenantRepository(tx)
 	clone.keys = repository.NewAPIKeyRepository(tx)
 	txStore := authz.NewPostgresStore(tx)
@@ -1185,15 +1191,57 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 		}
 	}
 	tu := &models.TenantUser{Email: email, TenantID: tenantID, Role: role}
-	if err := s.db.WithContext(ctx).Create(tu).Error; err != nil {
-		return nil, fmt.Errorf("create tenant_user: %w", err)
+
+	// In-transaction path (Bootstrap / self-serve provisioning via withTx) or no
+	// authz store: keep the historical best-effort seed. The caller's own transaction
+	// plus its hard-failing owner/admin/system writes govern atomicity there, and a
+	// nil store disables seeding entirely — so don't double-wrap or change that flow.
+	if s.inTx || s.authz == nil {
+		if err := s.db.WithContext(ctx).Create(tu).Error; err != nil {
+			return nil, fmt.Errorf("create tenant_user: %w", err)
+		}
+		s.seedTuple(ctx, authzseed.TenantMember(tenantID, tu.ID.String()))
+		switch role {
+		case models.TenantUserRoleAdmin:
+			s.seedTuple(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String()))
+		case models.TenantUserRoleOwner:
+			s.seedTuple(ctx, authzseed.TenantOwner(tenantID, tu.ID.String()))
+		}
+		return tu, nil
 	}
-	s.seedTuple(ctx, authzseed.TenantMember(tenantID, tu.ID.String()))
-	switch role {
-	case models.TenantUserRoleAdmin:
-		s.seedTuple(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String()))
-	case models.TenantUserRoleOwner:
-		s.seedTuple(ctx, authzseed.TenantOwner(tenantID, tu.ID.String()))
+
+	// Direct autocommit path: the tenant_users row and its access tuples must be
+	// all-or-nothing. Previously the row was committed via s.db.Create and the
+	// tuple seed went through best-effort seedTuple, which LOGS-and-SWALLOWS authz
+	// write errors — leaving a committed user with no membership tuple (no access at
+	// all) while returning success (B11). Create the row inside a transaction and
+	// write the member (+admin/owner) tuple with hard-failing semantics; a tuple
+	// failure rolls the row back so no access-less user is ever committed. The tuple
+	// store is a separate abstraction (authz.Store), so the DB transaction guards the
+	// observable invariant — no committed tenant_users row without its tuples — while
+	// a rolled-back attempt may leave a harmless orphan tuple (a grant to a subject id
+	// that never came to exist).
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(tu).Error; err != nil {
+			return fmt.Errorf("create tenant_user: %w", err)
+		}
+		if err := s.authz.Write(ctx, authzseed.TenantMember(tenantID, tu.ID.String())); err != nil {
+			return fmt.Errorf("seed tenant member tuple: %w", err)
+		}
+		switch role {
+		case models.TenantUserRoleAdmin:
+			if err := s.authz.Write(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String())); err != nil {
+				return fmt.Errorf("seed tenant admin tuple: %w", err)
+			}
+		case models.TenantUserRoleOwner:
+			if err := s.authz.Write(ctx, authzseed.TenantOwner(tenantID, tu.ID.String())); err != nil {
+				return fmt.Errorf("seed tenant owner tuple: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return tu, nil
 }

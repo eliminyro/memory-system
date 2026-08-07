@@ -111,9 +111,25 @@ func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, ca
 	return docs, nil
 }
 
+// Save persists doc (and, via GORM associations, its sections) scoped to tenantID.
+// gorm's db.Save is a PK-keyed UPDATE with no tenant_id predicate, so before saving
+// we verify the row actually exists under tenantID: a cross-tenant id is un-writable
+// (returns ErrNotFound) rather than silently overwriting another tenant's document.
+// The mismatch guard stays for callers that pass a doc whose TenantID differs from
+// the write tenant.
 func (r *DocumentRepository) Save(ctx context.Context, tenantID uuid.UUID, doc *models.Document) error {
 	if doc.TenantID != tenantID {
 		return fmt.Errorf("%w: document tenant mismatch", apperr.ErrInvalidInput)
+	}
+	var n int64
+	if err := r.db.WithContext(ctx).
+		Model(&models.Document{}).
+		Where("id = ? AND tenant_id = ?", doc.ID, tenantID).
+		Count(&n).Error; err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: document %s", apperr.ErrNotFound, doc.ID)
 	}
 	return r.db.WithContext(ctx).Save(doc).Error
 }

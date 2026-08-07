@@ -1,10 +1,35 @@
 package repository
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// TestIsUniqueViolation guards the B10 race fix: Upsert relies on this to treat a
+// concurrent peer's insert (SQLSTATE 23505 from the partial unique index) as a
+// no-op instead of an error. gorm is not configured with TranslateError, so the
+// check unwraps to the pgx driver error.
+func TestIsUniqueViolation(t *testing.T) {
+	if !isUniqueViolation(&pgconn.PgError{Code: "23505"}) {
+		t.Error("23505 should be a unique violation")
+	}
+	if !isUniqueViolation(fmt.Errorf("insert cleanup row: %w", &pgconn.PgError{Code: "23505"})) {
+		t.Error("wrapped 23505 should be detected via errors.As")
+	}
+	if isUniqueViolation(&pgconn.PgError{Code: "23503"}) {
+		t.Error("23503 (FK violation) is not a unique violation")
+	}
+	if isUniqueViolation(errors.New("some other error")) {
+		t.Error("a plain error is not a unique violation")
+	}
+	if isUniqueViolation(nil) {
+		t.Error("nil is not a unique violation")
+	}
+}
 
 // TestNormalizePair — Upsert relies on NormalizePair so (a,b) and (b,a) map to the
 // same row. If it breaks, the queue grows two rows per pair and never dedups.
