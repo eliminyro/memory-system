@@ -2,7 +2,6 @@ package authletstore
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/eliminyro/authlet/pkg/storage"
@@ -45,10 +44,7 @@ func (s *signingKeyStore) GetSigner(ctx context.Context) (storage.SigningKey, er
 		Where("is_active = ?", true).
 		Order("created_at DESC").
 		First(&row).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return storage.SigningKey{}, storage.ErrNotFound
-		}
-		return storage.SigningKey{}, err
+		return storage.SigningKey{}, mapGetErr(err)
 	}
 	return toStorageKey(row), nil
 }

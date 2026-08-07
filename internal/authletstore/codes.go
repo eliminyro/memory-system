@@ -2,7 +2,6 @@ package authletstore
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/eliminyro/authlet/pkg/storage"
@@ -27,10 +26,7 @@ func (s *codeStore) Save(ctx context.Context, c storage.AuthCode) error {
 		ExpiresAt:     c.ExpiresAt,
 	}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-		if isUniqueViolation(err) {
-			return storage.ErrAlreadyExists
-		}
-		return err
+		return mapCreateErr(err)
 	}
 	return nil
 }
@@ -45,10 +41,7 @@ func (s *codeStore) ConsumeOnce(ctx context.Context, hash string) (*storage.Auth
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row OAuthCode
 		if err := tx.Where("code_hash = ?", hash).First(&row).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return storage.ErrNotFound
-			}
-			return err
+			return mapGetErr(err)
 		}
 		// The DELETE is the atomic guard (read only fetches the payload): under
 		// Postgres READ COMMITTED both concurrent redemptions read the row, but the

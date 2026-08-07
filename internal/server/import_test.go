@@ -309,3 +309,30 @@ func TestImportStatus_TargetTenantQuery(t *testing.T) {
 		t.Errorf("GetByID tenant = %s, want %s (from the query param, not context)", fake.getByIDTenant, target)
 	}
 }
+
+// A malformed tenant_id query param on a status poll is a 400, never a silent
+// fallback to the caller's context tenant (B15): a typo'd override must not
+// quietly target the wrong scope and surface as a misleading 404. The job is
+// never looked up.
+func TestImportStatus_InvalidTargetTenant(t *testing.T) {
+	id := uuid.New()
+	// A getJob is wired so that, were the malformed override silently dropped,
+	// the handler would fall back to the context tenant and return 200 — making
+	// this test fail loudly if the bug regressed.
+	fake := &fakeImportJobs{getJob: &models.ImportJob{ID: id, TenantID: uuid.New(), Status: models.ImportJobStatusRunning}}
+	h := &adminAPIHandler{importJobs: fake}
+
+	req := httptest.NewRequest(http.MethodGet, "/import/"+id.String()+"?tenant_id=not-a-uuid", nil)
+	req.SetPathValue("id", id.String())
+	req = req.WithContext(auth.WithTenantID(req.Context(), uuid.New()))
+	rec := httptest.NewRecorder()
+
+	h.importStatus(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for malformed tenant_id", rec.Code)
+	}
+	if fake.getByIDTenant != uuid.Nil {
+		t.Errorf("GetByID was called (tenant=%s); a malformed tenant_id must reject before lookup", fake.getByIDTenant)
+	}
+}

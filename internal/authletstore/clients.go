@@ -3,7 +3,6 @@ package authletstore
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/eliminyro/authlet/pkg/storage"
@@ -34,10 +33,7 @@ func (s *clientStore) Create(ctx context.Context, c storage.Client) error {
 		ExpiresAt:               c.ExpiresAt,
 	}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-		if isUniqueViolation(err) {
-			return storage.ErrAlreadyExists
-		}
-		return err
+		return mapCreateErr(err)
 	}
 	return nil
 }
@@ -47,10 +43,7 @@ func (s *clientStore) Create(ctx context.Context, c storage.Client) error {
 func (s *clientStore) Get(ctx context.Context, id string) (*storage.Client, error) {
 	var row OAuthClient
 	if err := s.db.WithContext(ctx).First(&row, "client_id = ?", id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, storage.ErrNotFound
-		}
-		return nil, err
+		return nil, mapGetErr(err)
 	}
 	meta := map[string]any{}
 	_ = json.Unmarshal(row.Metadata, &meta)

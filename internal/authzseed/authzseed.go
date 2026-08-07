@@ -29,61 +29,43 @@ func TenantSystemEdge(tenantID uuid.UUID) authz.Tuple {
 	}
 }
 
-// TenantMember returns tenant:<T>#member@user:<subjectID>.
-func TenantMember(tenantID uuid.UUID, subjectID string) authz.Tuple {
+// tenantUserTuple builds tenant:<T>#<relation>@user:<subjectID>, the shape the
+// five exported tenant-user constructors share (they differ only by relation).
+func tenantUserTuple(tenantID uuid.UUID, relation, subjectID string) authz.Tuple {
 	return authz.Tuple{
 		ObjectType:  authz.TypeTenant,
 		ObjectID:    tenantID.String(),
-		Relation:    authz.RelMember,
+		Relation:    relation,
 		SubjectType: authz.TypeUser,
 		SubjectID:   subjectID,
 	}
 }
 
+// TenantMember returns tenant:<T>#member@user:<subjectID>.
+func TenantMember(tenantID uuid.UUID, subjectID string) authz.Tuple {
+	return tenantUserTuple(tenantID, authz.RelMember, subjectID)
+}
+
 // TenantAdmin returns tenant:<T>#admin@user:<subjectID>.
 func TenantAdmin(tenantID uuid.UUID, subjectID string) authz.Tuple {
-	return authz.Tuple{
-		ObjectType:  authz.TypeTenant,
-		ObjectID:    tenantID.String(),
-		Relation:    authz.RelAdmin,
-		SubjectType: authz.TypeUser,
-		SubjectID:   subjectID,
-	}
+	return tenantUserTuple(tenantID, authz.RelAdmin, subjectID)
 }
 
 // TenantOwner returns tenant:<T>#owner@user:<subjectID>, the personal-tenant
 // owner grant. An owner folds up into manager (owner ⇒ manager) but not admin,
 // so it confers full self-management without system-admin reach.
 func TenantOwner(tenantID uuid.UUID, subjectID string) authz.Tuple {
-	return authz.Tuple{
-		ObjectType:  authz.TypeTenant,
-		ObjectID:    tenantID.String(),
-		Relation:    authz.RelOwner,
-		SubjectType: authz.TypeUser,
-		SubjectID:   subjectID,
-	}
+	return tenantUserTuple(tenantID, authz.RelOwner, subjectID)
 }
 
 // TenantManager returns tenant:<T>#manager@user:<subjectID>.
 func TenantManager(tenantID uuid.UUID, subjectID string) authz.Tuple {
-	return authz.Tuple{
-		ObjectType:  authz.TypeTenant,
-		ObjectID:    tenantID.String(),
-		Relation:    authz.RelManager,
-		SubjectType: authz.TypeUser,
-		SubjectID:   subjectID,
-	}
+	return tenantUserTuple(tenantID, authz.RelManager, subjectID)
 }
 
 // TenantViewer returns tenant:<T>#viewer@user:<subjectID>.
 func TenantViewer(tenantID uuid.UUID, subjectID string) authz.Tuple {
-	return authz.Tuple{
-		ObjectType:  authz.TypeTenant,
-		ObjectID:    tenantID.String(),
-		Relation:    authz.RelViewer,
-		SubjectType: authz.TypeUser,
-		SubjectID:   subjectID,
-	}
+	return tenantUserTuple(tenantID, authz.RelViewer, subjectID)
 }
 
 // DocumentTenantEdge returns document:<D>#tenant@tenant:<T>, set at document
