@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.29
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.55.0
 	github.com/caarlos0/env/v10 v10.0.0
-	github.com/eliminyro/authlet v1.0.3
+	github.com/eliminyro/authlet v1.0.4
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/lib/pq v1.12.3
