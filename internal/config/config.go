@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -252,6 +253,10 @@ func Load() (*Config, error) {
 		if cfg.AWSRegion == "" || cfg.AWSModel == "" {
 			return nil, fmt.Errorf("AWS_REGION and AWS_EMBEDDING_MODEL are required when EMBEDDING_PROVIDER=aws")
 		}
+	case "gcp":
+		if cfg.GCPProject == "" {
+			return nil, fmt.Errorf("GCP_PROJECT is required when EMBEDDING_PROVIDER=gcp")
+		}
 	}
 
 	// Retention lower bounds — reject values that would mass-delete live data (audit #4).
@@ -268,6 +273,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.RateLimitRPS > 0 && cfg.RateLimitBurst < 1 {
 		return nil, fmt.Errorf("RATE_LIMIT_BURST must be >= 1 when RATE_LIMIT_RPS > 0, got %d", cfg.RateLimitBurst)
+	}
+	if cfg.RateLimitRPS > 0 && cfg.RateLimitTrustedProxyDepth == 0 {
+		slog.Default().Warn("rate limiting is on but RATE_LIMIT_TRUSTED_PROXY_DEPTH=0: X-Forwarded-For is ignored and clients are keyed by RemoteAddr — behind a reverse proxy/CDN every client shares one bucket. Set it to the number of trusted proxy hops (e.g. 1 behind a single ingress).")
 	}
 
 	return cfg, nil

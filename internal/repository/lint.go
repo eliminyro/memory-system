@@ -73,17 +73,20 @@ const (
 	dupScanEfSearch       = 100              // HNSW ef_search: keep KNN recall high under the tenant filter
 )
 
-// dupScanCaps resolves the configured bounds, falling back to the package
-// defaults for any field a caller left at zero.
+// dupScanCaps resolves the configured bounds, clamping each field to
+// [1, default]. A caller may only LOWER a bound below the package default (to
+// scan less); it can never raise one above the default. The default is the
+// ceiling the audit fix intended, so a hostile/careless caller can't pass a
+// huge value and blow up the O(N^2) scan. Zero/negative falls back to default.
 func (t LintThresholds) dupScanCaps() (maxSections, neighbors, maxPairs int) {
 	maxSections, neighbors, maxPairs = t.DuplicateMaxSections, t.DuplicateNeighbors, t.DuplicateMaxPairs
-	if maxSections <= 0 {
+	if maxSections <= 0 || maxSections > defaultDupMaxSections {
 		maxSections = defaultDupMaxSections
 	}
-	if neighbors <= 0 {
+	if neighbors <= 0 || neighbors > defaultDupNeighbors {
 		neighbors = defaultDupNeighbors
 	}
-	if maxPairs <= 0 {
+	if maxPairs <= 0 || maxPairs > defaultDupMaxPairs {
 		maxPairs = defaultDupMaxPairs
 	}
 	return

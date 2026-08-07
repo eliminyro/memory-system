@@ -232,6 +232,7 @@ func TestLoadProviderRequiredFields(t *testing.T) {
 		openaiM  string
 		awsReg   string
 		awsM     string
+		gcpProj  string
 		wantErr  string
 	}{
 		{name: "ollama default needs nothing", provider: "ollama"},
@@ -240,6 +241,8 @@ func TestLoadProviderRequiredFields(t *testing.T) {
 		{name: "aws with region+model ok", provider: "aws", awsReg: "us-east-1", awsM: "amazon.titan-embed-text-v2:0"},
 		{name: "aws without region rejected", provider: "aws", awsM: "amazon.titan-embed-text-v2:0", wantErr: "AWS_REGION and AWS_EMBEDDING_MODEL"},
 		{name: "aws without model rejected", provider: "aws", awsReg: "us-east-1", wantErr: "AWS_REGION and AWS_EMBEDDING_MODEL"},
+		{name: "gcp with project ok", provider: "gcp", gcpProj: "my-project"},
+		{name: "gcp without project rejected", provider: "gcp", wantErr: "GCP_PROJECT is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -247,6 +250,7 @@ func TestLoadProviderRequiredFields(t *testing.T) {
 			t.Setenv("OPENAI_EMBEDDING_MODEL", tc.openaiM)
 			t.Setenv("AWS_REGION", tc.awsReg)
 			t.Setenv("AWS_EMBEDDING_MODEL", tc.awsM)
+			t.Setenv("GCP_PROJECT", tc.gcpProj)
 
 			_, err := Load()
 			if tc.wantErr != "" {
@@ -259,6 +263,21 @@ func TestLoadProviderRequiredFields(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// RG4: rate limiting on with trusted-proxy depth 0 warns but must NOT fail the
+// load — the default is spoof-safe when there is no proxy in front.
+func TestLoadRateLimitDefaultProxyDepthWarnsNotFails(t *testing.T) {
+	t.Setenv("RATE_LIMIT_RPS", "20")
+	t.Setenv("RATE_LIMIT_TRUSTED_PROXY_DEPTH", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RateLimitTrustedProxyDepth != 0 {
+		t.Fatalf("RateLimitTrustedProxyDepth = %d, want 0", cfg.RateLimitTrustedProxyDepth)
 	}
 }
 
