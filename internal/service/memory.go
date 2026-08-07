@@ -1279,6 +1279,22 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 	// a rolled-back attempt may leave a harmless orphan tuple (a grant to a subject id
 	// that never came to exist).
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if tenant.Type == models.TenantTypePersonal {
+			// Serialize concurrent grants to the same personal tenant: lock the tenant
+			// row so a second grant blocks until we commit, then re-count under the lock.
+			// (No unique constraint on tenant_users.tenant_id, so the pre-tx count alone
+			// is a TOCTOU.)
+			if err := tx.Exec("SELECT 1 FROM tenants WHERE id = ? FOR UPDATE", tenantID).Error; err != nil {
+				return fmt.Errorf("lock tenant: %w", err)
+			}
+			var existing int64
+			if err := tx.Model(&models.TenantUser{}).Where("tenant_id = ?", tenantID).Count(&existing).Error; err != nil {
+				return fmt.Errorf("count tenant_users: %w", err)
+			}
+			if existing >= 1 {
+				return fmt.Errorf("%w: a personal tenant may have only one user", apperr.ErrInvalidInput)
+			}
+		}
 		if err := tx.Create(tu).Error; err != nil {
 			return fmt.Errorf("create tenant_user: %w", err)
 		}
