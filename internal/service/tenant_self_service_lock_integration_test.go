@@ -59,22 +59,29 @@ func TestSelfServicePolicyResolutionAndObservability(t *testing.T) {
 }
 
 // TestSelfServiceToggleEditMatrix covers UpdateMyTenantSettings across the
-// open/locked × role matrix: open lets any member edit; admin_only excludes the
-// personal owner (owner ⇏ admin) but admits system admins, and on a shared
-// tenant admits its tenant-admin while excluding a plain member.
+// open/locked × role matrix: open requires a manager (a plain member is refused —
+// these toggles arm destructive retention); admin_only excludes the personal
+// owner (owner ⇏ admin) but admits system admins, and on a shared tenant admits
+// its tenant-admin while excluding a plain member.
 func TestSelfServiceToggleEditMatrix(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
 	svc := newAdminTestSvc(db, store) // global default "" ⇒ open
 	adminCtx := auth.WithLocalAdmin(context.Background())
 
-	// open: any member edits.
+	// open: a manager edits; a plain member is now refused (toggles are
+	// manager-level — they arm destructive retention).
 	shared, err := svc.CreateTenant(adminCtx, "tog-open-"+uuid.NewString(), "", models.TenantTypeShared)
 	require.NoError(t, err)
 	memberTU, err := svc.GrantTenantUser(adminCtx, "m-"+uuid.NewString()+"@example.com", shared.ID, models.TenantUserRoleMember)
 	require.NoError(t, err)
 	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, memberTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil)
-	require.NoError(t, err, "open: a member may edit toggles")
+	require.ErrorIs(t, err, apperr.ErrInvalidInput, "open: a plain member may NOT edit toggles (manager required)")
+
+	openAdminTU, err := svc.GrantTenantUser(adminCtx, "oa-"+uuid.NewString()+"@example.com", shared.ID, models.TenantUserRoleAdmin)
+	require.NoError(t, err)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, openAdminTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil)
+	require.NoError(t, err, "open: a manager (tenant-admin) may edit toggles")
 
 	// admin_only on a personal tenant: owner blocked, system admin allowed.
 	personal, err := svc.CreateTenant(adminCtx, "tog-lock-"+uuid.NewString(), "", models.TenantTypePersonal)
