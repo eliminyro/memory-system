@@ -572,9 +572,16 @@ function sectionEl(doc, s) {
 }
 
 async function showDocument(id) {
-  const seq = _renderSeq;
+  const seq = ++_renderSeq;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  const doc = await apiFetch(`/documents/${id}`);
+  let doc;
+  try {
+    doc = await apiFetch(`/documents/${id}`);
+  } catch (err) {
+    if (seq !== _renderSeq) return; // a newer render superseded us — stay silent
+    showError(err);
+    return;
+  }
   if (seq !== _renderSeq) return; // discard: navigated away during the fetch (B7)
   view.replaceChildren();
 
@@ -675,7 +682,7 @@ function renderSearchResults(results) {
 // ── Browse (index) view ───────────────────────────────────────────────────────
 
 async function renderBrowse() {
-  const seq = _renderSeq;
+  const seq = ++_renderSeq;
   navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   // A freshly-bootstrapped tenant with zero documents can yield JSON null here
@@ -712,12 +719,19 @@ async function renderBrowse() {
 }
 
 async function renderCategoryDocs(category, subcategory) {
-  const seq = _renderSeq;
+  const seq = ++_renderSeq;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const params = new URLSearchParams({ category });
   if (subcategory) params.set("subcategory", subcategory);
   if (memFilter) params.set("tenant_id", memFilter.id);
-  const docs = await apiFetch(`/documents?${params}`);
+  let docs;
+  try {
+    docs = await apiFetch(`/documents?${params}`);
+  } catch (err) {
+    if (seq !== _renderSeq) return; // a newer render superseded us — stay silent
+    showError(err);
+    return;
+  }
   if (seq !== _renderSeq) return; // discard stale render (B7)
   view.replaceChildren();
 
@@ -750,14 +764,18 @@ async function renderCategoryDocs(category, subcategory) {
 // ── Search wiring ─────────────────────────────────────────────────────────────
 
 let _searchTimer = null;
-// _renderSeq is a monotonic render token bumped by route() on every navigation.
-// Async renderers capture it before their first await and bail before any
-// post-await write to the shared #view, so a fetch that resolves after the user
-// has navigated away can't clobber the current view (B7).
+// _renderSeq is a monotonic render token bumped by route() on every navigation
+// AND by every async renderer at its own start (const seq = ++_renderSeq). Each
+// renderer captures the bumped value before its first await and bails before any
+// post-await write to the shared #view, so any in-flight sibling render bails
+// when a newer render starts — regardless of whether the transition went through
+// route() (e.g. a search-box clear, a legend/filter chip, or a card click that
+// invokes a renderer directly). A fetch that resolves after a newer view has
+// begun can't clobber it (B7, RG2).
 let _renderSeq = 0;
 
 async function runSearch(q) {
-  const seq = _renderSeq;
+  const seq = ++_renderSeq;
   navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "searching…" }));
   try {
@@ -1190,7 +1208,7 @@ let tenantsType = "shared"; // active sub-tab; Shared is the default
 const tenantCache = {}; // id → {id,name,type,relation}, populated as lists load
 
 async function renderTenants() {
-  const seq = _renderSeq;
+  const seq = ++_renderSeq;
   navStack.length = 0;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   let rows;
@@ -1338,7 +1356,7 @@ async function lookupTenant(id) {
 // (keys are refused for shared tenants; personal tenants have a single owner and
 // no members). Both get a "view this tenant's memories" link. No document browser.
 async function renderTenantPanel(id) {
-  const seq = _renderSeq;
+  const seq = ++_renderSeq;
   navStack.length = 0;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   let t;
@@ -1519,12 +1537,25 @@ function importSection(tenantID) {
   let activeTimer = null; // guards against overlapping polls
   let chosen = null;
   const dzHint = () => dz.querySelector(".dz-hint");
-  fileInput.addEventListener("change", () => {
-    chosen = fileInput.files[0] || null;
+  function setChosen(file) {
+    chosen = file || null;
     importBtn.disabled = !chosen;
     dzHint().replaceChildren(chosen
       ? el("b", { textContent: chosen.name })
       : el("b", { textContent: "Choose a file" }));
+  }
+  fileInput.addEventListener("change", () => setChosen(fileInput.files[0]));
+
+  // A hidden file input isn't a drop target, so wire drag/drop on the label
+  // itself — otherwise a dropped file triggers the browser default (navigate to
+  // the file) and unloads the SPA.
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("dz--over"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("dz--over"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("dz--over");
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) setChosen(f);
   });
 
   importBtn.addEventListener("click", async () => {
