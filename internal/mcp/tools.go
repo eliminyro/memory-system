@@ -3,13 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 )
@@ -233,10 +231,7 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("search: %w", err)
+		return toolErr("search", err)
 	}
 	return jsonResult(results), nil, nil
 }
@@ -254,10 +249,7 @@ func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	}
 	doc, err := s.memory.GetDocument(ctx, input.Category, input.Subcategory, input.Slug, input.ForceRead, input.Reason, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("get document: %w", err)
+		return toolErr("get document", err)
 	}
 	return jsonResult(doc), nil, nil
 }
@@ -276,10 +268,7 @@ func (s *Server) GetDocumentByID(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	}
 	doc, err := s.memory.GetDocumentByID(ctx, id, input.ForceRead, input.Reason, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("get document by id: %w", err)
+		return toolErr("get document by id", err)
 	}
 	return jsonResult(doc), nil, nil
 }
@@ -297,10 +286,7 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		return errorResult(err.Error()), nil, nil
 	}
 	if err := s.memory.MarkVerified(ctx, id, tenantOverride); err != nil {
-		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("mark verified: %w", err)
+		return toolErr("mark verified", err)
 	}
 	return jsonResult(map[string]string{"status": "verified", "section_id": id.String()}), nil, nil
 }
@@ -315,10 +301,7 @@ func (s *Server) GetCleanupQueue(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	}
 	rows, err := s.memory.GetCleanupQueue(ctx, input.Limit, input.IncludeResolved, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("get cleanup queue: %w", err)
+		return toolErr("get cleanup queue", err)
 	}
 	return jsonResult(rows), nil, nil
 }
@@ -347,10 +330,7 @@ func (s *Server) MarkCleanupDone(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		return errorResult(err.Error()), nil, nil
 	}
 	if err := s.memory.MarkCleanupDone(ctx, qid, input.Resolution, input.Note, mergedInto, tenantOverride); err != nil {
-		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("mark cleanup done: %w", err)
+		return toolErr("mark cleanup done", err)
 	}
 	return jsonResult(map[string]string{"status": "resolved", "queue_id": qid.String()}), nil, nil
 }
@@ -358,10 +338,7 @@ func (s *Server) MarkCleanupDone(ctx context.Context, _ *mcpsdk.CallToolRequest,
 func (s *Server) UpdateMyTenantSettings(ctx context.Context, _ *mcpsdk.CallToolRequest, input UpdateMyTenantSettingsInput) (*mcpsdk.CallToolResult, any, error) {
 	tenant, err := s.memory.UpdateMyTenantSettings(ctx, input.StalenessMode, input.DuplicateGuard, input.CleanupScanEnabled)
 	if err != nil {
-		if errors.Is(err, apperr.ErrInvalidInput) || errors.Is(err, apperr.ErrNotFound) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("update my tenant settings: %w", err)
+		return toolErr("update my tenant settings", err)
 	}
 	return jsonResult(tenant), nil, nil
 }
@@ -392,10 +369,7 @@ func (s *Server) MergeDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	}
 	result, err := s.memory.MergeDocuments(ctx, winnerID, loserID, keep, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("merge documents: %w", err)
+		return toolErr("merge documents", err)
 	}
 	return jsonResult(result), nil, nil
 }
@@ -416,10 +390,7 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	}
 	result, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content, input.Force, input.Reason, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("store: %w", err)
+		return toolErr("store", err)
 	}
 	if result.Status == "similar_exists" {
 		return jsonResult(map[string]any{
@@ -453,10 +424,7 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	section, err := s.memory.UpdateSection(ctx, id, &input.Content, input.Heading, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrNotFound) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("update section: %w", err)
+		return toolErr("update section", err)
 	}
 	return jsonResult(section), nil, nil
 }
@@ -473,10 +441,7 @@ func (s *Server) DeleteDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 		return errorResult(err.Error()), nil, nil
 	}
 	if err := s.memory.DeleteDocument(ctx, input.Category, input.Subcategory, input.Slug, tenantOverride); err != nil {
-		if errors.Is(err, apperr.ErrNotFound) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("delete: %w", err)
+		return toolErr("delete", err)
 	}
 	return jsonResult(map[string]string{"status": "deleted"}), nil, nil
 }
@@ -488,7 +453,7 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	docs, err := s.memory.ListDocuments(ctx, input.Category, input.Subcategory, tenantOverride)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list: %w", err)
+		return toolErr("list", err)
 	}
 	// Compact listing; ID lets clients map a doc UUID (e.g. cleanup_queue row) to a path.
 	type docEntry struct {
@@ -519,7 +484,7 @@ func (s *Server) GenerateIndex(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	entries, err := s.memory.GenerateIndex(ctx, input.Depth, input.Category, tenantOverride)
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate index: %w", err)
+		return toolErr("generate index", err)
 	}
 	return jsonResult(entries), nil, nil
 }
@@ -541,10 +506,7 @@ func (s *Server) GetRelated(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 	}
 	results, err := s.memory.GetRelated(ctx, docID, input.Limit, tenantOverride)
 	if err != nil {
-		if errors.Is(err, apperr.ErrNotFound) || errors.Is(err, apperr.ErrInvalidInput) {
-			return errorResult(err.Error()), nil, nil
-		}
-		return nil, nil, fmt.Errorf("get related: %w", err)
+		return toolErr("get related", err)
 	}
 	return jsonResult(results), nil, nil
 }
@@ -562,7 +524,7 @@ func (s *Server) LintMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 	}
 	findings, err := s.memory.LintMemory(ctx, input.Checks, input.Thresholds, tenantOverride)
 	if err != nil {
-		return nil, nil, fmt.Errorf("lint memory: %w", err)
+		return toolErr("lint memory", err)
 	}
 	return jsonResult(findings), nil, nil
 }

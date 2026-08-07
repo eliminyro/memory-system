@@ -1159,6 +1159,22 @@ func (s *MemoryService) ResetBootstrap(ctx context.Context) error {
 	})
 }
 
+// roleElevatedTuple returns the elevated (admin/owner) access tuple a role
+// implies, or ok=false for a plain member (which carries no elevated tuple —
+// the member tuple is always seeded separately). Single source of truth for the
+// role→relation mapping shared by GrantTenantUser, UpdateTenantUserRole, and
+// RevokeTenantUser.
+func roleElevatedTuple(tenantID uuid.UUID, role, subjectID string) (authz.Tuple, bool) {
+	switch role {
+	case models.TenantUserRoleAdmin:
+		return authzseed.TenantAdmin(tenantID, subjectID), true
+	case models.TenantUserRoleOwner:
+		return authzseed.TenantOwner(tenantID, subjectID), true
+	default:
+		return authz.Tuple{}, false
+	}
+}
+
 // GrantTenantUser maps a verified email to a tenant+role, creating the
 // tenant_users row and seeding membership tuples (+ admin when role==admin,
 // + owner when role==owner). Admin-gated; the lifecycle seam for user grants
@@ -1201,11 +1217,8 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 			return nil, fmt.Errorf("create tenant_user: %w", err)
 		}
 		s.seedTuple(ctx, authzseed.TenantMember(tenantID, tu.ID.String()))
-		switch role {
-		case models.TenantUserRoleAdmin:
-			s.seedTuple(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String()))
-		case models.TenantUserRoleOwner:
-			s.seedTuple(ctx, authzseed.TenantOwner(tenantID, tu.ID.String()))
+		if tuple, ok := roleElevatedTuple(tenantID, role, tu.ID.String()); ok {
+			s.seedTuple(ctx, tuple)
 		}
 		return tu, nil
 	}
@@ -1228,14 +1241,9 @@ func (s *MemoryService) GrantTenantUser(ctx context.Context, email string, tenan
 		if err := s.authz.Write(ctx, authzseed.TenantMember(tenantID, tu.ID.String())); err != nil {
 			return fmt.Errorf("seed tenant member tuple: %w", err)
 		}
-		switch role {
-		case models.TenantUserRoleAdmin:
-			if err := s.authz.Write(ctx, authzseed.TenantAdmin(tenantID, tu.ID.String())); err != nil {
-				return fmt.Errorf("seed tenant admin tuple: %w", err)
-			}
-		case models.TenantUserRoleOwner:
-			if err := s.authz.Write(ctx, authzseed.TenantOwner(tenantID, tu.ID.String())); err != nil {
-				return fmt.Errorf("seed tenant owner tuple: %w", err)
+		if tuple, ok := roleElevatedTuple(tenantID, role, tu.ID.String()); ok {
+			if err := s.authz.Write(ctx, tuple); err != nil {
+				return fmt.Errorf("seed tenant %s tuple: %w", role, err)
 			}
 		}
 		return nil
@@ -1283,18 +1291,17 @@ func (s *MemoryService) UpdateTenantUserRole(ctx context.Context, email, role st
 	if err := s.db.WithContext(ctx).Model(&tu).Update("role", role).Error; err != nil {
 		return nil, fmt.Errorf("update tenant_user role: %w", err)
 	}
-	adminTuple := authzseed.TenantAdmin(tu.TenantID, tu.ID.String())
-	ownerTuple := authzseed.TenantOwner(tu.TenantID, tu.ID.String())
-	switch role {
-	case models.TenantUserRoleAdmin:
-		s.seedTuple(ctx, adminTuple)
-		s.unseedTuple(ctx, ownerTuple)
-	case models.TenantUserRoleOwner:
-		s.seedTuple(ctx, ownerTuple)
-		s.unseedTuple(ctx, adminTuple)
-	default: // member: no elevated role tuple
-		s.unseedTuple(ctx, adminTuple)
-		s.unseedTuple(ctx, ownerTuple)
+	// Seed the elevated tuple for the new role (if any) and remove every other
+	// elevated tuple, so the stored tuples always match exactly one role (the
+	// member tuple is untouched — every role is a member).
+	if tuple, ok := roleElevatedTuple(tu.TenantID, role, tu.ID.String()); ok {
+		s.seedTuple(ctx, tuple)
+	}
+	if role != models.TenantUserRoleAdmin {
+		s.unseedTuple(ctx, authzseed.TenantAdmin(tu.TenantID, tu.ID.String()))
+	}
+	if role != models.TenantUserRoleOwner {
+		s.unseedTuple(ctx, authzseed.TenantOwner(tu.TenantID, tu.ID.String()))
 	}
 	tu.Role = role
 	return &tu, nil
@@ -1314,11 +1321,8 @@ func (s *MemoryService) RevokeTenantUser(ctx context.Context, email string) erro
 		return fmt.Errorf("delete tenant_user: %w", err)
 	}
 	s.unseedTuple(ctx, authzseed.TenantMember(tu.TenantID, tu.ID.String()))
-	switch tu.Role {
-	case models.TenantUserRoleAdmin:
-		s.unseedTuple(ctx, authzseed.TenantAdmin(tu.TenantID, tu.ID.String()))
-	case models.TenantUserRoleOwner:
-		s.unseedTuple(ctx, authzseed.TenantOwner(tu.TenantID, tu.ID.String()))
+	if tuple, ok := roleElevatedTuple(tu.TenantID, tu.Role, tu.ID.String()); ok {
+		s.unseedTuple(ctx, tuple)
 	}
 	return nil
 }

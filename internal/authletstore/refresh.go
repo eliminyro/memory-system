@@ -2,7 +2,6 @@ package authletstore
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/eliminyro/authlet/pkg/storage"
@@ -25,10 +24,7 @@ func (s *refreshStore) Save(ctx context.Context, rt storage.RefreshToken) error 
 		ExpiresAt:  rt.ExpiresAt,
 	}
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-		if isUniqueViolation(err) {
-			return storage.ErrAlreadyExists
-		}
-		return err
+		return mapCreateErr(err)
 	}
 	return nil
 }
@@ -38,10 +34,7 @@ func (s *refreshStore) Save(ctx context.Context, rt storage.RefreshToken) error 
 func (s *refreshStore) Get(ctx context.Context, hash string) (*storage.RefreshToken, error) {
 	var row OAuthRefreshToken
 	if err := s.db.WithContext(ctx).First(&row, "token_hash = ?", hash).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, storage.ErrNotFound
-		}
-		return nil, err
+		return nil, mapGetErr(err)
 	}
 	revoked, err := s.IsFamilyRevoked(ctx, row.FamilyID)
 	if err != nil {
@@ -80,10 +73,7 @@ func (s *refreshStore) MarkUsed(ctx context.Context, hash string, replacedBy str
 			// caller triggers the rotation-reuse revoke path on the latter.
 			var row OAuthRefreshToken
 			if err := tx.First(&row, "token_hash = ?", hash).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return storage.ErrNotFound
-				}
-				return err
+				return mapGetErr(err)
 			}
 			return storage.ErrAlreadyConsumed
 		}

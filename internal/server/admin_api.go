@@ -321,13 +321,13 @@ func enqueueImportShared(w http.ResponseWriter, r *http.Request, jobs importJobS
 	}
 
 	tenantID := auth.TenantIDFromContext(r.Context())
-	if v := strings.TrimSpace(r.FormValue("tenant_id")); v != "" {
-		parsed, perr := uuid.Parse(v)
-		if perr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
-			return
-		}
-		tenantID = parsed
+	override, err := parseOptionalTenantID(strings.TrimSpace(r.FormValue("tenant_id")))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	if override != nil {
+		tenantID = *override
 	}
 	if tenantID == uuid.Nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no target tenant: pass tenant_id or authenticate with a tenant-scoped key"})
@@ -390,10 +390,16 @@ func importStatusShared(w http.ResponseWriter, r *http.Request, jobs importJobSt
 		return
 	}
 	tenantID := auth.TenantIDFromContext(r.Context())
-	if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
-		if parsed, perr := uuid.Parse(v); perr == nil {
-			tenantID = parsed
-		}
+	// A malformed tenant_id is a 400, never a silent fallback to the context
+	// tenant: a typo'd override in a status poll must not quietly target the
+	// wrong scope and surface as a misleading 404 (B15).
+	override, err := parseOptionalTenantID(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	if override != nil {
+		tenantID = *override
 	}
 	if !authorize(r.Context(), tenantID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to view this tenant's import jobs"})

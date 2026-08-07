@@ -10,6 +10,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
@@ -220,14 +221,7 @@ func (s *Server) CreateAPIKey(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return handleAdminError(err)
 	}
-	return jsonResult(map[string]any{
-		"id":         key.ID,
-		"tenant_id":  key.TenantID,
-		"label":      key.Label,
-		"prefix":     key.Prefix,
-		"key":        plaintext,
-		"expires_at": key.ExpiresAt,
-	}), nil, nil
+	return keyIssueResult(plaintext, key), nil, nil
 }
 
 func (s *Server) ListAPIKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, input ListAPIKeysInput) (*mcpsdk.CallToolResult, any, error) {
@@ -269,13 +263,7 @@ func (s *Server) RotateAPIKey(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return handleAdminError(err)
 	}
-	return jsonResult(map[string]any{
-		"id":        key.ID,
-		"tenant_id": key.TenantID,
-		"label":     key.Label,
-		"prefix":    key.Prefix,
-		"key":       plaintext,
-	}), nil, nil
+	return keyIssueResult(plaintext, key), nil, nil
 }
 
 func (s *Server) GrantUser(ctx context.Context, _ *mcpsdk.CallToolRequest, input GrantUserInput) (*mcpsdk.CallToolResult, any, error) {
@@ -326,10 +314,35 @@ func (s *Server) RevokeUser(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 	return jsonResult(map[string]string{"status": "revoked"}), nil, nil
 }
 
-// handleAdminError maps service errors to MCP results.
-func handleAdminError(err error) (*mcpsdk.CallToolResult, any, error) {
+// toolErr maps a service error to an MCP tool result: the safe sentinels
+// (ErrNotFound / ErrInvalidInput) become a clean errorResult (isError tool
+// result, mirroring the HTTP surface's writeErr 404/400), while anything else
+// is wrapped as a Go error under prefix so the SDK reports a JSON-RPC internal
+// error and the raw message never reaches the client.
+func toolErr(prefix string, err error) (*mcpsdk.CallToolResult, any, error) {
 	if errors.Is(err, apperr.ErrInvalidInput) || errors.Is(err, apperr.ErrNotFound) {
 		return errorResult(err.Error()), nil, nil
 	}
-	return nil, nil, fmt.Errorf("admin operation: %w", err)
+	return nil, nil, fmt.Errorf("%s: %w", prefix, err)
+}
+
+// handleAdminError is the admin/ACL handlers' error mapper: toolErr under the
+// shared "admin operation" prefix.
+func handleAdminError(err error) (*mcpsdk.CallToolResult, any, error) {
+	return toolErr("admin operation", err)
+}
+
+// keyIssueResult is the one-time key-issue MCP payload shared by CreateAPIKey
+// and RotateAPIKey: plaintext (shown once) plus non-secret metadata, including
+// expires_at. Single projection so the two handlers can't drift (R19). Mirrors
+// the HTTP keyIssueResponse shape.
+func keyIssueResult(plaintext string, key *models.APIKey) *mcpsdk.CallToolResult {
+	return jsonResult(map[string]any{
+		"id":         key.ID,
+		"tenant_id":  key.TenantID,
+		"label":      key.Label,
+		"prefix":     key.Prefix,
+		"key":        plaintext,
+		"expires_at": key.ExpiresAt,
+	})
 }

@@ -163,11 +163,19 @@ func writeErr(w http.ResponseWriter, err error) {
 // read it); a malformed UUID ⇒ error, so the handler returns 400 rather than
 // silently falling back to the aggregate.
 func tenantFilter(r *http.Request) (*uuid.UUID, error) {
-	v := r.URL.Query().Get("tenant_id")
-	if v == "" {
+	return parseOptionalTenantID(r.URL.Query().Get("tenant_id"))
+}
+
+// parseOptionalTenantID parses an optional tenant_id override shared by every
+// server site that accepts one (read filter, createDocument body, import
+// enqueue/status): empty ⇒ (nil, nil) — no override, fall back to the caller's
+// context tenant; a valid UUID ⇒ (&id, nil); a malformed value ⇒ (nil, err) so
+// the handler returns 400 rather than silently targeting the wrong scope (B15).
+func parseOptionalTenantID(raw string) (*uuid.UUID, error) {
+	if raw == "" {
 		return nil, nil
 	}
-	id, err := uuid.Parse(v)
+	id, err := uuid.Parse(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -383,13 +391,13 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	tenantID := auth.TenantIDFromContext(ctx)
-	if body.TenantID != "" {
-		parsed, err := uuid.Parse(body.TenantID)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
-			return
-		}
-		tenantID = parsed
+	override, err := parseOptionalTenantID(body.TenantID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant_id"})
+		return
+	}
+	if override != nil {
+		tenantID = *override
 	}
 	if !h.canImportInto(ctx, tenantID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not authorized to write to this tenant"})
