@@ -105,6 +105,12 @@ func (s *refreshStore) IsFamilyRevoked(ctx context.Context, familyID string) (bo
 
 // DeleteExpired removes refresh tokens with expires_at before the given instant; returns the count deleted.
 func (s *refreshStore) DeleteExpired(ctx context.Context, before time.Time) (int, error) {
-	res := s.db.WithContext(ctx).Where("expires_at < ?", before).Delete(&OAuthRefreshToken{})
+	// Unscoped forces a physical DELETE. OAuthRefreshToken has a gorm.DeletedAt
+	// (RevokedAt) field, so a plain Delete would only SOFT-delete (set revoked_at)
+	// and then GORM's implicit `revoked_at IS NULL` filter would hide the row from
+	// every future sweep — so expired tokens accumulated forever (B5). Revocation
+	// is tracked out-of-band via oauth_revoked_families, so nothing relies on the
+	// soft-delete tombstone here; the physical purge also reaps any prior backlog.
+	res := s.db.WithContext(ctx).Unscoped().Where("expires_at < ?", before).Delete(&OAuthRefreshToken{})
 	return int(res.RowsAffected), res.Error
 }

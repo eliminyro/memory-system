@@ -99,7 +99,8 @@ func TestRefreshStore_IsFamilyRevoked(t *testing.T) {
 }
 
 func TestRefreshStore_DeleteExpired(t *testing.T) {
-	s := New(openTestDB(t))
+	db := openTestDB(t)
+	s := New(db)
 	ctx := context.Background()
 
 	old := time.Now().Add(-2 * time.Hour)
@@ -120,5 +121,17 @@ func TestRefreshStore_DeleteExpired(t *testing.T) {
 	}
 	if _, err := s.RefreshTokens().Get(ctx, "old"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("expected old gone, got %v", err)
+	}
+
+	// B5 regression: the expired row must be PHYSICALLY deleted, not merely
+	// soft-deleted (revoked_at set). Unscoped bypasses the gorm.DeletedAt filter;
+	// the buggy soft-delete would leave the row present here (count 1).
+	var remaining int64
+	if err := db.Unscoped().Model(&OAuthRefreshToken{}).
+		Where("token_hash = ?", "old").Count(&remaining).Error; err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expired token was soft-deleted, not physically removed (found %d rows); DeleteExpired must Unscoped-delete", remaining)
 	}
 }
