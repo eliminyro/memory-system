@@ -302,6 +302,32 @@ function autoGrow(ta) {
 }
 
 // ── Copy affordances ──────────────────────────────────────────────────────────
+
+// flashCopy wires a copy-to-clipboard click on `btn`. getText() supplies the
+// text (return null to abort silently — e.g. a missing source node or no
+// secret). The label — a child .idtext if present, else the button itself —
+// flashes `done` and toggles `addClass`, reverting to its original text after
+// `ms`. With `onError`, a clipboard failure calls it and skips the flash;
+// without one, failure is swallowed and the flash still runs (the copy-id /
+// copy-code affordances' existing behavior). (R14)
+function flashCopy(btn, getText, opts = {}) {
+  const labelEl = btn.querySelector(".idtext") || btn;
+  const { done = "copied ✓", ms = 1200, addClass = "copied", onError } = opts;
+  const revert = opts.revert != null ? opts.revert : labelEl.textContent;
+  btn.addEventListener("click", async () => {
+    const text = getText();
+    if (text == null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      if (onError) { onError(err); return; }
+    }
+    labelEl.textContent = done;
+    if (addClass) btn.classList.add(addClass);
+    setTimeout(() => { labelEl.textContent = revert; if (addClass) btn.classList.remove(addClass); }, ms);
+  });
+}
+
 function shortId(s) {
   s = String(s || "");
   return s.length > 16 ? s.slice(0, 8) + "…" + s.slice(-4) : s;
@@ -313,25 +339,31 @@ function copyIdBtn(full, label, title) {
   const btn = el("button", { className: "copy-id", type: "button", title: title || "Copy" });
   btn.dataset.full = full;
   btn.append(txt, icon(ICON_COPY));
-  const orig = txt.textContent;
-  btn.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(btn.dataset.full); } catch (e) { /* clipboard blocked */ }
-    txt.textContent = "copied ✓"; btn.classList.add("copied");
-    setTimeout(() => { txt.textContent = orig; btn.classList.remove("copied"); }, 1200);
-  });
+  flashCopy(btn, () => btn.dataset.full);
   return btn;
 }
 // copyCodeBtn copies the text of the sibling <pre> in its .codewrap parent.
 function copyCodeBtn() {
   const btn = el("button", { className: "copy-code", type: "button", textContent: "copy" });
-  btn.addEventListener("click", async () => {
-    const pre = btn.parentElement.querySelector("pre");
-    if (!pre) return;
-    try { await navigator.clipboard.writeText(pre.innerText); } catch (e) { /* clipboard blocked */ }
-    btn.textContent = "copied ✓"; btn.classList.add("copied");
-    setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("copied"); }, 1200);
-  });
+  flashCopy(btn, () => { const pre = btn.parentElement.querySelector("pre"); return pre ? pre.innerText : null; });
   return btn;
+}
+
+// wireDestructiveAction wires a confirm → DELETE → reload flow on `btn`: confirm
+// `confirm`, disable the button, run `request` ({path, opts} for apiFetch), then
+// await onDone(); on failure re-enable the button and alert `errorPrefix`. (R15)
+function wireDestructiveAction(btn, { confirm: msg, request, onDone, errorPrefix = "Action failed" }) {
+  btn.addEventListener("click", async () => {
+    if (!confirm(msg)) return;
+    btn.disabled = true;
+    try {
+      await apiFetch(request.path, request.opts);
+      await onDone();
+    } catch (err) {
+      btn.disabled = false;
+      alert(errorPrefix + ": " + err.message);
+    }
+  });
 }
 
 // gDot is the small status glow-dot inside a status .pill; its color is a token
@@ -350,9 +382,11 @@ const navStack = [];
 function goBack() {
   (navStack.pop() || renderBrowse)();
 }
-function backBtn() {
-  const b = el("button", { textContent: "←", className: "back-btn", title: "Back" });
-  b.addEventListener("click", goBack);
+// backButton returns a ← back control with the given label and click handler.
+// Used by every drill-in view's header (R16).
+function backButton(label, onClick) {
+  const b = el("button", { className: "back", type: "button", textContent: label });
+  b.addEventListener("click", onClick);
   return b;
 }
 
@@ -538,13 +572,13 @@ function sectionEl(doc, s) {
 }
 
 async function showDocument(id) {
+  const seq = _renderSeq;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const doc = await apiFetch(`/documents/${id}`);
+  if (seq !== _renderSeq) return; // discard: navigated away during the fetch (B7)
   view.replaceChildren();
 
-  const back = el("button", { className: "back", type: "button", textContent: "← Memories" });
-  back.addEventListener("click", goBack);
-  view.append(back);
+  view.append(backButton("← Memories", goBack));
 
   // path line (category/subcategory · slug)
   const path = el("div", { className: "mem-path" });
@@ -641,12 +675,14 @@ function renderSearchResults(results) {
 // ── Browse (index) view ───────────────────────────────────────────────────────
 
 async function renderBrowse() {
+  const seq = _renderSeq;
   navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   // A freshly-bootstrapped tenant with zero documents can yield JSON null here
   // (and older servers still do); coerce to [] so we never iterate a non-array.
   const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
   const entries = (await apiFetch(`/index?depth=summary${tf}`)) || [];
+  if (seq !== _renderSeq) return; // discard stale render (B7)
   view.replaceChildren();
   view.append(...memHead());
 
@@ -676,16 +712,16 @@ async function renderBrowse() {
 }
 
 async function renderCategoryDocs(category, subcategory) {
+  const seq = _renderSeq;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   const params = new URLSearchParams({ category });
   if (subcategory) params.set("subcategory", subcategory);
   if (memFilter) params.set("tenant_id", memFilter.id);
   const docs = await apiFetch(`/documents?${params}`);
+  if (seq !== _renderSeq) return; // discard stale render (B7)
   view.replaceChildren();
 
-  const back = el("button", { className: "back", type: "button", textContent: "← Memories" });
-  back.addEventListener("click", goBack);
-  view.append(back);
+  view.append(backButton("← Memories", goBack));
   view.append(el("div", { className: "view-head" }, el("h1", { textContent: subcategory ? `${category} / ${subcategory}` : category })));
 
   if (!docs.length) {
@@ -714,15 +750,23 @@ async function renderCategoryDocs(category, subcategory) {
 // ── Search wiring ─────────────────────────────────────────────────────────────
 
 let _searchTimer = null;
+// _renderSeq is a monotonic render token bumped by route() on every navigation.
+// Async renderers capture it before their first await and bail before any
+// post-await write to the shared #view, so a fetch that resolves after the user
+// has navigated away can't clobber the current view (B7).
+let _renderSeq = 0;
 
 async function runSearch(q) {
+  const seq = _renderSeq;
   navStack.length = 0; // root view — clear history
   view.replaceChildren(el("p", { className: "state-msg", textContent: "searching…" }));
   try {
     const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
     const results = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20${tf}`);
+    if (seq !== _renderSeq) return; // discard stale render (B7)
     renderSearchResults(results);
   } catch (err) {
+    if (seq !== _renderSeq) return; // discard stale render (B7)
     view.replaceChildren(el("p", { className: "state-msg state-err", textContent: `search failed: ${err.message}` }));
   }
 }
@@ -755,15 +799,6 @@ function tenantColor(id) {
   const s = String(id || "");
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return `hsl(${h % 360} 60% 42%)`;
-}
-
-// tenantBadge is a small pill showing a result's owning tenant, colored by id.
-function tenantBadge(id, name) {
-  const b = el("span", { className: "tenant-badge", textContent: name || id || "?" });
-  const c = tenantColor(id);
-  b.style.color = c;
-  b.style.borderColor = c;
-  return b;
 }
 
 // memCard builds a .mem-card. The owning tenant tints the left spine via the
@@ -1007,6 +1042,8 @@ async function checkWritable() {
 // source of truth for view switching — registered once on hashchange (see init),
 // so every tab and back control just sets the hash.
 function route() {
+  _renderSeq++;               // invalidate any in-flight renderer from the prior view (B7)
+  clearTimeout(_searchTimer); // a queued debounced search must not fire against the new view (B7)
   const h = location.hash;
   if (h === "#admin" || h === "#acl" || h === "#import") { location.hash = "tenants"; return; } // redirect superseded routes
   renderTabBar();
@@ -1093,9 +1130,7 @@ function renderConnect() {
   navStack.length = 0; // root-ish view — clear history
   view.replaceChildren();
 
-  const back = el("button", { className: "back", type: "button", textContent: "← Memories" });
-  back.addEventListener("click", () => { location.hash = ""; });
-  view.append(back);
+  view.append(backButton("← Memories", () => { location.hash = ""; }));
   view.append(el("div", { className: "view-head" }, el("h1", { textContent: "Connect a client" })));
   view.append(el("p", { className: "lede", textContent: "Point any MCP client at this server. Use OAuth for interactive work — it opens a browser once and needs no secret. Use an API key for headless agents and CI." }));
 
@@ -1155,12 +1190,14 @@ let tenantsType = "shared"; // active sub-tab; Shared is the default
 const tenantCache = {}; // id → {id,name,type,relation}, populated as lists load
 
 async function renderTenants() {
+  const seq = _renderSeq;
   navStack.length = 0;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   let rows;
   try {
     rows = (await apiFetch(`/tenants?type=${encodeURIComponent(tenantsType)}`)) || [];
   } catch (err) { showError(err); return; }
+  if (seq !== _renderSeq) return; // discard stale render (B7)
   for (const t of rows) tenantCache[t.id] = t;
   view.replaceChildren();
 
@@ -1301,19 +1338,19 @@ async function lookupTenant(id) {
 // (keys are refused for shared tenants; personal tenants have a single owner and
 // no members). Both get a "view this tenant's memories" link. No document browser.
 async function renderTenantPanel(id) {
+  const seq = _renderSeq;
   navStack.length = 0;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
   let t;
   try { t = await lookupTenant(id); } catch (err) { showError(err); return; }
+  if (seq !== _renderSeq) return; // discard stale render (B7)
   if (!t) {
     view.replaceChildren(el("p", { className: "state-msg state-err", textContent: "Tenant not found or not manageable." }));
     return;
   }
   view.replaceChildren();
 
-  const back = el("button", { className: "back", type: "button", textContent: "← Tenants" });
-  back.addEventListener("click", () => { location.hash = "tenants"; });
-  view.append(back);
+  view.append(backButton("← Tenants", () => { location.hash = "tenants"; }));
 
   const panel = el("div", { className: "panel" });
 
@@ -1348,6 +1385,7 @@ async function renderTenantPanel(id) {
     panel.append(importSection(id));
   }
 
+  if (seq !== _renderSeq) return; // discard: navigated away during the keys fetch (B7)
   view.append(panel);
   initRockers(view);          // wire settings + addform rockers in this panel
   placeThumbsIn(view, false); // position the visible ones
@@ -1435,20 +1473,14 @@ function memberRow(tenantID, g, onRevoked) {
     el("small", { textContent: email }));
   const roleTag = el("span", { className: "role-tag" + (g.relation === "manager" ? " mgr" : ""), textContent: g.relation || "" });
   const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Remove" });
-  revoke.addEventListener("click", async () => {
-    if (!confirm(`Revoke ${g.relation} for ${email}?`)) return;
-    revoke.disabled = true;
-    try {
-      await apiFetch(`/acl/tenants/${tenantID}/grants`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: g.email, relation: g.relation }),
-      });
-      await onRevoked();
-    } catch (err) {
-      revoke.disabled = false;
-      alert("Revoke failed: " + err.message);
-    }
+  wireDestructiveAction(revoke, {
+    confirm: `Revoke ${g.relation} for ${email}?`,
+    request: {
+      path: `/acl/tenants/${tenantID}/grants`,
+      opts: { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: g.email, relation: g.relation }) },
+    },
+    onDone: onRevoked,
+    errorPrefix: "Revoke failed",
   });
   return el("div", { className: "member-row" }, avatar, who, roleTag, el("div", { className: "row-actions" }, revoke));
 }
@@ -1569,6 +1601,10 @@ function renderImportProgress(container, job) {
 // this one).
 function pollImportJob(container, id, tenantID, onDone) {
   const timer = setInterval(async () => {
+    // Self-cancel once our target node is detached (route() replaced the panel):
+    // stops an orphaned interval writing to a dead node, and a duplicate interval
+    // spawning on return. isConnected is false once replaceChildren detached it. (R12)
+    if (!container.isConnected) { clearInterval(timer); onDone(); return; }
     let job;
     try {
       const q = tenantID ? "?tenant_id=" + encodeURIComponent(tenantID) : "";
@@ -1576,9 +1612,10 @@ function pollImportJob(container, id, tenantID, onDone) {
     } catch (err) {
       clearInterval(timer);
       onDone();
-      container.append(el("p", { className: "state-msg state-err", textContent: "Status check failed: " + err.message }));
+      if (container.isConnected) container.append(el("p", { className: "state-msg state-err", textContent: "Status check failed: " + err.message }));
       return;
     }
+    if (!container.isConnected) { clearInterval(timer); onDone(); return; } // detached during the await
     renderImportProgress(container, job);
     if (job.status === "succeeded" || job.status === "failed") {
       clearInterval(timer);
@@ -1592,9 +1629,10 @@ function pollImportJob(container, id, tenantID, onDone) {
 
 // tenantSettingsSection renders the enforcement toggles as segmented rockers:
 // the self-service lock (its own lock-glyph row) plus staleness / duplicate-
-// guard / cleanup. NOTE: these are display + client-side UX only — the UI API
-// exposes no persist endpoint for tenant settings (they are administered via the
-// MCP admin tools), so flipping a rocker does not save server-side. Returns a
+// guard / cleanup. These persist on toggle: the three enforcement toggles
+// (staleness_mode / duplicate_guard / cleanup_scan_enabled) via
+// PATCH /tenants/{id}/settings (manager-level, honoring the self-service lock),
+// and the self-service lock via PATCH /admin/tenants/{id} (admin-only). Returns a
 // fragment of .section blocks; the caller's initRockers wires the thumbs.
 function tenantSettingsSection(t) {
   const shared = t.type === "shared";
@@ -1793,27 +1831,16 @@ function grantRow(docID, doc, g, onRevoked) {
   if (prefix) chain.append(document.createTextNode(prefix + " · "));
   chain.append(el("b", { textContent: doc.slug || "" }), document.createTextNode(" · "), el("span", { className: "gacc", textContent: g.relation === "editor" ? "rw" : "r" }));
   const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Revoke" });
-  revoke.addEventListener("click", async () => {
-    if (!confirm(`Revoke ${g.relation} for ${g.email}?`)) return;
-    revoke.disabled = true;
-    try {
-      await apiFetch(`/acl/documents/${docID}/grants`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: g.email, relation: g.relation }),
-      });
-      await onRevoked();
-    } catch (err) {
-      revoke.disabled = false;
-      alert("Revoke failed: " + err.message);
-    }
+  wireDestructiveAction(revoke, {
+    confirm: `Revoke ${g.relation} for ${g.email}?`,
+    request: {
+      path: `/acl/documents/${docID}/grants`,
+      opts: { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: g.email, relation: g.relation }) },
+    },
+    onDone: onRevoked,
+    errorPrefix: "Revoke failed",
   });
   return el("div", { className: "grant-row" }, el("span", { className: "subj", textContent: g.email || "" }), chain, el("div", { className: "row-actions" }, revoke));
-}
-
-// wrapScroll — horizontal-scroll container so wide tables never scroll the page.
-function wrapScroll(node) {
-  return el("div", { className: "admin-table-wrap" }, node);
 }
 
 function keysSection(t, keys, refresh) {
@@ -1859,13 +1886,7 @@ function keysSection(t, keys, refresh) {
   if (!keys.length) list.append(el("p", { className: "meta", textContent: "no keys" }));
   else for (const k of keys) list.append(keyRow(t, k, refresh));
 
-  copyBtn.addEventListener("click", async () => {
-    if (!secret) return;
-    try { await navigator.clipboard.writeText(secret); } catch (e) { /* clipboard blocked */ }
-    const tx = copyBtn.querySelector(".idtext");
-    tx.textContent = "copied ✓"; copyBtn.classList.add("copied");
-    setTimeout(() => { tx.textContent = "copy"; copyBtn.classList.remove("copied"); }, 1200);
-  });
+  flashCopy(copyBtn, () => secret || null);
   kcCreate.addEventListener("click", async () => {
     const label = labelI.value.trim();
     if (!label) { alert("Label is required."); return; }
@@ -1932,16 +1953,11 @@ function keyRow(t, k, refresh) {
     }
   });
   const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Revoke" });
-  revoke.addEventListener("click", async () => {
-    if (!confirm(`Revoke key "${k.label || ""}" (${k.prefix || ""})?`)) return;
-    revoke.disabled = true;
-    try {
-      await apiFetch(`/admin/keys/${k.id}`, { method: "DELETE" });
-      refresh();
-    } catch (err) {
-      revoke.disabled = false;
-      alert("Revoke key failed: " + err.message);
-    }
+  wireDestructiveAction(revoke, {
+    confirm: `Revoke key "${k.label || ""}" (${k.prefix || ""})?`,
+    request: { path: `/admin/keys/${k.id}`, opts: { method: "DELETE" } },
+    onDone: refresh,
+    errorPrefix: "Revoke key failed",
   });
   row.append(el("div", { className: "row-actions" }, rotate, revoke));
   return row;
@@ -1969,14 +1985,12 @@ function showKeyModal(result) {
 
   const row = el("div", { className: "modal-actions" });
   const copyBtn = el("button", { textContent: "Copy", className: "sec-btn sec-btn-primary", type: "button" });
-  copyBtn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(key);
-      copyBtn.textContent = "Copied!";
-      setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
-    } catch (err) {
-      alert("Copy failed — select the key above and copy it manually.");
-    }
+  flashCopy(copyBtn, () => key, {
+    done: "Copied!",
+    revert: "Copy",
+    ms: 1500,
+    addClass: null,
+    onError: () => alert("Copy failed — select the key above and copy it manually."),
   });
   const closeBtn = el("button", { textContent: "Done", className: "sec-btn", type: "button" });
   closeBtn.addEventListener("click", () => overlay.remove());
