@@ -437,6 +437,15 @@ func (s *MemoryService) tenantModeAndLabel(ctx context.Context, id uuid.UUID) (s
 	return mode, t.Name, t.Type
 }
 
+// Search input bounds shared by every read surface (MCP search_memory and the
+// HTTP GET /api/search handler) so the clamp/reject limits live in one place.
+const (
+	// MaxSearchLimit caps the number of search results a caller may request.
+	MaxSearchLimit = 100
+	// MaxQueryLen caps the length of a search query string.
+	MaxQueryLen = 10_000
+)
+
 // Search performs hybrid semantic + keyword search, applying staleness filter.
 // When forceRead is true, Reason is required and the override is audited.
 func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, error) {

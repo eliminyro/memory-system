@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,19 +15,38 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
+// resultText extracts the first TextContent string from a tool result, failing
+// the test if the shape isn't the expected single TextContent.
+func resultText(t *testing.T, res *mcpsdk.CallToolResult) string {
+	t.Helper()
+	if res == nil || len(res.Content) == 0 {
+		t.Fatalf("res = %+v, want a tool result with content", res)
+	}
+	tc, ok := res.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content type %T", res.Content[0])
+	}
+	return tc.Text
+}
+
 // TestToolErr proves the shared MCP error mapper every memory-tool and
-// admin/ACL handler now routes through (B16/B18, R10/R17): the safe sentinels
-// (ErrNotFound, ErrInvalidInput) become a clean errorResult (isError tool
-// result, no Go error — mirroring the HTTP surface's 404/400), while anything
-// else is wrapped as a Go error under the parameterized prefix.
+// admin/ACL handler routes through (B16/B18, R10/R17, RG1): the safe sentinels
+// (ErrNotFound, ErrInvalidInput) become a clean errorResult carrying their
+// message (isError tool result, no Go error — mirroring the HTTP surface's
+// 404/400), while anything else is logged server-side and returned as a generic
+// "<prefix>: internal error" isError result — never a Go error carrying the raw
+// internal message, which the go-sdk would marshal onto the wire and leak.
 func TestToolErr(t *testing.T) {
-	t.Run("ErrInvalidInput -> errorResult, no Go error", func(t *testing.T) {
-		res, _, err := toolErr("store", fmt.Errorf("bad path: %w", apperr.ErrInvalidInput))
+	t.Run("ErrInvalidInput -> errorResult carrying the sentinel message, no Go error", func(t *testing.T) {
+		res, _, err := toolErr("x", fmt.Errorf("%w: bad", apperr.ErrInvalidInput))
 		if err != nil {
 			t.Fatalf("Go error = %v, want nil (ErrInvalidInput must be a tool result)", err)
 		}
 		if res == nil || !res.IsError {
 			t.Fatalf("res = %+v, want an isError tool result", res)
+		}
+		if got := resultText(t, res); !strings.Contains(got, "bad") {
+			t.Fatalf("text = %q, want it to carry the sentinel message %q", got, "bad")
 		}
 	})
 
@@ -40,20 +60,21 @@ func TestToolErr(t *testing.T) {
 		}
 	})
 
-	t.Run("generic error -> wrapped Go error, no tool result", func(t *testing.T) {
-		sentinel := errors.New("boom")
-		res, _, err := toolErr("lint memory", sentinel)
-		if res != nil {
-			t.Fatalf("res = %+v, want nil for a generic error", res)
+	t.Run("generic error -> generic errorResult, no leak, no Go error", func(t *testing.T) {
+		res, _, err := toolErr("search", errors.New("internal boom: host=db:5432"))
+		if err != nil {
+			t.Fatalf("Go error = %v, want nil (a generic error must not be returned to the SDK)", err)
 		}
-		if err == nil {
-			t.Fatal("Go error = nil, want a wrapped internal error")
+		if res == nil || !res.IsError {
+			t.Fatalf("res = %+v, want an isError tool result", res)
 		}
-		if !errors.Is(err, sentinel) {
-			t.Fatalf("err = %v, want it to wrap the underlying error", err)
+		got := resultText(t, res)
+		if got != "search: internal error" {
+			t.Fatalf("text = %q, want %q (generic, prefix parameterized)", got, "search: internal error")
 		}
-		if got := err.Error(); got != "lint memory: boom" {
-			t.Fatalf("err = %q, want %q (prefix parameterized)", got, "lint memory: boom")
+		// The raw internal message must never reach the client.
+		if strings.Contains(got, "boom") || strings.Contains(got, "db:5432") {
+			t.Fatalf("text = %q leaks the raw internal error", got)
 		}
 	})
 }

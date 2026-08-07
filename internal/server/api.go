@@ -213,6 +213,12 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q is required"})
 		return
 	}
+	// Mirror MCP search_memory's input bounds (shared service consts): reject an
+	// over-long query and clamp the limit so an unbounded ?limit can't be abused.
+	if len(query) > service.MaxQueryLen {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q exceeds maximum length"})
+		return
+	}
 	var category, subcategory *string
 	if c := q.Get("category"); c != "" {
 		category = &c
@@ -223,6 +229,9 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 	limit := 10
 	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
 		limit = n
+	}
+	if limit > service.MaxSearchLimit {
+		limit = service.MaxSearchLimit
 	}
 	tenantID, err := tenantFilter(r)
 	if err != nil {

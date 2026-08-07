@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -40,7 +41,10 @@ func (r *APIKeyRepository) ListByTenant(ctx context.Context, tenantID uuid.UUID)
 func (r *APIKeyRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.APIKey, error) {
 	var key models.APIKey
 	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&key).Error; err != nil {
-		return nil, fmt.Errorf("%w: api key %s", apperr.ErrNotFound, id)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: api key %s", apperr.ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("get api key %s: %w", id, err)
 	}
 	return &key, nil
 }
