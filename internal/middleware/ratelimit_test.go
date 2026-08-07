@@ -1,12 +1,9 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/eliminyro/memory-system/internal/auth"
 )
 
 func okHandler() http.Handler {
@@ -17,7 +14,7 @@ func okHandler() http.Handler {
 
 // With burst=2 the third request from the same client is throttled with 429.
 func TestRateLimit_OverLimitReturns429(t *testing.T) {
-	h := RateLimit(1, 2)(okHandler())
+	h := RateLimit(1, 2, 0)(okHandler())
 	call := func() int {
 		req := httptest.NewRequest(http.MethodPost, "/api/documents", nil)
 		req.RemoteAddr = "203.0.113.7:5555"
@@ -45,7 +42,7 @@ func TestRateLimit_OverLimitReturns429(t *testing.T) {
 
 // Distinct clients (different IPs) get independent buckets.
 func TestRateLimit_KeyedPerClient(t *testing.T) {
-	h := RateLimit(1, 1)(okHandler())
+	h := RateLimit(1, 1, 0)(okHandler())
 	hit := func(ip string) int {
 		req := httptest.NewRequest(http.MethodPost, "/api/documents", nil)
 		req.RemoteAddr = ip + ":1000"
@@ -66,31 +63,9 @@ func TestRateLimit_KeyedPerClient(t *testing.T) {
 	}
 }
 
-// Principal key takes precedence over IP: same IP, different subjects -> independent buckets.
-func TestRateLimit_KeyedByPrincipal(t *testing.T) {
-	h := RateLimit(1, 1)(okHandler())
-	hit := func(subjID string) int {
-		req := httptest.NewRequest(http.MethodPost, "/api/documents", nil)
-		req.RemoteAddr = "192.0.2.9:2000" // same IP for both
-		ctx := auth.WithSubject(context.Background(), auth.Subject{Type: auth.SubjectTypeUser, ID: subjID})
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req.WithContext(ctx))
-		return rec.Code
-	}
-	if c := hit("user-a"); c != http.StatusOK {
-		t.Fatalf("user-a first = %d, want 200", c)
-	}
-	if c := hit("user-b"); c != http.StatusOK {
-		t.Fatalf("user-b first (same IP, diff subject) = %d, want 200", c)
-	}
-	if c := hit("user-a"); c != http.StatusTooManyRequests {
-		t.Fatalf("user-a second = %d, want 429", c)
-	}
-}
-
 // Health and readiness probes are never throttled.
 func TestRateLimit_ExemptsProbes(t *testing.T) {
-	h := RateLimit(1, 1)(okHandler())
+	h := RateLimit(1, 1, 0)(okHandler())
 	for _, path := range []string{"/~/health", "/~/ready"} {
 		for i := 0; i < 5; i++ {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -104,19 +79,57 @@ func TestRateLimit_ExemptsProbes(t *testing.T) {
 	}
 }
 
-func TestClientIP_ForwardedFor(t *testing.T) {
+// Depth 0 (default) ignores X-Forwarded-For entirely and keys on RemoteAddr's
+// host — a spoofed XFF can't move the key.
+func TestClientIP_Depth0IgnoresXFF(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "10.0.0.1:1234"
-	req.Header.Set("X-Forwarded-For", "5.6.7.8, 10.0.0.1")
-	if got := clientIP(req); got != "5.6.7.8" {
-		t.Fatalf("clientIP = %q, want 5.6.7.8", got)
+	req.RemoteAddr = "9.9.9.9:4321"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
+	if got := clientIP(req, 0); got != "9.9.9.9" {
+		t.Fatalf("clientIP(depth 0) = %q, want 9.9.9.9 (XFF ignored)", got)
 	}
 }
 
-func TestClientIP_RemoteAddrFallback(t *testing.T) {
+// Depth 1 keys on the last XFF entry — the IP the single trusted proxy observed.
+func TestClientIP_Depth1UsesLastHop(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "9.9.9.9:4321"
-	if got := clientIP(req); got != "9.9.9.9" {
-		t.Fatalf("clientIP = %q, want 9.9.9.9", got)
+	req.RemoteAddr = "10.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "5.6.7.8, 203.0.113.9")
+	if got := clientIP(req, 1); got != "203.0.113.9" {
+		t.Fatalf("clientIP(depth 1) = %q, want 203.0.113.9", got)
+	}
+}
+
+// A client-spoofed extra leftmost XFF entry does NOT change the depth-1 key:
+// only the rightmost (trusted) hop is read.
+func TestClientIP_Depth1IgnoresSpoofedLeftmost(t *testing.T) {
+	base := httptest.NewRequest(http.MethodGet, "/", nil)
+	base.RemoteAddr = "10.0.0.1:1234"
+	base.Header.Set("X-Forwarded-For", "203.0.113.9")
+	want := clientIP(base, 1)
+
+	spoofed := httptest.NewRequest(http.MethodGet, "/", nil)
+	spoofed.RemoteAddr = "10.0.0.1:1234"
+	spoofed.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
+	if got := clientIP(spoofed, 1); got != want {
+		t.Fatalf("spoofed leftmost changed key: got %q, want %q", got, want)
+	}
+}
+
+// A too-short XFF (fewer entries than the trusted depth) falls back to RemoteAddr
+// rather than trusting a client-supplied value. Covers both the missing-header
+// case at depth 1 and the fewer-than-N-entries case at depth 2.
+func TestClientIP_ShortXFFFallsBack(t *testing.T) {
+	missing := httptest.NewRequest(http.MethodGet, "/", nil)
+	missing.RemoteAddr = "9.9.9.9:4321" // no XFF header at all
+	if got := clientIP(missing, 1); got != "9.9.9.9" {
+		t.Fatalf("clientIP(depth 1, no XFF) = %q, want 9.9.9.9 (fallback)", got)
+	}
+
+	shortHdr := httptest.NewRequest(http.MethodGet, "/", nil)
+	shortHdr.RemoteAddr = "9.9.9.9:4321"
+	shortHdr.Header.Set("X-Forwarded-For", "5.6.7.8") // 1 entry, depth 2 needs 2
+	if got := clientIP(shortHdr, 2); got != "9.9.9.9" {
+		t.Fatalf("clientIP(depth 2, short XFF) = %q, want 9.9.9.9 (fallback)", got)
 	}
 }

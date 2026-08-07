@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -74,8 +73,7 @@ func createTenantWithType(w http.ResponseWriter, r *http.Request, creator tenant
 		Email string `json:"email"`
 		Type  string `json:"type"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	var (

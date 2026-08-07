@@ -156,6 +156,7 @@ Ollama deploy works out of the box.
 | `MAX_REQUEST_BYTES` | `1048576` | Request-body cap; `0` disables. |
 | `RATE_LIMIT_RPS` | `20` | Token-bucket rate over the auth/write surface; `<= 0` disables. |
 | `RATE_LIMIT_BURST` | `40` | Bucket burst; must be `>= 1` when RPS `> 0`. |
+| `RATE_LIMIT_TRUSTED_PROXY_DEPTH` | `0` | Number of trusted reverse-proxy/CDN hops in front for client-IP rate-limit keying. `0` (default) trusts none: `X-Forwarded-For` is ignored and the key is `RemoteAddr` (unspoofable). Behind a proxy/CDN, set it to your trusted-hop count so the client IP is read from the right `X-Forwarded-For` entry; leaving it `0` there makes all traffic share one bucket. |
 | `RETENTION_MULTIPLIER` | `3` | Archive after this × the doc_type staleness threshold; must be `>= 1`. |
 | `RETENTION_DELETE_GRACE_DAYS` | `30` | Hard-delete this many days after archiving; must be `>= 1`. |
 | `CLEANUP_ENABLED` | `true` | Enable the nightly near-duplicate / retention scanner. |

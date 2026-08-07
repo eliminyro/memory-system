@@ -35,10 +35,12 @@ type Deps struct {
 
 	// HTTP hardening. MaxRequestBytes caps every request body (<= 0 disables).
 	// RateLimitRPS <= 0 disables the throttle — the zero value leaves tests and
-	// the API-key-only path unthrottled.
-	MaxRequestBytes int64
-	RateLimitRPS    float64
-	RateLimitBurst  int
+	// the API-key-only path unthrottled. RateLimitTrustedProxyDepth is the count of
+	// trusted reverse-proxy/CDN hops for spoof-safe client-IP keying (0 = trust none).
+	MaxRequestBytes            int64
+	RateLimitRPS               float64
+	RateLimitBurst             int
+	RateLimitTrustedProxyDepth int
 }
 
 // NewHandler returns the full HTTP handler (mux + middleware) for the server.
@@ -111,7 +113,7 @@ func NewHandler(d Deps) http.Handler {
 	handler := middleware.CORS(mux)
 	handler = withGlobalBodyCap(handler, d.MaxRequestBytes)
 	if d.RateLimitRPS > 0 {
-		handler = middleware.RateLimit(d.RateLimitRPS, d.RateLimitBurst)(handler)
+		handler = middleware.RateLimit(d.RateLimitRPS, d.RateLimitBurst, d.RateLimitTrustedProxyDepth)(handler)
 	}
 	handler = middleware.SecurityHeaders(handler)
 	return handler

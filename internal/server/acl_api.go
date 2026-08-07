@@ -83,9 +83,8 @@ func writeACLErr(w http.ResponseWriter, err error) {
 }
 
 func (h *aclAPIHandler) listTenantGrants(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	grants, err := h.memory.ListTenantGrants(r.Context(), id)
@@ -97,9 +96,8 @@ func (h *aclAPIHandler) listTenantGrants(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *aclAPIHandler) grantTenantAccess(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	body, err := decodeGrantBody(r)
@@ -115,9 +113,8 @@ func (h *aclAPIHandler) grantTenantAccess(w http.ResponseWriter, r *http.Request
 }
 
 func (h *aclAPIHandler) revokeTenantAccess(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
 		return
 	}
 	body, err := decodeGrantBody(r)
@@ -133,9 +130,8 @@ func (h *aclAPIHandler) revokeTenantAccess(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *aclAPIHandler) listDocumentGrants(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+	id, ok := pathUUID(w, r, "id", "document")
+	if !ok {
 		return
 	}
 	grants, err := h.memory.ListDocumentGrants(r.Context(), id)
@@ -147,9 +143,8 @@ func (h *aclAPIHandler) listDocumentGrants(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *aclAPIHandler) grantDocumentAccess(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+	id, ok := pathUUID(w, r, "id", "document")
+	if !ok {
 		return
 	}
 	body, err := decodeGrantBody(r)
@@ -165,9 +160,8 @@ func (h *aclAPIHandler) grantDocumentAccess(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *aclAPIHandler) revokeDocumentAccess(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid document id"})
+	id, ok := pathUUID(w, r, "id", "document")
+	if !ok {
 		return
 	}
 	body, err := decodeGrantBody(r)

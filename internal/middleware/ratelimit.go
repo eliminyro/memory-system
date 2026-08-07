@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-
-	"github.com/eliminyro/memory-system/internal/auth"
 )
 
 // maxVisitors bounds the per-key limiter map so a flood of distinct keys
@@ -79,24 +77,29 @@ func (rl *rateLimiter) evictLocked() {
 	}
 }
 
-// rateKey derives the throttle key: authenticated principal when present, else
-// client IP. Unauth surfaces (/oauth/token, DCR) have no principal, so IP is the
-// intended abuse control there.
-func rateKey(r *http.Request) string {
-	if subj, ok := auth.SubjectFromContext(r.Context()); ok && subj.ID != "" {
-		return "sub:" + subj.ID
-	}
-	return "ip:" + clientIP(r)
+// rateKey derives the throttle key from the trusted client IP. RateLimit runs
+// OUTSIDE the mux, before any auth middleware populates the subject, so there is
+// no principal to key on here. Per-principal limiting would require moving
+// RateLimit inside the authenticated sub-stacks — a deliberate follow-up, out of
+// scope.
+func rateKey(r *http.Request, trustedProxyDepth int) string {
+	return "ip:" + clientIP(r, trustedProxyDepth)
 }
 
-// clientIP extracts the caller IP, honouring the first X-Forwarded-For hop
-// (server runs behind an ingress) and falling back to the RemoteAddr host.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+// clientIP derives the caller IP in a spoof-safe, proxy-depth-aware way.
+// trustedProxyDepth 0 (default) ignores X-Forwarded-For entirely and keys on the
+// RemoteAddr host — unspoofable. Depth N>=1 takes the X-Forwarded-For entry N
+// positions from the right (index len-N), i.e. the IP the outermost TRUSTED proxy
+// observed. If the header is missing or has fewer than N entries it falls back to
+// RemoteAddr — a short or absent header is never trusted.
+func clientIP(r *http.Request, trustedProxyDepth int) string {
+	if trustedProxyDepth >= 1 {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if idx := len(parts) - trustedProxyDepth; idx >= 0 {
+				return strings.TrimSpace(parts[idx])
+			}
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -105,11 +108,13 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// RateLimit is a token-bucket throttle keyed by principal (falling back to
-// client IP). rps is the sustained refill rate, burst the bucket size; over-limit
-// requests get 429 + Retry-After. Probes are exempt. Outer abuse control over the
-// auth/write surfaces; reads share the same bucket as defence in depth.
-func RateLimit(rps float64, burst int) func(http.Handler) http.Handler {
+// RateLimit is a token-bucket throttle keyed by the trusted client IP. rps is the
+// sustained refill rate, burst the bucket size; over-limit requests get 429 +
+// Retry-After. Probes are exempt. trustedProxyDepth controls X-Forwarded-For
+// handling (see clientIP): 0 trusts none and keys on RemoteAddr. Outer abuse
+// control over the auth/write surfaces; reads share the same bucket as defence in
+// depth.
+func RateLimit(rps float64, burst, trustedProxyDepth int) func(http.Handler) http.Handler {
 	rl := newRateLimiter(rps, burst)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +122,7 @@ func RateLimit(rps float64, burst int) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !rl.limiterFor(rateKey(r)).Allow() {
+			if !rl.limiterFor(rateKey(r, trustedProxyDepth)).Allow() {
 				w.Header().Set("Retry-After", "1")
 				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
