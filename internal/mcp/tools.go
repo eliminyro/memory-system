@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 )
 
@@ -18,10 +18,7 @@ const (
 	maxContentSize = 10 << 20 // 10 MB
 	maxQueryLen    = 10_000
 	maxSearchLimit = 100
-	maxFieldLen    = 100
 )
-
-var validSlug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 func (s *Server) registerTools(srv *mcpsdk.Server) {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -572,25 +569,11 @@ func (s *Server) LintMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inpu
 
 // --- Helpers ---
 
+// validatePath delegates to the shared models contract so the MCP and HTTP
+// write surfaces enforce identical path rules and per-field length caps (the
+// category cap now matches its varchar(50) column instead of the old 100).
 func validatePath(category, slug string, subcategory *string) error {
-	if len(category) > maxFieldLen || len(slug) > maxFieldLen {
-		return fmt.Errorf("category and slug must be <= %d characters", maxFieldLen)
-	}
-	if !validSlug.MatchString(category) {
-		return fmt.Errorf("invalid category format: must be alphanumeric with .-_")
-	}
-	if !validSlug.MatchString(slug) {
-		return fmt.Errorf("invalid slug format: must be alphanumeric with .-_")
-	}
-	if subcategory != nil {
-		if len(*subcategory) > maxFieldLen {
-			return fmt.Errorf("subcategory must be <= %d characters", maxFieldLen)
-		}
-		if !validSlug.MatchString(*subcategory) {
-			return fmt.Errorf("invalid subcategory format: must be alphanumeric with .-_")
-		}
-	}
-	return nil
+	return models.ValidateDocumentPath(category, slug, subcategory)
 }
 
 func errorResult(msg string) *mcpsdk.CallToolResult {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -191,4 +192,20 @@ func TestCreateDocument_ValidationErrors(t *testing.T) {
 		"category": "learnings", "slug": "", "content": "x",
 	}))
 	require.Equal(t, http.StatusBadRequest, rec2.Code, rec2.Body.String())
+
+	// B8: a non-empty but malformed slug is rejected by the shared path validator
+	// (the HTTP surface previously skipped this, diverging from MCP store_memory).
+	recBad := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(recBad, ctxJSONReq(http.MethodPost, "/documents", adminReqCtx(tenant.ID), map[string]any{
+		"category": "learnings", "slug": "has spaces", "content": "# t\n\n## h\nbody",
+	}))
+	require.Equal(t, http.StatusBadRequest, recBad.Code, recBad.Body.String())
+
+	// B8: an over-long category (> the varchar(50) column) is a clean 400 from the
+	// validator, not a Postgres "value too long" 500 at write time.
+	recLong := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(recLong, ctxJSONReq(http.MethodPost, "/documents", adminReqCtx(tenant.ID), map[string]any{
+		"category": strings.Repeat("a", 51), "slug": "ok", "content": "# t\n\n## h\nbody",
+	}))
+	require.Equal(t, http.StatusBadRequest, recLong.Code, recLong.Body.String())
 }

@@ -373,6 +373,13 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 	if subcategory != nil && strings.TrimSpace(*subcategory) == "" {
 		subcategory = nil
 	}
+	// Enforce the shared path contract MCP store_memory also enforces (B8): the
+	// HTTP surface previously skipped it, letting malformed slugs through and
+	// turning an over-long category into a Postgres 500 instead of a 400.
+	if err := models.ValidateDocumentPath(category, slug, subcategory); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	ctx := r.Context()
 	tenantID := auth.TenantIDFromContext(ctx)

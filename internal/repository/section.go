@@ -131,7 +131,12 @@ func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
 		var score float64
 		switch {
 		case r.HasVec && r.HasLex:
-			score = fuseVecWeight*vec + fuseLexWeight*lex
+			// A lexical co-match is a boost, never a penalty: a row matching BOTH
+			// signals must not score below what its vector match alone would give.
+			// Otherwise a weak normalized lexical rank drags a strong vector match
+			// down (and can push it under scoreFloor, dropping a genuinely relevant
+			// result) — the opposite of "matched both ⇒ more relevant".
+			score = max(vec, fuseVecWeight*vec+fuseLexWeight*lex)
 		case r.HasVec:
 			score = vec
 		default: // lexical-only
