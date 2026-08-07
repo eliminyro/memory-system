@@ -1,7 +1,7 @@
 # Builder runs on the NATIVE build platform ($BUILDPLATFORM) and cross-compiles
 # for the requested target arch — so a multi-arch buildx never emulates the Go
 # compile under QEMU (which is minutes-slow for this dep tree).
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
