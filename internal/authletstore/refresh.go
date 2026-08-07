@@ -112,5 +112,15 @@ func (s *refreshStore) DeleteExpired(ctx context.Context, before time.Time) (int
 	// is tracked out-of-band via oauth_revoked_families, so nothing relies on the
 	// soft-delete tombstone here; the physical purge also reaps any prior backlog.
 	res := s.db.WithContext(ctx).Unscoped().Where("expires_at < ?", before).Delete(&OAuthRefreshToken{})
+
+	// Prune family-revocation tombstones whose tokens are all long expired: a
+	// family revoked >90d ago (well past the 30d refresh-token TTL) can never be
+	// referenced again, so its tombstone is safe to reclaim. FamilyRevocation has
+	// no gorm.DeletedAt, so this is a physical delete. Best-effort housekeeping:
+	// the token purge above is what DeleteExpired reports, so a prune error here
+	// must not mask it.
+	const familyTombstoneRetention = 90 * 24 * time.Hour
+	_ = s.db.WithContext(ctx).Where("revoked_at < ?", before.Add(-familyTombstoneRetention)).Delete(&FamilyRevocation{}).Error
+
 	return int(res.RowsAffected), res.Error
 }

@@ -135,3 +135,41 @@ func TestRefreshStore_DeleteExpired(t *testing.T) {
 		t.Fatalf("expired token was soft-deleted, not physically removed (found %d rows); DeleteExpired must Unscoped-delete", remaining)
 	}
 }
+
+// TestRefreshStore_DeleteExpiredPrunesFamilyTombstones proves DeleteExpired also
+// reclaims oauth_revoked_families rows older than the 90d retention (A2), while
+// sparing recent ones — otherwise tombstones grow unbounded forever.
+func TestRefreshStore_DeleteExpiredPrunesFamilyTombstones(t *testing.T) {
+	db := openTestDB(t)
+	s := New(db)
+	ctx := context.Background()
+
+	now := time.Now()
+	// Revoked 100d ago: past the 90d retention window → pruned.
+	if err := db.Create(&FamilyRevocation{FamilyID: "old-fam", RevokedAt: now.Add(-100 * 24 * time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Revoked 1d ago: still well within the window → retained.
+	if err := db.Create(&FamilyRevocation{FamilyID: "recent-fam", RevokedAt: now.Add(-24 * time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.RefreshTokens().DeleteExpired(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRevoked, err := s.RefreshTokens().IsFamilyRevoked(ctx, "old-fam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldRevoked {
+		t.Fatal("family revoked >90d ago should have been pruned from oauth_revoked_families")
+	}
+	recentRevoked, err := s.RefreshTokens().IsFamilyRevoked(ctx, "recent-fam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recentRevoked {
+		t.Fatal("family revoked 1d ago must be retained")
+	}
+}

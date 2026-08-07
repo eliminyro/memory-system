@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/eliminyro/memory-system/internal/models"
+	"github.com/eliminyro/memory-system/internal/panicguard"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/retention"
 	"github.com/eliminyro/memory-system/internal/staleness"
@@ -143,8 +144,14 @@ func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 		interval = 24 * time.Hour
 	}
 	go func() {
+		// Recover per sweep so one panicking scan logs + the loop continues,
+		// rather than the whole goroutine (and the scan cadence) dying.
+		tick := func() {
+			defer panicguard.Recover(s.logger, "cleanup scan")
+			s.runAndLog(ctx)
+		}
 		// Migrations already ran synchronously, so no startup delay is needed.
-		s.runAndLog(ctx)
+		tick()
 
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -153,7 +160,7 @@ func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				s.runAndLog(ctx)
+				tick()
 			}
 		}
 	}()

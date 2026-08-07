@@ -107,7 +107,7 @@ func (e *GCPEmbedder) Embed(ctx context.Context, text string) (pgvector.Vector, 
 	}
 
 	var result gcpEmbedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedResponseBytes)).Decode(&result); err != nil {
 		return pgvector.Vector{}, fmt.Errorf("decode response: %w", err)
 	}
 
