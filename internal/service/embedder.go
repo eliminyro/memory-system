@@ -13,6 +13,12 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+// maxEmbedResponseBytes caps the success body the HTTP embedders decode. An
+// embedding-vector JSON is tiny; the ceiling stops a misbehaving/hostile
+// operator-configured endpoint from streaming a huge 200 body into an OOM. A
+// truncated body then fails the decode → the existing embedding-error path.
+const maxEmbedResponseBytes = 8 << 20 // 8 MiB
+
 type OllamaEmbedder struct {
 	url        string
 	model      string
@@ -71,7 +77,7 @@ func (e *OllamaEmbedder) Embed(ctx context.Context, text string) (pgvector.Vecto
 	}
 
 	var result embedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedResponseBytes)).Decode(&result); err != nil {
 		return pgvector.Vector{}, fmt.Errorf("decode response: %w", err)
 	}
 

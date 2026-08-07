@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/pgvector/pgvector-go"
@@ -22,7 +24,12 @@ type bedrockInvoker interface {
 // loadAWSConfig is a test seam for injecting a config with deterministic
 // credential-resolution failure; production uses the standard default config.
 var loadAWSConfig = func(ctx context.Context, region string) (aws.Config, error) {
-	return config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	// 30s overall request timeout matches the other embedders (the AWS default
+	// HTTP client bounds only dial/TLS, not the whole request), so a stalled
+	// Bedrock endpoint self-recovers as ErrEmbeddingUnavailable instead of
+	// hanging the single import worker forever.
+	return config.LoadDefaultConfig(ctx, config.WithRegion(region),
+		config.WithHTTPClient(awshttp.NewBuildableClient().WithTimeout(30*time.Second)))
 }
 
 // AWSEmbedder generates embeddings via Amazon Bedrock Runtime InvokeModel.

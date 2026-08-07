@@ -89,7 +89,7 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) (pgvector.Vecto
 	}
 
 	var result openAIEmbedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedResponseBytes)).Decode(&result); err != nil {
 		return pgvector.Vector{}, fmt.Errorf("decode response: %w", err)
 	}
 	if len(result.Data) == 0 || len(result.Data[0].Embedding) == 0 {

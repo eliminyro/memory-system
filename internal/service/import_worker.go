@@ -15,6 +15,7 @@ import (
 
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
+	"github.com/eliminyro/memory-system/internal/panicguard"
 )
 
 // maxDecompressedBytes caps the cumulative decompressed size of all markdown
@@ -121,7 +122,12 @@ func (w *ImportWorker) drain(ctx context.Context) {
 		if job == nil {
 			return // queue empty
 		}
-		w.process(ctx, job)
+		// Recover per job so one panicking import logs + the worker keeps
+		// claiming, rather than the whole polling goroutine dying.
+		func() {
+			defer panicguard.Recover(w.logger, "import job")
+			w.process(ctx, job)
+		}()
 	}
 }
 

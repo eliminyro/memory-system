@@ -29,6 +29,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/database"
 	"github.com/eliminyro/memory-system/internal/mcp"
 	"github.com/eliminyro/memory-system/internal/models"
+	"github.com/eliminyro/memory-system/internal/panicguard"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/server"
 	"github.com/eliminyro/memory-system/internal/service"
@@ -369,6 +370,7 @@ func main() {
 	}
 
 	go func() {
+		defer panicguard.Recover(slog.Default(), "http server goroutine")
 		slog.Info("memory-mcp listening", "addr", cfg.ServerAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)

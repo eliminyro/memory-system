@@ -64,6 +64,14 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 	return db, nil
 }
 
+// migrateAdvisoryLock serializes schema migration across replicas: gorm
+// AutoMigrate is check-then-act and not concurrency-safe, so concurrent boots
+// race the DDL and crashloop. A tx-scoped advisory lock (like retention /
+// bootstrap / signing-key activation) makes losers block, then observe a
+// fully-migrated schema so their AutoMigrate/DDL is a no-op. Use a distinct
+// fixed key (not shared with retention/rotation locks).
+const migrateAdvisoryLock int64 = 0x4D49475241544531 // "MIGRATE1"
+
 // TenantColumnDefaults are the operator-chosen DB-level defaults for the three
 // per-tenant toggles. Migrate applies them via ALTER COLUMN SET DEFAULT after
 // AutoMigrate, so raw INSERTs into tenants pick up the deploy-time choice.
@@ -87,6 +95,14 @@ func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColum
 	// All DDL, backfills, and seeds in one transaction so a crash rolls back
 	// cleanly. Postgres allows DDL in transactions: CREATE/ALTER/UPDATE/INSERT.
 	return db.Transaction(func(tx *gorm.DB) error {
+		// lock_timeout bounds the DDL table-lock waits so a stuck migration
+		// surfaces instead of hanging boot forever.
+		if err := tx.Exec("SET LOCAL lock_timeout = '60s'").Error; err != nil {
+			return fmt.Errorf("set migrate lock_timeout: %w", err)
+		}
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrateAdvisoryLock).Error; err != nil {
+			return fmt.Errorf("acquire migrate advisory lock: %w", err)
+		}
 		return migrateInTx(tx, provider, model, dimensions, corpusPopulated, td)
 	})
 }
