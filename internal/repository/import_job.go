@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -12,6 +13,16 @@ import (
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 )
+
+// staleRunningThreshold bounds how long a job may sit in `running` before the
+// startup sweep treats it as orphaned. Kept far longer than any real import
+// (which completes in minutes) precisely so a live PEER replica's in-flight job
+// is NOT swept when THIS replica starts: under HPA scale-up / rolling deploy a
+// peer may be actively processing a freshly-claimed job whose updated_at is only
+// seconds old, and flipping it to failed would report a live, succeeding import
+// as failed. Residual: an import legitimately running past this threshold could
+// still be swept — acceptable for an extreme edge, and the job is re-runnable.
+const staleRunningThreshold = time.Hour
 
 // ImportJobRepository persists the async document-import queue (design D7). Rows
 // carry the uploaded archive as bytea plus progress counters a worker updates as
@@ -118,13 +129,17 @@ func (r *ImportJobRepository) Finish(ctx context.Context, id uuid.UUID, status, 
 	return nil
 }
 
-// SweepRunningToFailed flips every running row to failed (interrupted). Called on
-// worker start: a job left running means the previous process died mid-import,
-// so the operator sees a clean failure to retry rather than a stuck row (D9).
+// SweepRunningToFailed reclaims only jobs stuck in `running` past
+// staleRunningThreshold (a crashed process left the row orphaned). Called on
+// worker start. It deliberately does NOT touch a job a live peer replica is
+// actively processing: ClaimNext bumps updated_at at claim time (gorm
+// auto-manages UpdatedAt), so a live import's row stays fresh and is skipped by
+// the age guard — the operator sees a clean failure to retry only for genuinely
+// orphaned rows, not for imports another replica is still running (D9, F3).
 func (r *ImportJobRepository) SweepRunningToFailed(ctx context.Context) (int64, error) {
 	res := r.db.WithContext(ctx).
 		Model(&models.ImportJob{}).
-		Where("status = ?", models.ImportJobStatusRunning).
+		Where("status = ? AND updated_at < ?", models.ImportJobStatusRunning, time.Now().Add(-staleRunningThreshold)).
 		Updates(map[string]any{
 			"status": models.ImportJobStatusFailed,
 			"error":  "interrupted: server restarted while the job was running",

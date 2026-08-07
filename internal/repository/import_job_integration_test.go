@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -67,7 +68,15 @@ func TestImportJobRepository_ClaimAndSweep(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, c3)
 
-	// SweepRunningToFailed flips both running jobs to failed (interrupted).
+	// Backdate both running rows past the stale threshold so the sweep — which now
+	// reclaims only genuinely orphaned jobs (F3), never a live peer's fresh claim —
+	// treats them as interrupted.
+	require.NoError(t, db.Exec(
+		"UPDATE import_jobs SET updated_at = ? WHERE id IN (?, ?)",
+		time.Now().Add(-2*time.Hour), j1.ID, j2.ID,
+	).Error)
+
+	// SweepRunningToFailed flips both stale running jobs to failed (interrupted).
 	n, err := repo.SweepRunningToFailed(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, n)
@@ -124,7 +133,14 @@ func TestImportJobRepository_TerminalNotOverwritten(t *testing.T) {
 	require.NotNil(t, claimed)
 	require.Equal(t, job.ID, claimed.ID)
 
-	// A peer replica's startup sweep reclaims the running row as failed.
+	// Backdate the running row past the stale threshold so the startup sweep (F3)
+	// reclaims it — simulating a genuinely orphaned job from a crashed process.
+	require.NoError(t, db.Exec(
+		"UPDATE import_jobs SET updated_at = ? WHERE id = ?",
+		time.Now().Add(-2*time.Hour), job.ID,
+	).Error)
+
+	// A peer replica's startup sweep reclaims the stale running row as failed.
 	n, err := repo.SweepRunningToFailed(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, n)
