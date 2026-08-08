@@ -2249,6 +2249,35 @@ func (s *MemoryService) RevokeAPIKey(ctx context.Context, id uuid.UUID) error {
 	return s.keys.Revoke(ctx, id)
 }
 
+// DeleteAPIKey permanently removes a key row (hard delete, no audit trace). It is
+// admin-only and restricted to dead keys — already revoked or past expiry — since
+// the UI surfaces it only on those rows, for cleanup. An active key must be
+// revoked (or expire) first.
+func (s *MemoryService) DeleteAPIKey(ctx context.Context, id uuid.UUID) error {
+	if err := s.requireAdmin(ctx); err != nil {
+		return err
+	}
+	key, err := s.keys.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	expired := key.ExpiresAt != nil && key.ExpiresAt.Before(time.Now())
+	if key.RevokedAt == nil && !expired {
+		return fmt.Errorf("%w: only revoked or expired keys can be deleted", apperr.ErrInvalidInput)
+	}
+	return s.keys.Delete(ctx, id)
+}
+
+// PurgeDeadKeys hard-deletes keys that have been dead — revoked or expired — for
+// longer than ttl. It runs from the scheduled system sweep with no user context, so
+// it performs no per-request authz. ttl <= 0 is a no-op. Returns the count removed.
+func (s *MemoryService) PurgeDeadKeys(ctx context.Context, ttl time.Duration) (int64, error) {
+	if ttl <= 0 {
+		return 0, nil
+	}
+	return s.keys.PurgeDeadBefore(ctx, time.Now().Add(-ttl))
+}
+
 // GenerateIndex builds the browse catalog aggregated across the caller's
 // readable tenant SET (home + common pool + directly-granted tenants), the same
 // no-leak scope as search/list/get/get_related. The optional tenant_id filter

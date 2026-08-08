@@ -61,6 +61,11 @@ type Config struct {
 	TelegramBotToken     string `env:"TELEGRAM_BOT_TOKEN"`
 	TelegramChatID       string `env:"TELEGRAM_CHAT_ID"`
 
+	// DeadKeyTTLDays: a nightly sweep hard-deletes API keys that have been dead
+	// (revoked or expired) for longer than this, so retired keys stop cluttering
+	// listings. 0 disables the sweep; keys are then removed only via manual Delete.
+	DeadKeyTTLDays int `env:"DEAD_KEY_TTL_DAYS" envDefault:"7"`
+
 	// Retention sweep — archives docs unverified past multiplier × the doc_type
 	// staleness threshold, then hard-deletes deleteGraceDays after archiving. Only
 	// for staleness_mode=hard tenants. Both must be >= 1: below 1 collapses the

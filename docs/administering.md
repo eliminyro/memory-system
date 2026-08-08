@@ -285,13 +285,13 @@ curl -X POST https://mem.example.org/api/admin/import \
 # -> 202 {"id":"...","status":"queued"}
 ```
 
-**The documents must sit at the root of the zip** —
-`category/slug.md` or `category/subcategory/slug.md`. A wrapping top-level
-directory shifts every path down a level, so
-`wrapper/category/subcategory/slug.md` no longer parses into
-category/subcategory/slug: the whole nested path is instead stored under the
-catch-all `misc` category. Zip the contents of your export directory, not a
-parent directory containing it.
+**Each file's path inside the zip decides where it lands** —
+`category/slug.md` or `category/subcategory/slug.md` (subcategory optional).
+Put those category folders at the top level of the zip: don't wrap them in a
+parent folder, or that folder is read as the category and every entry lands
+under the catch-all `misc` category (`wrapper/category/subcategory/slug.md` no
+longer parses as `category/subcategory/slug`). Zip the contents of your export
+directory, not a parent directory containing it.
 
 Import is **asynchronous**: the request returns immediately with a job id,
 and an in-process worker (concurrency set by `IMPORT_WORKER_CONCURRENCY`)

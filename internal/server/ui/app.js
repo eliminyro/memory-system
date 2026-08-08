@@ -157,6 +157,8 @@ const ICON_INFO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" s
 const ICON_UPLOAD = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
 // Public wildcard (user:*) member icon — deliberately not a person.
 const ICON_PUBLIC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+const ICON_PENCIL = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"; // the default pool — cannot be deleted
 
 // ── Console chrome: theme + accent (client-only, localStorage-backed) ─────────
 const _root = document.documentElement;
@@ -351,18 +353,64 @@ function copyCodeBtn() {
   return btn;
 }
 
-// wireDestructiveAction wires a confirm → DELETE → reload flow on `btn`: confirm
-// `confirm`, disable the button, run `request` ({path, opts} for apiFetch), then
-// await onDone(); on failure re-enable the button and alert `errorPrefix`. (R15)
+// wireDestructiveAction wires an in-place confirm → DELETE → reload flow on `btn`
+// with no browser popup: the first click swaps `btn` for an inline [action][Cancel]
+// pair (armInlineConfirm); confirming runs `request` ({path, opts} for apiFetch)
+// then awaits onDone(); Cancel/Escape/click-outside reverts. On failure it restores
+// `btn` and alerts `errorPrefix`. (R15)
 function wireDestructiveAction(btn, { confirm: msg, request, onDone, errorPrefix = "Action failed" }) {
-  btn.addEventListener("click", async () => {
-    if (!confirm(msg)) return;
-    btn.disabled = true;
+  btn.addEventListener("click", () => armInlineConfirm(btn, { msg, request, onDone, errorPrefix }));
+}
+
+// armInlineConfirm replaces a destructive button with an in-place [action][Cancel]
+// pair — the confirmation lives in the same row, not a popup. Cancel, Escape, or a
+// click outside reverts it; the armed action fires the request. Rows whose actions
+// are hover-revealed get a `confirming` class so the pair stays put when the mouse
+// leaves.
+function armInlineConfirm(btn, { msg, request, onDone, errorPrefix = "Action failed" }) {
+  const holder = btn.closest(".member-row, .key-row, .grant-row");
+  const confirmBtn = el("button", { className: "btn btn--danger confirm-arm", type: "button", textContent: btn.textContent, title: msg || "" });
+  const cancelBtn = el("button", { className: "btn", type: "button", textContent: "Cancel" });
+  const cluster = el("span", { className: "confirm-inline" }, confirmBtn, cancelBtn);
+  let settled = false;
+
+  const onOutside = (e) => { if (!cluster.contains(e.target)) restore(); };
+  const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); restore(); } };
+  const cleanup = () => {
+    document.removeEventListener("click", onOutside, true);
+    document.removeEventListener("keydown", onKey, true);
+    if (holder) holder.classList.remove("confirming");
+  };
+  function restore() {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    if (cluster.isConnected) cluster.replaceWith(btn);
+  }
+
+  if (holder) holder.classList.add("confirming");
+  btn.replaceWith(cluster);
+  confirmBtn.focus();
+  // Arm the dismiss listeners next tick so the click that opened this doesn't close it.
+  setTimeout(() => {
+    document.addEventListener("click", onOutside, true);
+    document.addEventListener("keydown", onKey, true);
+  }, 0);
+
+  cancelBtn.addEventListener("click", restore);
+  confirmBtn.addEventListener("click", async () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    confirmBtn.textContent = "…";
     try {
       await apiFetch(request.path, request.opts);
       await onDone();
     } catch (err) {
-      btn.disabled = false;
+      settled = false;
+      if (cluster.isConnected) cluster.replaceWith(btn);
       alert(errorPrefix + ": " + err.message);
     }
   });
@@ -620,16 +668,11 @@ async function showDocument(id) {
   if (doc.updated_at) meta.append(el("span", { className: "muted mono", textContent: "edited " + relAge(doc.updated_at) + " ago" }));
   meta.append(el("span", { className: "spacer" }));
   const delBtn = el("button", { textContent: "Delete", className: "btn btn--danger", type: "button", title: "Delete document" });
-  delBtn.addEventListener("click", async () => {
-    if (!confirm("Delete this document?")) return;
-    delBtn.disabled = true;
-    try {
-      await apiFetch("/documents/" + doc.id, { method: "DELETE" });
-      renderBrowse();
-    } catch (err) {
-      delBtn.disabled = false;
-      alert("Delete failed: " + err.message);
-    }
+  wireDestructiveAction(delBtn, {
+    confirm: "Delete this document?",
+    request: { path: "/documents/" + doc.id, opts: { method: "DELETE" } },
+    onDone: renderBrowse,
+    errorPrefix: "Delete failed",
   });
   meta.append(delBtn);
   view.append(meta);
@@ -1422,7 +1465,7 @@ async function renderTenantPanel(id) {
   viewMem.addEventListener("click", () => { memFilter = { id: t.id, name: t.name, type: t.type }; location.hash = "memories"; });
   phead.append(
     el("span", { className: "dot" }),
-    el("h2", { textContent: t.name || "(unnamed)" }),
+    tenantNameHead(t),
     el("span", { className: "spacer" }),
     viewMem,
     copyIdBtn(t.id, shortId(t.id), "Copy full tenant ID"));
@@ -1453,6 +1496,30 @@ async function renderTenantPanel(id) {
   placeThumbsIn(view, false); // position the visible ones
 }
 
+// tenantNameHead renders the panel's tenant name. Admins get click-to-rename
+// (PATCH /admin/tenants/{id}, reusing inlineEdit + a hover pencil cue); on commit
+// the new name propagates to viewMem/memFilter via the mutated t and the cache.
+// Non-admins get a static heading.
+function tenantNameHead(t) {
+  const h2 = el("h2", { textContent: t.name || "(unnamed)" });
+  if (!isAdmin) return h2;
+  inlineEdit(h2, t.name || "", async (name) => {
+    const next = name.trim();
+    if (!next) throw new Error("name cannot be empty");
+    await apiFetch("/admin/tenants/" + t.id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: next }),
+    });
+    t.name = next;
+    if (tenantCache[t.id]) tenantCache[t.id].name = next;
+    return next;
+  });
+  const pencil = el("button", { className: "pencil", type: "button", title: "Rename tenant" }, icon(ICON_PENCIL));
+  pencil.addEventListener("click", () => { if (h2.isConnected) h2.click(); });
+  return el("span", { className: "name-edit" }, h2, pencil);
+}
+
 // tenantMembersSection — the tenant-membership grants (viewer/member/manager)
 // for a fixed tenant id, extracted from the old renderAcl so it renders bound to
 // the route tenant with no dropdown. Same /acl/tenants/{id}/grants endpoints.
@@ -1472,7 +1539,7 @@ function tenantMembersSection(tenantID) {
   if (canGrantManager()) roleSeg.append(el("button", { type: "button", textContent: "manager" }));
   form.append(el("div", { className: "af-inline" },
     el("div", { className: "af-row" }, el("label", { textContent: "Email" }), emailI),
-    el("div", { className: "af-row" }, el("label", { textContent: "Role" }), roleSeg)));
+    el("div", { className: "af-row af-compact" }, el("label", { textContent: "Role" }), roleSeg)));
   const cancel = el("button", { className: "btn af-cancel", type: "button", textContent: "Cancel" });
   const commit = el("button", { className: "btn btn--primary af-commit", type: "button", textContent: "Send invite" });
   form.append(el("div", { className: "af-actions" }, cancel, commit));
@@ -1576,15 +1643,31 @@ function importSection(tenantID) {
 
   sec.append(el("div", { className: "import-note" }, icon(ICON_INFO),
     el("span", {},
-      document.createTextNode("Entries are markdown files keyed by path: "),
-      el("code", { textContent: "category / subcategory / slug.md" }),
-      document.createTextNode(" (subcategory optional). Files must sit at the archive ROOT — a wrapping top-level directory makes every path parse as misc/<path>. A matching document is "),
-      el("b", { textContent: "overwritten" }),
-      document.createTextNode("; new paths are created; documents not in the archive are left as-is."))));
+      document.createTextNode("Each file's path inside the zip decides where it lands: "),
+      el("code", { textContent: "category/slug.md" }),
+      document.createTextNode(" or "),
+      el("code", { textContent: "category/subcategory/slug.md" }),
+      document.createTextNode(" (subcategory optional). Put those category folders at the top level of the zip — don't wrap them in a parent folder, or that folder becomes the category and everything lands under "),
+      el("code", { textContent: "misc/" }),
+      document.createTextNode(". Importing "),
+      el("b", { textContent: "overwrites" }),
+      document.createTextNode(" a document whose path matches, creates one at a new path, and leaves documents not in the zip untouched."))));
 
   const importBtn = el("button", { className: "btn btn--primary", type: "button", textContent: "Import" });
   importBtn.disabled = true;
-  sec.append(importBtn);
+  const actions = el("div", { className: "import-actions" }, importBtn);
+  // Delete tenant — admin-only, right-aligned on the Import row; the default pool can't be deleted.
+  if (isAdmin && tenantID !== DEFAULT_TENANT_ID) {
+    const delTenant = el("button", { className: "btn btn--danger", type: "button", textContent: "Delete tenant" });
+    wireDestructiveAction(delTenant, {
+      confirm: "Permanently delete this tenant and ALL its memories, API keys, and grants? This cannot be undone.",
+      request: { path: `/admin/tenants/${tenantID}`, opts: { method: "DELETE" } },
+      onDone: () => { location.hash = "tenants"; },
+      errorPrefix: "Delete tenant failed",
+    });
+    actions.append(el("span", { className: "spacer" }), delTenant);
+  }
+  sec.append(actions);
 
   const progress = el("div", { className: "import-progress" });
   sec.append(progress);
@@ -2006,15 +2089,25 @@ function keysSection(t, keys, refresh) {
 function keyRow(t, k, refresh) {
   refresh = refresh || (() => renderTenantPanel(t.id)); // safe default
   const revoked = !!k.revoked_at;
-  const row = el("div", { className: "key-row" + (revoked ? " revoked" : "") });
+  const expired = !revoked && !!k.expires_at && new Date(k.expires_at).getTime() <= Date.now();
+  const dead = revoked || expired;
+  const row = el("div", { className: "key-row" + (dead ? " revoked" : "") }); // .revoked = the dead-key visual (dim + strike)
 
   const label = el("span", { className: "k" }, el("b", { textContent: k.prefix || "key" }));
   if (k.label) label.append(document.createTextNode(" · " + k.label));
   row.append(label);
 
-  if (revoked) {
-    row.append(el("span", { className: "pill pill--danger", textContent: "revoked " + (fmtDate(k.revoked_at) || "") }));
-    row.append(el("div", { className: "row-actions" }));
+  if (dead) {
+    const status = revoked ? "revoked " + (fmtDate(k.revoked_at) || "") : "expired " + (fmtDate(k.expires_at) || "");
+    row.append(el("span", { className: "pill pill--danger", textContent: status }));
+    const del = el("button", { className: "btn btn--danger", type: "button", textContent: "Delete" });
+    wireDestructiveAction(del, {
+      confirm: `Permanently delete this ${revoked ? "revoked" : "expired"} key "${k.label || ""}" (${k.prefix || ""})? This cannot be undone.`,
+      request: { path: `/admin/keys/${k.id}/purge`, opts: { method: "DELETE" } },
+      onDone: refresh,
+      errorPrefix: "Delete key failed",
+    });
+    row.append(el("div", { className: "row-actions" }, del));
     return row;
   }
 
