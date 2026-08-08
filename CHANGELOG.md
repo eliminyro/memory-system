@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.3.1] - 2026-08-08
+
+### Bug fixes
+
+- CI: the release-notes harvester can read PR titles/bodies/labels again — the release job was missing `pull-requests: read`. ([#101](https://github.com/eliminyro/memory-system/pull/101))
+
 ## [0.3.0] - 2026-08-08
 
 ### Features
