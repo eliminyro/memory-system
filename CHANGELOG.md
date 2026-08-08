@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.6.1] - 2026-08-08
+
+### Bug fixes
+
+- Mobile-layout polish from the QA pass. CSS-only + one HTML tweak (no JS, no Go). All in a single `@media (max-width: 640px)` block. ([#105](https://github.com/eliminyro/memory-system/pull/105))
+
 ## [0.6.0] - 2026-08-08
 
 ### Features
