@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.6.3] - 2026-08-08
+
+### Bug fixes
+
+- Follow-up UI/mobile fixes from QA. ([#107](https://github.com/eliminyro/memory-system/pull/107))
+
 ## [0.6.2] - 2026-08-08
 
 ### Bug fixes
