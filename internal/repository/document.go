@@ -173,16 +173,18 @@ const (
 
 // IndexEntry is one row in the catalog produced by GenerateIndex.
 type IndexEntry struct {
-	Category    string  `json:"category"`
-	Subcategory *string `json:"subcategory,omitempty"`
-	DocCount    int     `json:"doc_count"`
-	Topics      string  `json:"topics"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	TenantName  string    `json:"tenant_name,omitempty"`
+	Category    string    `json:"category"`
+	Subcategory *string   `json:"subcategory,omitempty"`
+	DocCount    int       `json:"doc_count"`
+	Topics      string    `json:"topics"`
 }
 
 // GenerateIndex produces a tiered catalog of documents over a tenant-id set
 // (the caller's readable scope), filtering tenant_id IN (?).
 //
-//   - summary:  one row per (category, subcategory) with COUNT and aggregated titles
+//   - summary:  one row per (tenant, category, subcategory) with COUNT and aggregated titles
 //   - category: one row per document (DocCount=1, Topics=title), filtered by category
 //   - full:     one row per document (DocCount=1, Topics=title), all categories
 func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantIDs []uuid.UUID, depth IndexDepth, category *string) ([]IndexEntry, error) {
@@ -192,43 +194,52 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantIDs []uuid
 	switch depth {
 	case IndexDepthSummary:
 		sql = `
-			SELECT category,
-			       subcategory,
-			       COUNT(*)                          AS doc_count,
-			       string_agg(title, ', ' ORDER BY title) AS topics
-			FROM documents
-			WHERE tenant_id IN ?
-			  AND archived_at IS NULL
-			  AND (?::text IS NULL OR category = ?)
-			GROUP BY category, subcategory
-			ORDER BY category, subcategory
+			SELECT d.tenant_id                                 AS tenant_id,
+			       t.name                                      AS tenant_name,
+			       d.category                                  AS category,
+			       d.subcategory                               AS subcategory,
+			       COUNT(*)                                    AS doc_count,
+			       string_agg(d.title, ', ' ORDER BY d.title)  AS topics
+			FROM documents d
+			LEFT JOIN tenants t ON t.id = d.tenant_id
+			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
+			  AND (?::text IS NULL OR d.category = ?)
+			GROUP BY d.tenant_id, t.name, d.category, d.subcategory
+			ORDER BY d.category, d.subcategory, t.name
 		`
 		args = []any{tenantIDs, category, category}
 
 	case IndexDepthCategory:
 		sql = `
-			SELECT category,
-			       subcategory,
-			       1          AS doc_count,
-			       title      AS topics
-			FROM documents
-			WHERE tenant_id IN ?
-			  AND archived_at IS NULL
-			  AND (?::text IS NULL OR category = ?)
-			ORDER BY category, subcategory, title
+			SELECT d.tenant_id   AS tenant_id,
+			       t.name        AS tenant_name,
+			       d.category    AS category,
+			       d.subcategory AS subcategory,
+			       1             AS doc_count,
+			       d.title       AS topics
+			FROM documents d
+			LEFT JOIN tenants t ON t.id = d.tenant_id
+			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
+			  AND (?::text IS NULL OR d.category = ?)
+			ORDER BY d.category, d.subcategory, d.title
 		`
 		args = []any{tenantIDs, category, category}
 
 	case IndexDepthFull:
 		sql = `
-			SELECT category,
-			       subcategory,
-			       1          AS doc_count,
-			       title      AS topics
-			FROM documents
-			WHERE tenant_id IN ?
-			  AND archived_at IS NULL
-			ORDER BY category, subcategory, title
+			SELECT d.tenant_id   AS tenant_id,
+			       t.name        AS tenant_name,
+			       d.category    AS category,
+			       d.subcategory AS subcategory,
+			       1             AS doc_count,
+			       d.title       AS topics
+			FROM documents d
+			LEFT JOIN tenants t ON t.id = d.tenant_id
+			WHERE d.tenant_id IN ?
+			  AND d.archived_at IS NULL
+			ORDER BY d.category, d.subcategory, d.title
 		`
 		args = []any{tenantIDs}
 
