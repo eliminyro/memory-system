@@ -996,35 +996,38 @@ function memHead() {
   // a system admin sees every tenant labeled "admin", so fall back to the first
   // personal-type tenant (their own on a single-user instance) before the pool.
   const tDefault = tOpts.find((o) => o.relation === "owner") || tOpts.find((o) => o.type === "personal") || tOpts[0] || null;
-  let tSelected = tDefault;
-  const tenantValue = () => (tSelected ? tSelected.id : "");
-  const tInput = el("input", { className: "text-input", type: "text", autocomplete: "off", placeholder: tOpts.length ? "type to filter tenants…" : "(no writable tenant)" });
+  // Empty by default — the placeholder names the tenant an empty field uses
+  // (tDefault); suggestions appear only while you type, and an empty field submits
+  // as that default. tSelected null means "use tDefault".
+  let tSelected = null;
+  const tenantValue = () => { const t = tSelected || tDefault; return t ? t.id : ""; };
+  const tInput = el("input", { className: "text-input", type: "text", autocomplete: "off",
+    placeholder: tDefault ? `${tDefault.name} · default — type to change` : (tOpts.length ? "search tenants…" : "(no writable tenant)") });
   tInput.disabled = !tOpts.length;
-  if (tDefault) tInput.value = tDefault.name;
   const tMenu = el("div", { className: "combo-menu" });
   tMenu.hidden = true;
   function tRenderMenu(filter) {
     const f = String(filter || "").trim().toLowerCase();
-    const shown = tOpts.filter((o) => !f || o.name.toLowerCase().includes(f) || o.id.toLowerCase().includes(f));
+    if (!f) { tMenu.hidden = true; return; } // suggestions only while searching
+    const shown = tOpts.filter((o) => o.name.toLowerCase().includes(f) || o.id.toLowerCase().includes(f));
     tMenu.replaceChildren();
     if (!shown.length) { tMenu.hidden = true; return; }
     for (const o of shown) {
-      const opt = el("button", { className: "combo-opt" + (tSelected && tSelected.id === o.id ? " sel" : ""), type: "button" },
+      const opt = el("button", { className: "combo-opt", type: "button" },
         el("span", { textContent: o.name }), el("span", { className: "co-ty", textContent: o.type || "" }));
       opt.addEventListener("mousedown", (e) => { e.preventDefault(); tSelected = o; tInput.value = o.name; tMenu.hidden = true; });
       tMenu.append(opt);
     }
     tMenu.hidden = false;
   }
-  tInput.addEventListener("focus", () => { tInput.select(); tRenderMenu(""); });
   tInput.addEventListener("input", () => { tSelected = null; tRenderMenu(tInput.value); });
   tInput.addEventListener("blur", () => setTimeout(() => {
     tMenu.hidden = true;
-    if (!tSelected) {
-      const typed = tInput.value.trim().toLowerCase();
-      tSelected = tOpts.find((o) => o.name.toLowerCase() === typed) || tDefault || null;
-    }
-    tInput.value = tSelected ? tSelected.name : "";
+    const typed = tInput.value.trim();
+    if (!typed) { tSelected = null; return; } // empty → default
+    const exact = tOpts.find((o) => o.name.toLowerCase() === typed.toLowerCase());
+    if (exact) { tSelected = exact; tInput.value = exact.name; }
+    else { tInput.value = tSelected ? tSelected.name : ""; } // unmatched text → revert (empty = default)
   }, 150));
   const tCombo = el("div", { className: "combo" }, tInput, tMenu);
   form.append(el("div", { className: "af-inline" }, el("div", { className: "af-row" }, el("label", { textContent: "Tenant" }), tCombo)));
