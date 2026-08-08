@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.5.0] - 2026-08-08
+
+### Features
+
+- **Category browse is paginated with infinite scroll.** The category view loads a page at a time and appends more as you scroll, instead of fetching an entire category at once (the one unbounded list — a slow query + heavy payload + growing DOM). `GET /api/documents` gained clamped `limit`/`offset`; internal callers (MCP `list_documents`, CLI) are unaffected. - **Tenant-tab rocker is smooth.** Shared/Personal both load once up front and switching only re-draws the grid, so the thumb slides cleanly with no reload flash. Also dropped the redundant scope pill on tenant cards — the rocker already splits them. ([#103](https://github.com/eliminyro/memory-system/pull/103))
+
 ## [0.4.0] - 2026-08-08
 
 ### Features
