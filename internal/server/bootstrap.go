@@ -73,7 +73,7 @@ func bootstrapPostHandler(memory *service.MemoryService) http.HandlerFunc {
 		if err != nil {
 			switch {
 			case errors.Is(err, service.ErrBootstrapForbidden):
-				writeError(w, http.StatusForbidden, "bootstrap forbidden")
+				writeError(w, http.StatusForbidden, "invalid or missing bootstrap token — paste the exact one-time token from the server's startup logs (docker logs); it is regenerated every boot")
 			case errors.Is(err, service.ErrAlreadyBootstrapped):
 				writeError(w, http.StatusConflict, "already bootstrapped")
 			default:

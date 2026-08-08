@@ -988,11 +988,43 @@ function memHead() {
   const form = el("div", { className: "addform" });
   form.hidden = true;
 
-  const tenantSel = el("select", { className: "text-input" });
-  for (const t of writableTenants) tenantSel.append(el("option", { value: t.id, textContent: t.name || t.id }));
-  if (!writableTenants.length) tenantSel.append(el("option", { value: "", textContent: "(no writable tenant)" }));
-  const tRow = el("div", { className: "af-row" }, el("label", { textContent: "Tenant" }), tenantSel);
-  form.append(el("div", { className: "af-inline" }, tRow));
+  // Tenant picker — a type-to-filter combobox over the writable tenants
+  // (WritableTenants returns {tenant, relation}). Empty defaults to your personal
+  // tenant; each suggestion shows the tenant type. Replaces the old <select>.
+  const tOpts = writableTenants.map((t) => ({ id: t.tenant.id, name: t.tenant.name || t.tenant.id, type: t.tenant.type, relation: t.relation }));
+  const tDefault = tOpts.find((o) => o.type === "personal" && o.relation === "owner") || tOpts[0] || null;
+  let tSelected = tDefault;
+  const tenantValue = () => (tSelected ? tSelected.id : "");
+  const tInput = el("input", { className: "text-input", type: "text", autocomplete: "off", placeholder: tOpts.length ? "type to filter tenants…" : "(no writable tenant)" });
+  tInput.disabled = !tOpts.length;
+  if (tDefault) tInput.value = tDefault.name;
+  const tMenu = el("div", { className: "combo-menu" });
+  tMenu.hidden = true;
+  function tRenderMenu() {
+    const f = tInput.value.trim().toLowerCase();
+    const shown = tOpts.filter((o) => !f || o.name.toLowerCase().includes(f) || o.id.toLowerCase().includes(f));
+    tMenu.replaceChildren();
+    if (!shown.length) { tMenu.hidden = true; return; }
+    for (const o of shown) {
+      const opt = el("button", { className: "combo-opt" + (tSelected && tSelected.id === o.id ? " sel" : ""), type: "button" },
+        el("span", { textContent: o.name }), el("span", { className: "co-ty", textContent: o.type || "" }));
+      opt.addEventListener("mousedown", (e) => { e.preventDefault(); tSelected = o; tInput.value = o.name; tMenu.hidden = true; });
+      tMenu.append(opt);
+    }
+    tMenu.hidden = false;
+  }
+  tInput.addEventListener("focus", tRenderMenu);
+  tInput.addEventListener("input", () => { tSelected = null; tRenderMenu(); });
+  tInput.addEventListener("blur", () => setTimeout(() => {
+    tMenu.hidden = true;
+    if (!tSelected) {
+      const typed = tInput.value.trim().toLowerCase();
+      tSelected = tOpts.find((o) => o.name.toLowerCase() === typed) || tDefault || null;
+    }
+    tInput.value = tSelected ? tSelected.name : "";
+  }, 150));
+  const tCombo = el("div", { className: "combo" }, tInput, tMenu);
+  form.append(el("div", { className: "af-inline" }, el("div", { className: "af-row" }, el("label", { textContent: "Tenant" }), tCombo)));
 
   const catI = el("input", { className: "text-input", placeholder: "category" });
   const subI = el("input", { className: "text-input", placeholder: "subcategory — optional" });
@@ -1027,14 +1059,14 @@ function memHead() {
     const content = title ? `# ${title}\n\n${bodyText}` : bodyText;
     if (!category || !slug) { showErr("Category and slug are required."); return; }
     if (!content) { showErr("Add a title or some content."); return; }
-    if (!tenantSel.value) { showErr("No tenant you can write to is selected."); return; }
+    if (!tenantValue()) { showErr("No tenant you can write to is selected."); return; }
     commit.disabled = true;
     try {
       const created = await apiFetch("/documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tenant_id: tenantSel.value,
+          tenant_id: tenantValue(),
           category,
           subcategory: subI.value.trim(),
           slug,
