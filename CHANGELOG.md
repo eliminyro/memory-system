@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.6.4] - 2026-08-08
+
+### Bug fixes
+
+- Rework of the new-memory tenant picker to match the intended search UX. ([#108](https://github.com/eliminyro/memory-system/pull/108))
+
 ## [0.6.3] - 2026-08-08
 
 ### Bug fixes
