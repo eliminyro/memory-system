@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.6.5] - 2026-08-08
+
+### Bug fixes
+
+- The new-tenant **Type** (personal/shared) rocker sits in a stacked `.af-row`, so the segmented control stretched to the full row width (buttons left, empty bordered space right). ([#109](https://github.com/eliminyro/memory-system/pull/109))
+
 ## [0.6.4] - 2026-08-08
 
 ### Bug fixes
