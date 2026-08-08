@@ -97,7 +97,11 @@ func (r *DocumentRepository) GetByID(ctx context.Context, tenantIDs []uuid.UUID,
 }
 
 // List returns documents across the given tenant-id set, optionally filtered.
-func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, category *string, subcategory *string) ([]models.Document, error) {
+// A positive limit paginates via LIMIT/OFFSET; limit <= 0 returns the full list.
+// The order carries an id tiebreak because (category, subcategory, slug) is not
+// unique across the aggregated tenant set, so offset paging is total — no page
+// skips or duplicates a row (design D6).
+func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, category *string, subcategory *string, limit, offset int) ([]models.Document, error) {
 	var docs []models.Document
 	q := r.db.WithContext(ctx).Where("tenant_id IN ?", tenantIDs).Where("archived_at IS NULL")
 	if category != nil {
@@ -106,7 +110,11 @@ func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, ca
 	if subcategory != nil {
 		q = q.Where("subcategory = ?", *subcategory)
 	}
-	if err := q.Order("category, subcategory, slug").Find(&docs).Error; err != nil {
+	q = q.Order("category, subcategory, slug, id")
+	if limit > 0 {
+		q = q.Limit(limit).Offset(offset)
+	}
+	if err := q.Find(&docs).Error; err != nil {
 		return nil, err
 	}
 	return docs, nil

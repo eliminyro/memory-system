@@ -298,7 +298,21 @@ func (h *apiHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
-	docs, err := h.memory.ListDocuments(r.Context(), category, subcategory, tenantID)
+	// Paginate the browse path: default page when absent/invalid, clamp to the
+	// max, floor offset at 0. Response stays a bare array — the client infers
+	// has-more from a short page (design D3).
+	limit := service.DefaultListLimit
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		limit = n
+	}
+	if limit > service.MaxListLimit {
+		limit = service.MaxListLimit
+	}
+	offset := 0
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
+		offset = n
+	}
+	docs, err := h.memory.ListDocuments(r.Context(), category, subcategory, tenantID, limit, offset)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -48,7 +48,7 @@ func TestCrossTenantReads_NoLeak(t *testing.T) {
 	}
 
 	// Leak by list: no tenant B docs in a non-member's listing.
-	docs, err := f.svc.ListDocuments(ctxA, nil, nil, nil)
+	docs, err := f.svc.ListDocuments(ctxA, nil, nil, nil, 0, 0)
 	require.NoError(t, err)
 	for _, d := range docs {
 		require.NotEqual(t, f.tenantB, d.TenantID, "another tenant's doc must not leak via list")
@@ -96,7 +96,7 @@ func TestCrossTenantReads_FreshTenantPrivateByConstruction(t *testing.T) {
 	for _, r := range results {
 		require.NotEqual(t, newT.ID, r.TenantID, "fresh tenant's doc must not leak via search")
 	}
-	docs, err := f.svc.ListDocuments(ctxS, nil, nil, nil)
+	docs, err := f.svc.ListDocuments(ctxS, nil, nil, nil, 0, 0)
 	require.NoError(t, err)
 	for _, d := range docs {
 		require.NotEqual(t, newT.ID, d.TenantID, "fresh tenant's doc must not leak via list")

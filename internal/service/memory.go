@@ -427,6 +427,11 @@ const (
 	MaxSearchLimit = 100
 	// MaxQueryLen caps the length of a search query string.
 	MaxQueryLen = 10_000
+	// DefaultListLimit is the document-list page size GET /api/documents applies
+	// when limit is absent or non-positive.
+	DefaultListLimit = 50
+	// MaxListLimit caps the document-list page size a caller may request.
+	MaxListLimit = 200
 )
 
 // Search performs hybrid semantic + keyword search, applying staleness filter.
@@ -857,10 +862,12 @@ func (s *MemoryService) DeleteDocumentByID(ctx context.Context, id uuid.UUID, ov
 }
 
 // ListDocuments lists documents across the caller's readable tenant set,
-// optionally filtered. Each returned document already carries its owning
-// TenantID; a nil overrideID aggregates, a set overrideID narrows to one
-// readable tenant (empty result if not readable — never a leak).
-func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string, overrideID *uuid.UUID) ([]models.Document, error) {
+// optionally filtered. A positive limit paginates; limit <= 0 returns the full
+// list unpaginated (design D2), so the MCP list tool and CLI are unaffected.
+// Each returned document already carries its owning TenantID; a nil overrideID
+// aggregates, a set overrideID narrows to one readable tenant (empty result if
+// not readable — never a leak).
+func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string, overrideID *uuid.UUID, limit, offset int) ([]models.Document, error) {
 	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
@@ -868,7 +875,7 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 	if len(scope) == 0 {
 		return []models.Document{}, nil
 	}
-	return s.docs.List(ctx, scope, category, subcategory)
+	return s.docs.List(ctx, scope, category, subcategory, limit, offset)
 }
 
 // --- Admin operations ---

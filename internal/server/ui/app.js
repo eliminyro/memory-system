@@ -720,15 +720,25 @@ async function renderBrowse() {
   view.append(list);
 }
 
+// PAGE matches the server's DEFAULT_LIST_LIMIT so a page shorter than PAGE
+// reliably signals the end of the list (design D3/D4).
+const PAGE = 50;
+
 async function renderCategoryDocs(category, subcategory) {
   const seq = ++_renderSeq;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  const params = new URLSearchParams({ category });
-  if (subcategory) params.set("subcategory", subcategory);
-  if (memFilter) params.set("tenant_id", memFilter.id);
+  // pageParams builds the query for one page; tenant_id carries on every page
+  // when a memFilter is active (design D5).
+  const pageParams = (offset) => {
+    const p = new URLSearchParams({ category, limit: String(PAGE), offset: String(offset) });
+    if (subcategory) p.set("subcategory", subcategory);
+    if (memFilter) p.set("tenant_id", memFilter.id);
+    return p;
+  };
+
   let docs;
   try {
-    docs = await apiFetch(`/documents?${params}`);
+    docs = (await apiFetch(`/documents?${pageParams(0)}`)) || [];
   } catch (err) {
     if (seq !== _renderSeq) return; // a newer render superseded us — stay silent
     showError(err);
@@ -747,20 +757,54 @@ async function renderCategoryDocs(category, subcategory) {
   const legend = buildLegend(docs);
   if (legend) view.append(legend);
   const list = el("div", { className: "mem-list" });
-  for (const doc of docs) {
-    list.append(memCard({
-      pathPrefix: [doc.category || category, doc.subcategory || subcategory].filter(Boolean).join("/"),
-      pathBold: doc.slug,
-      title: doc.title || doc.slug,
-      tenantId: doc.tenant_id,
-      tenantName: doc.tenant_name,
-      status: doc.status,
-      verifiedAt: doc.verified_at,
-      metaPill: doc.doc_type || null,
-      onClick: () => { navStack.push(() => renderCategoryDocs(category, subcategory)); showDocument(doc.id); },
-    }));
-  }
+  const appendDocs = (rows) => {
+    for (const doc of rows) {
+      list.append(memCard({
+        pathPrefix: [doc.category || category, doc.subcategory || subcategory].filter(Boolean).join("/"),
+        pathBold: doc.slug,
+        title: doc.title || doc.slug,
+        tenantId: doc.tenant_id,
+        tenantName: doc.tenant_name,
+        status: doc.status,
+        verifiedAt: doc.verified_at,
+        metaPill: doc.doc_type || null,
+        onClick: () => { navStack.push(() => renderCategoryDocs(category, subcategory)); showDocument(doc.id); },
+      }));
+    }
+  };
+  appendDocs(docs);
   view.append(list);
+
+  if (docs.length < PAGE) return; // first page already exhausted the category
+
+  // Scroll-driven paging: a sentinel below the grid drives an IntersectionObserver
+  // that appends the next page and stops on a short page (design D4/D5).
+  const sentinel = el("div", { className: "scroll-sentinel", style: "height:1px" });
+  view.append(sentinel);
+  let offset = docs.length;
+  let loading = false;
+  const observer = new IntersectionObserver(async (entries) => {
+    if (!entries[0].isIntersecting || loading) return;
+    loading = true;
+    let page;
+    try {
+      page = (await apiFetch(`/documents?${pageParams(offset)}`)) || [];
+    } catch (err) {
+      observer.disconnect();
+      sentinel.remove();
+      if (seq === _renderSeq) showError(err);
+      return;
+    }
+    if (seq !== _renderSeq) { observer.disconnect(); return; } // superseded view — drop the page (D5)
+    appendDocs(page);
+    offset += page.length;
+    if (page.length < PAGE) { observer.disconnect(); sentinel.remove(); return; } // end of list
+    loading = false;
+    // Re-arm so a still-visible sentinel (viewport not yet filled) fetches again.
+    observer.unobserve(sentinel);
+    observer.observe(sentinel);
+  }, { rootMargin: "300px" });
+  observer.observe(sentinel);
 }
 
 // ── Search wiring ─────────────────────────────────────────────────────────────
@@ -1208,12 +1252,16 @@ async function renderTenants() {
   const seq = ++_renderSeq;
   navStack.length = 0;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  let rows;
+  let personal, shared;
   try {
-    rows = (await apiFetch(`/tenants?type=${encodeURIComponent(tenantsType)}`)) || [];
+    [personal, shared] = await Promise.all([
+      apiFetch(`/tenants?type=personal`),
+      apiFetch(`/tenants?type=shared`),
+    ]);
   } catch (err) { showError(err); return; }
   if (seq !== _renderSeq) return; // discard stale render (B7)
-  for (const t of rows) tenantCache[t.id] = t;
+  const rowsByType = { personal: personal || [], shared: shared || [] };
+  for (const t of [...rowsByType.personal, ...rowsByType.shared]) tenantCache[t.id] = t;
   view.replaceChildren();
 
   const head = el("div", { className: "view-head" }, el("h1", { textContent: "Tenants" }));
@@ -1240,7 +1288,7 @@ async function renderTenants() {
   function draw() {
     const f = filter.value.trim().toLowerCase();
     grid.replaceChildren();
-    const shown = rows.filter((t) =>
+    const shown = rowsByType[tenantsType].filter((t) =>
       !f || (t.name || "").toLowerCase().includes(f) || (t.id || "").toLowerCase().includes(f));
     if (!shown.length) {
       grid.append(el("p", { className: "state-msg", textContent: tenantsType === "personal" ? "No personal tenants." : "No tenants." }));
@@ -1253,9 +1301,8 @@ async function renderTenants() {
         el("span", { className: "dot" }),
         el("div", {},
           el("div", { className: "nm", textContent: t.name || "(unnamed)" }),
-          el("div", { className: "sub", textContent: [t.relation, t.type].filter(Boolean).join(" · ") })),
-        el("span", { className: "spacer" }),
-        el("span", { className: t.type === "shared" ? "pill pill--shared" : "pill pill--personal", textContent: t.type || "" }));
+          el("div", { className: "sub", textContent: t.relation || "" })),
+        el("span", { className: "spacer" }));
       card.addEventListener("click", () => { location.hash = "tenants/" + t.id; });
       grid.append(card);
     }
@@ -1265,7 +1312,7 @@ async function renderTenants() {
 
   initRockers(scope, (btn) => {
     const ty = btn.textContent.trim().toLowerCase() === "shared" ? "shared" : "personal";
-    if (ty !== tenantsType) { tenantsType = ty; renderTenants().catch(showError); }
+    if (ty !== tenantsType) { tenantsType = ty; draw(); }
   });
   placeThumbsIn(view, false);
 }

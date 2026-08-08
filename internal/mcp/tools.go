@@ -456,7 +456,8 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	docs, err := s.memory.ListDocuments(ctx, input.Category, input.Subcategory, tenantOverride)
+	// limit=0 keeps the MCP tool unbounded (design D2) — only the HTTP browse path paginates.
+	docs, err := s.memory.ListDocuments(ctx, input.Category, input.Subcategory, tenantOverride, 0, 0)
 	if err != nil {
 		return toolErr("list", err)
 	}
