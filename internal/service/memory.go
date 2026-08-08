@@ -138,24 +138,6 @@ func (s *MemoryService) seedTuple(ctx context.Context, t authz.Tuple) {
 	}
 }
 
-// unseedTuple removes a relation tuple for a lifecycle event (revoke, downgrade).
-// Nil-safe and best-effort like seedTuple; a delete miss is logged, not fatal.
-func (s *MemoryService) unseedTuple(ctx context.Context, t authz.Tuple) {
-	if s.authz == nil {
-		return
-	}
-	if err := s.authz.Delete(ctx, t); err != nil {
-		slog.Default().Warn("authz tuple unseed failed",
-			"object_type", t.ObjectType,
-			"object_id", t.ObjectID,
-			"relation", t.Relation,
-			"subject_type", t.SubjectType,
-			"subject_id", t.SubjectID,
-			"error", err,
-		)
-	}
-}
-
 // syncServicePrincipalAdmin reconciles a tenant's service-principal
 // system#admin grant with whether the tenant still has any admin tenant_user.
 // The svc principal (svc:<tenant>) is what a subject-less operator API key
@@ -1575,25 +1557,9 @@ func (s *MemoryService) resolveSubjectByEmail(ctx context.Context, email string)
 	return &tu, nil
 }
 
-// subjectEmail resolves an authz subject id back to its tenant_users email for
-// display (Grant.Email). Non-UUID subjects (e.g. "svc:<tenant>" service
-// principals) and ids with no matching row are reported not-found; list
-// callers skip rather than fail the whole list on these.
-func (s *MemoryService) subjectEmail(ctx context.Context, subjectID string) (string, error) {
-	id, err := uuid.Parse(subjectID)
-	if err != nil {
-		return "", fmt.Errorf("%w: subject %s is not email-mapped", apperr.ErrNotFound, subjectID)
-	}
-	var tu models.TenantUser
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&tu).Error; err != nil {
-		return "", fmt.Errorf("%w: no tenant_user for subject %s", apperr.ErrNotFound, subjectID)
-	}
-	return tu.Email, nil
-}
-
 // subjectEmails resolves many tenant_users subject ids to emails in one query.
 // Ids with no row are simply absent from the map (same skip semantics as the
-// per-id subjectEmail, whose error → the caller skips the grant). Non-UUID
+// per-id lookup, whose error → the caller skips the grant). Non-UUID
 // subjects (e.g. "svc:<tenant>" service principals) never parse and are absent
 // too. The map is keyed by the original input id string so callers can look up
 // by the tuple's SubjectID directly.
@@ -1832,7 +1798,7 @@ type Grant struct {
 // than silently dropping it — display/audit only, authz behavior is unchanged.
 // Usersets and non-user subjects are still skipped. Subjects with no resolvable
 // email (stale tenant_users, service principals) are skipped rather than failing
-// the list — matching the per-id subjectEmail skip-on-error behavior. Callers own
+// the list — matching the per-id skip-on-error behavior. Callers own
 // the authz==nil guard and the CanManageTenant gate before delegating here.
 func (s *MemoryService) listGrants(ctx context.Context, objectType, objectID string, relations []string) ([]Grant, error) {
 	type pending struct {
