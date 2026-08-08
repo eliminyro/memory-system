@@ -757,7 +757,9 @@ async function renderBrowse() {
       pathBold: e.subcategory || null,
       title: label + countText,
       snip: e.topics || "",
-      onClick: () => { navStack.push(renderBrowse); renderCategoryDocs(e.category, e.subcategory || null); },
+      tenantId: e.tenant_id,
+      tenantName: e.tenant_name,
+      onClick: () => { navStack.push(renderBrowse); renderCategoryDocs(e.category, e.subcategory || null, e.tenant_id); },
     }));
   }
   view.append(list);
@@ -767,15 +769,16 @@ async function renderBrowse() {
 // reliably signals the end of the list (design D3/D4).
 const PAGE = 50;
 
-async function renderCategoryDocs(category, subcategory) {
+async function renderCategoryDocs(category, subcategory, tenantId) {
   const seq = ++_renderSeq;
   view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
-  // pageParams builds the query for one page; tenant_id carries on every page
-  // when a memFilter is active (design D5).
+  // pageParams builds the query for one page; tenant_id scopes it to the browse
+  // card's tenant when given (per-tenant catalog), else to the active memFilter (D5).
   const pageParams = (offset) => {
     const p = new URLSearchParams({ category, limit: String(PAGE), offset: String(offset) });
     if (subcategory) p.set("subcategory", subcategory);
-    if (memFilter) p.set("tenant_id", memFilter.id);
+    const tid = tenantId || (memFilter && memFilter.id);
+    if (tid) p.set("tenant_id", tid);
     return p;
   };
 

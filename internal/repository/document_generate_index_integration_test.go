@@ -67,3 +67,37 @@ func TestGenerateIndex_ScopeFiltersTenants(t *testing.T) {
 	require.True(t, gotFiltered[catB], "category filter keeps the matching category")
 	require.False(t, gotFiltered[catA], "category filter excludes non-matching categories")
 }
+
+// TestGenerateIndex_SummarySplitsByTenant locks the per-tenant summary contract:
+// the same category living in two tenants yields ONE row per tenant, each
+// carrying its own tenant id/name and its own doc count (not one merged row).
+func TestGenerateIndex_SummarySplitsByTenant(t *testing.T) {
+	db := openLintPG(t)
+	repo := repository.NewDocumentRepository(db)
+	ctx := context.Background()
+
+	tA, tB := uuid.New(), uuid.New()
+	nameA, nameB := "A-"+uuid.NewString(), "B-"+uuid.NewString()
+	require.NoError(t, db.Create(&models.Tenant{ID: tA, Name: nameA}).Error)
+	require.NoError(t, db.Create(&models.Tenant{ID: tB, Name: nameB}).Error)
+
+	cat := "shared-cat-" + uuid.NewString() // same category in BOTH tenants
+	require.NoError(t, db.Create(&models.Document{ID: uuid.New(), TenantID: tA, Category: cat, Slug: "s" + uuid.NewString(), Title: "A1", DocType: "learning"}).Error)
+	require.NoError(t, db.Create(&models.Document{ID: uuid.New(), TenantID: tA, Category: cat, Slug: "s" + uuid.NewString(), Title: "A2", DocType: "learning"}).Error)
+	require.NoError(t, db.Create(&models.Document{ID: uuid.New(), TenantID: tB, Category: cat, Slug: "s" + uuid.NewString(), Title: "B1", DocType: "learning"}).Error)
+
+	res, err := repo.GenerateIndex(ctx, []uuid.UUID{tA, tB}, repository.IndexDepthSummary, &cat)
+	require.NoError(t, err)
+
+	byTenant := make(map[uuid.UUID]repository.IndexEntry)
+	for _, e := range res {
+		if e.Category == cat {
+			byTenant[e.TenantID] = e
+		}
+	}
+	require.Len(t, byTenant, 2, "the shared category splits into one summary row per tenant")
+	require.Equal(t, nameA, byTenant[tA].TenantName, "row carries its tenant's name")
+	require.Equal(t, 2, byTenant[tA].DocCount, "per-tenant doc count, not a merged total")
+	require.Equal(t, nameB, byTenant[tB].TenantName)
+	require.Equal(t, 1, byTenant[tB].DocCount)
+}
