@@ -52,6 +52,10 @@ sboms:
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
 
+# Kept as the deterministic fallback: the release workflow supplies the Release
+# body via `--release-notes=NOTES.md` (harvested from PR descriptions). When that
+# harvest is empty or fails, `--release-notes` is omitted and GoReleaser falls
+# back to this grouped-commit changelog. See release.yml (design D5).
 changelog:
   sort: asc
   use: github
@@ -75,5 +79,8 @@ release:
   github:
     owner: eliminyro
     name: memory-system
-  draft: false
+  # Draft-gated so a maintainer reviews/edits the notes before publishing
+  # (design D4). The multi-arch image is pushed by the workflow's buildx step
+  # regardless of draft state, and archives/checksums/SBOMs attach to the draft.
+  draft: true
   prerelease: auto
