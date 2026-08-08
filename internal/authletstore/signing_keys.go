@@ -64,7 +64,7 @@ func (s *signingKeyStore) Insert(ctx context.Context, k storage.SigningKey) erro
 			// can't interleave into two active rows. Postgres-only: sqlite (the unit
 			// tests) has no advisory locks and already serializes transactions on a
 			// single connection, so the lock is unnecessary and absent there.
-			if tx.Dialector.Name() == "postgres" {
+			if tx.Name() == "postgres" {
 				if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(signingKeyActivateLock)).Error; err != nil {
 					return err
 				}
