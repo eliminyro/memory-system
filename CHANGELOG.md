@@ -13,6 +13,16 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.7.0] - 2026-08-08
+
+### Features
+
+- The default Memories page listed **category summary cards aggregated across all tenants** (`GROUP BY category, subcategory`), so a card had no single tenant and its spine fell back to the global accent. Per the chosen direction, the catalog now splits per tenant so every card is color-coded. ([#111](https://github.com/eliminyro/memory-system/pull/111))
+
+### Bug fixes
+
+- On the Memories list, each card's left spine is already tinted with its owning tenant's color (`--tc`), but the **hover glow** used the global accent (`--glow`), so hovering a memory lit it amber regardless of tenant. ([#110](https://github.com/eliminyro/memory-system/pull/110))
+
 ## [0.6.5] - 2026-08-08
 
 ### Bug fixes
