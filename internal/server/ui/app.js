@@ -155,6 +155,8 @@ const ICON_LOCK = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" s
 const ICON_WARN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
 const ICON_INFO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>';
 const ICON_UPLOAD = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
+// Public wildcard (user:*) member icon — deliberately not a person.
+const ICON_PUBLIC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>';
 
 // ── Console chrome: theme + accent (client-only, localStorage-backed) ─────────
 const _root = document.documentElement;
@@ -871,7 +873,7 @@ function buildLegend(rows) {
     const dot = el("span", { className: "dot" });
     dot.style.background = tenantColor(id);
     chip.append(dot, document.createTextNode((info.name || id) + " "), el("span", { className: "muted", textContent: "· " + info.count }));
-    chip.addEventListener("click", () => { memFilter = { id, name: info.name }; renderMemFilterChip(); renderMemories().catch(showError); });
+    chip.addEventListener("click", () => { memFilter = { id, name: info.name }; renderMemories().catch(showError); });
     legend.append(chip);
   }
   legend.append(el("span", { className: "total-pill" }, document.createTextNode("Total "), el("span", { className: "tnum", textContent: "· " + rows.length })));
@@ -882,7 +884,17 @@ function buildLegend(rows) {
 // create .addform. Commit POSTs /documents (tenant + path + title + first
 // section) and opens the new doc. Fields collapse via the add-form helper.
 function memHead() {
-  const head = el("div", { className: "view-head" }, el("h1", { textContent: "Memories" }));
+  const h1 = el("h1", { className: "mem-title", textContent: "Memories" });
+  if (memFilter) {
+    // Active tenant filter folds into the title as a click-to-clear chip (no ✕).
+    const chip = el("button", { className: "tenant-chip tenant-chip--clear", type: "button", title: "Clear tenant filter" });
+    const sw = el("span", { className: "tenant-swatch" });
+    sw.style.background = tenantColor(memFilter.id);
+    chip.append(sw, document.createTextNode(`viewing: ${memFilter.name || memFilter.id}`), el("span", { className: "clear-hint", textContent: "✕" }));
+    chip.addEventListener("click", () => { memFilter = null; renderMemories().catch(showError); });
+    h1.append(document.createTextNode(" "), chip);
+  }
+  const head = el("div", { className: "view-head" }, h1);
   const toggle = el("button", { className: "add-toggle", type: "button", textContent: "+ new memory" });
   head.append(toggle);
 
@@ -956,26 +968,11 @@ function memHead() {
   return [head, form];
 }
 
-// renderMemFilterChip fills #mem-filter-chip with the "viewing: <tenant> ✕" chip
-// when a tenant filter is active, or clears it when viewing the aggregate.
-function renderMemFilterChip() {
-  const c = document.getElementById("mem-filter-chip");
-  if (!c) return;
-  c.replaceChildren();
-  if (!memFilter) return;
-  const sw = el("span", { className: "tenant-swatch" });
-  sw.style.background = tenantColor(memFilter.id);
-  const x = el("button", { type: "button", className: "chip-x", textContent: "✕", title: "Clear tenant filter" });
-  x.addEventListener("click", () => { memFilter = null; renderMemFilterChip(); renderMemories().catch(showError); });
-  c.append(el("span", { className: "tenant-chip" }, sw, document.createTextNode(`viewing: ${memFilter.name || memFilter.id} `), x));
-}
-
 // renderMemories is the default view: the live search sits in the persistent
 // #memsearch bar (shown by route only here); results render into #view as
 // browse (empty query) or search (non-empty), both color-coded by tenant.
 async function renderMemories() {
   navStack.length = 0;
-  renderMemFilterChip();
   const q = document.getElementById("q");
   const term = q ? q.value.trim() : "";
   if (term) await runSearch(term);
@@ -1484,11 +1481,22 @@ function tenantMembersSection(tenantID) {
 function memberRow(tenantID, g, onRevoked) {
   const email = g.email || "";
   const local = email.replace(/@.*/, "");
-  const avatar = el("span", { className: "avatar", textContent: (local.slice(0, 2) || "?").toUpperCase() });
-  avatar.style.setProperty("--av", tenantColor(email || g.relation));
+  const isWildcard = g.subject_id === "*";
+  let avatar, nm, sub;
+  if (isWildcard) {
+    avatar = el("span", { className: "avatar wild" });
+    avatar.innerHTML = ICON_PUBLIC;
+    nm = "Public";
+    sub = "anyone (user:*)";
+  } else {
+    avatar = el("span", { className: "avatar", textContent: (local.slice(0, 2) || "?").toUpperCase() });
+    avatar.style.setProperty("--av", tenantColor(email || g.relation));
+    nm = local || email;
+    sub = email;
+  }
   const who = el("div", { className: "who" },
-    el("div", { className: "nm", textContent: local || email }),
-    el("small", { textContent: email }));
+    el("div", { className: "nm", textContent: nm }),
+    el("small", { textContent: sub }));
   const roleTag = el("span", { className: "role-tag" + (g.relation === "manager" ? " mgr" : ""), textContent: g.relation || "" });
   const revoke = el("button", { className: "btn btn--danger", type: "button", textContent: "Remove" });
   wireDestructiveAction(revoke, {
@@ -1500,7 +1508,7 @@ function memberRow(tenantID, g, onRevoked) {
     onDone: onRevoked,
     errorPrefix: "Revoke failed",
   });
-  return el("div", { className: "member-row" }, avatar, who, roleTag, el("div", { className: "row-actions" }, revoke));
+  return el("div", { className: "member-row" + (isWildcard ? " wild" : "") }, avatar, who, roleTag, el("div", { className: "row-actions" }, revoke));
 }
 
 // importSection — the upload/poll import flow (dropzone) with the target tenant
@@ -1796,10 +1804,9 @@ function aclDocumentSection() {
   sec.append(form);
   wireAddToggle(toggle, form);
 
-  const idInput = el("input", { className: "text-input", type: "text", placeholder: "document id" });
-  const loadBtn = el("button", { className: "btn", type: "button", textContent: "Load grants" });
+  const idInput = el("input", { className: "text-input", type: "text", placeholder: "document id — grants load as you type" });
   sec.append(el("div", { className: "admin-form-fields" },
-    el("span", { className: "admin-form-label", textContent: "Document:" }), idInput, loadBtn));
+    el("span", { className: "admin-form-label", textContent: "Document:" }), idInput));
 
   const body = el("div");
   sec.append(body);
@@ -1827,7 +1834,9 @@ function aclDocumentSection() {
     for (const g of list) body.append(grantRow(docID, doc, g, () => load(docID)));
   }
 
-  loadBtn.addEventListener("click", () => load().catch(showError));
+  // No button: typing/pasting a document id loads its grants (debounced).
+  let loadTimer;
+  idInput.addEventListener("input", () => { clearTimeout(loadTimer); loadTimer = setTimeout(() => load().catch(showError), 350); });
   idInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); load().catch(showError); } });
 
   gCommit.addEventListener("click", async () => {
