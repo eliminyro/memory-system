@@ -6,13 +6,16 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# BUILD_COMMIT is passed at build time (the release workflow sets it via
-# --build-arg) and stamped into the binary; builds without it report "unknown".
+# BUILD_* are passed at build time by the release workflow (--build-arg) and
+# stamped into the server binary so /~/version reports the real release — matching
+# how GoReleaser stamps the archive binaries. Dev builds fall back to the defaults.
 # TARGETOS/TARGETARCH are supplied automatically by buildx per target platform.
 ARG BUILD_COMMIT=unknown
+ARG BUILD_VERSION=dev
+ARG BUILD_DATE=
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
-    -ldflags="-X github.com/eliminyro/memory-system/internal/version.Commit=${BUILD_COMMIT}" \
+    -ldflags="-s -w -X github.com/eliminyro/memory-system/internal/version.Version=${BUILD_VERSION} -X github.com/eliminyro/memory-system/internal/version.Commit=${BUILD_COMMIT} -X github.com/eliminyro/memory-system/internal/version.Date=${BUILD_DATE}" \
     -o /memory-server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /memory-import ./cmd/import
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /memory-admin ./cmd/admin

@@ -44,6 +44,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: true
 
       - name: Compute next version
         id: version
@@ -254,6 +255,7 @@ jobs:
           dh=""
           [ -n "$DOCKERHUB_TOKEN" ] && dh="docker.io/eliminyro/memory-system"
           echo "dockerhub=${dh:+yes}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
             for repo in ghcr.io/eliminyro/memory-system $dh; do
@@ -284,7 +286,11 @@ jobs:
           push: true
           build-args: |
             BUILD_COMMIT=${{ github.sha }}
+            BUILD_VERSION=${{ steps.version.outputs.next }}
+            BUILD_DATE=${{ steps.img.outputs.date }}
           tags: ${{ steps.img.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # goreleaser-action installs goreleaser but not syft, which the .goreleaser
       # sboms config shells out to.
@@ -301,7 +307,7 @@ jobs:
         if: steps.version.outputs.should_release == 'true' && steps.gate.outputs.proceed == 'true'
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean ${{ steps.notescheck.outputs.release_notes_arg }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

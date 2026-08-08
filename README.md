@@ -59,10 +59,14 @@ direct grant on, while **writes stay scoped to a single tenant**.
 - **Duplicate guard** — an optional similarity check refuses near-duplicate writes,
   returning a `similar_exists` result so agents update instead of cloning.
 - **Cleanup pipeline** — a nightly scanner queues near-duplicate candidates and can post
-  a per-scan summary to Telegram.
-- **Admin CLI + web UI** — a `memory-admin` binary that operates directly against the
-  database (no server required, ideal for bootstrap), plus a small admin page served at
-  `/ui`.
+  a per-scan summary to Telegram, plus a companion sweep that hard-deletes long-dead
+  (revoked or expired) API keys past a configurable TTL so key listings stay tidy.
+- **Admin CLI + web console** — a `memory-admin` binary that operates directly against the
+  database (no server required, ideal for bootstrap), plus a full web console at `/ui`:
+  browse and edit memories (color-coded per owning tenant), manage tenants (create,
+  rename, delete), members and per-document ACL grants, and API keys (create, rotate,
+  revoke, purge), and run archive imports — every surface gated by the caller's
+  authorization.
 - **Self-service bootstrap & import** — a one-shot first-run setup gated by a token the
   server generates and logs at boot (no env var to manage), available over HTTP or CLI,
   plus an async, job-based document-archive import (admin UI, HTTP, or CLI), so a fresh
@@ -160,10 +164,12 @@ Ollama deploy works out of the box.
 | `RETENTION_MULTIPLIER` | `3` | Archive after this × the doc_type staleness threshold; must be `>= 1`. |
 | `RETENTION_DELETE_GRACE_DAYS` | `30` | Hard-delete this many days after archiving; must be `>= 1`. |
 | `CLEANUP_ENABLED` | `true` | Enable the nightly near-duplicate / retention scanner. |
-| `CLEANUP_INTERVAL_HOURS` | `24` | Scan interval. |
+| `CLEANUP_INTERVAL_HOURS` | `24` | Scan interval (shared by the dead-key sweep below). |
+| `DEAD_KEY_TTL_DAYS` | `7` | Nightly sweep hard-deletes API keys dead (revoked or expired) longer than this many days, so retired keys stop cluttering listings. `0` disables it — keys are then removed only via the console's manual **Delete**. |
 | `TELEGRAM_BOT_TOKEN` | *(unset)* | Optional — post a per-scan cleanup summary. |
 | `TELEGRAM_CHAT_ID` | *(unset)* | Optional — target chat for the summary. |
 | `MEMORY_DEFAULT_OPTS` | *(safe bundle)* | Per-tenant toggle defaults, applied at **tenant-create time only** (existing tenants keep their settings). The built-in default is the safe bundle `staleness=hard,duplicate_guard=true,cleanup_scan_enabled=true`; override to loosen, e.g. `staleness=off,duplicate_guard=false,cleanup_scan_enabled=false`. See [`docs/administering.md`](docs/administering.md#retention-defaults-for-new-tenants). |
+| `MEMORY_SELF_SERVICE_POLICY` | `open` | Global default for the self-service gate (`open` \| `admin_only`) over per-tenant settings editing and API-key creation. `open` lets a tenant's manager/owner self-serve; `admin_only` raises both to system-admin. A per-tenant override (set by an admin) takes precedence. |
 | `AUTHLET_MASTER_KEY` | *(unset)* | 32-byte hex key encrypting OAuth signing material at rest. |
 | `MEMORY_MCP_GOOGLE_CLIENT_ID` | *(unset)* | OAuth opt-in (set **with** the secret). |
 | `MEMORY_MCP_GOOGLE_CLIENT_SECRET` | *(unset)* | OAuth opt-in (set **with** the client id). |
