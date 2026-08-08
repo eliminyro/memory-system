@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <button class="pixel" id="accent-btn" aria-haspopup="true" aria-expanded="false" aria-label="Accent color" title="Accent color"></button>
+      <span class="brand-name">memory<small>/ console</small></span>
+      <div class="accent-pop" id="accent-pop" hidden>
+        <span class="eyebrow">accent</span>
+        <div class="pop-swatches">
+          <button class="sw" data-accent="amber" type="button" title="Amber"></button>
+          <button class="sw" data-accent="green" type="button" title="Phosphor green"></button>
+          <button class="sw" data-accent="cyan" type="button" title="Cyan"></button>
+          <button class="sw" data-accent="violet" type="button" title="Violet"></button>
+          <button class="sw" data-accent="rose" type="button" title="Rose"></button>
+        </div>
+      </div>
+    </div>
+    <nav id="tabbar" class="nav" aria-label="Primary"></nav>
+    <div class="top-right">
+      <button class="icon-btn" id="theme" type="button" title="Toggle theme" aria-label="Toggle light/dark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" id="theme-icon"></svg>
+      </button>
+    </div>
+  </div>
+  <div id="memsearch" class="memsearch" hidden>
+    <div class="searchbar">
+      <svg class="mag" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+      <input id="q" type="search" placeholder="search memory…" autocomplete="off" spellcheck="false">
+      <span class="kbd">/</span>
+    </div>
+  </div>
+  <main id="view"></main>
+  <script src="/ui/vendor/marked.min.js"></script>
+  <script src="/ui/vendor/purify.min.js"></script>
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>

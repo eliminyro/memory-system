@@ -1,0 +1,183 @@
+package authz
+
+// RewriteKind identifies one child of a relation's userset-rewrite union.
+type RewriteKind int
+
+const (
+	// RewriteThis: direct tuples on (object, relation), including a user:* wildcard.
+	RewriteThis RewriteKind = iota
+	// RewriteComputedUserset: subjects with Relation on the SAME object (sibling
+	// relation, e.g. "member" includes "admin").
+	RewriteComputedUserset
+	// RewriteTupleToUserset: follow a parent edge — read (object, Tupleset) tuples
+	// for parent objects, then eval ComputedRelation on each (e.g. doc editor ==
+	// "member from tenant").
+	RewriteTupleToUserset
+)
+
+// Rewrite is a single child of a relation's union rewrite rule.
+type Rewrite struct {
+	Kind RewriteKind
+
+	// Relation is the sibling relation to evaluate (RewriteComputedUserset).
+	Relation string
+
+	// Tupleset is the parent-edge relation read on the object; ComputedRelation
+	// is evaluated on each referenced parent (RewriteTupleToUserset).
+	Tupleset         string
+	ComputedRelation string
+}
+
+// RelationDef defines one relation within a type: the direct subject specs its
+// `this` clause allows (documentation only — Check does not enforce subject
+// typing) and the union of rewrite rules defining membership.
+type RelationDef struct {
+	Name           string
+	DirectSubjects []string
+	Rewrites       []Rewrite
+}
+
+// TypeDef is the set of relations defined on an object type.
+type TypeDef struct {
+	Name      string
+	Relations map[string]RelationDef
+}
+
+// Namespace is the fixed, non-user-editable authorization model; DefaultNamespace
+// returns the single canonical instance.
+type Namespace struct {
+	Types map[string]TypeDef
+}
+
+// Relation returns the definition of objType#relation, or ok=false if absent.
+func (n Namespace) Relation(objType, relation string) (RelationDef, bool) {
+	t, ok := n.Types[objType]
+	if !ok {
+		return RelationDef{}, false
+	}
+	rd, ok := t.Relations[relation]
+	return rd, ok
+}
+
+func thisRewrite() Rewrite { return Rewrite{Kind: RewriteThis} }
+
+func computed(relation string) Rewrite {
+	return Rewrite{Kind: RewriteComputedUserset, Relation: relation}
+}
+
+func from(tupleset, computedRelation string) Rewrite {
+	return Rewrite{Kind: RewriteTupleToUserset, Tupleset: tupleset, ComputedRelation: computedRelation}
+}
+
+// DefaultNamespace returns the fixed memory-system authorization model (design D1):
+//
+//	type user
+//	type system
+//	  admin:   [user]
+//	type tenant
+//	  system:  [system]                        # parent edge (seeded at tenant create)
+//	  admin:   [user] or admin from system      # tenant admins ∪ global admins
+//	  owner:   [user]                           # personal-tenant owner (⊆ manager, ⊄ admin)
+//	  manager: [user] or admin or owner         # admins AND owners are managers
+//	  member:  [user] or manager                # managers are members
+//	  viewer:  [user:*] or member               # wildcard enables public read
+//	type document
+//	  tenant:  [tenant]                         # parent edge (set at document create)
+//	  viewer:  [user] or editor or viewer from tenant  # editors read too
+//	  editor:  [user] or member from tenant
+//
+// Inclusion chains: system#admin ⊆ tenant#admin ⊆ tenant#manager ⊆ tenant#member
+// ⊆ tenant#viewer, and tenant#owner ⊆ tenant#manager (owner ⊄ admin: an owner is a
+// full manager of their own tenant but is NOT a system admin). document#editor ⊆
+// document#viewer. No rewrite cycle (owner is a `this`-only leaf; the deepest chain
+// still runs viewer → editor → member-from-tenant → …#admin → system#admin, no
+// back-edge to viewer). manager gains one extra union branch (computed(owner)), but
+// that branch is a shallow leaf, so the deepest Check chain (system admin reading a
+// doc, via the admin branch) is unchanged at depth 5 — well under DefaultMaxDepth (16).
+func DefaultNamespace() Namespace {
+	return Namespace{
+		Types: map[string]TypeDef{
+			TypeUser: {
+				Name:      TypeUser,
+				Relations: map[string]RelationDef{},
+			},
+			TypeSystem: {
+				Name: TypeSystem,
+				Relations: map[string]RelationDef{
+					RelAdmin: {
+						Name:           RelAdmin,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite()},
+					},
+				},
+			},
+			TypeTenant: {
+				Name: TypeTenant,
+				Relations: map[string]RelationDef{
+					// Parent edge to the singleton system object.
+					RelSystem: {
+						Name:           RelSystem,
+						DirectSubjects: []string{TypeSystem},
+						Rewrites:       []Rewrite{thisRewrite()},
+					},
+					// Direct tenant admins ∪ global admins (admin from system).
+					RelAdmin: {
+						Name:           RelAdmin,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite(), from(RelSystem, RelAdmin)},
+					},
+					// Personal-tenant owner. A `this`-only leaf: owners fold up into
+					// manager (owner ⇒ manager) but never into admin, so they are NOT
+					// system admins and cannot reach other tenants via the system edge.
+					RelOwner: {
+						Name:           RelOwner,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite()},
+					},
+					// Direct managers ∪ admins ∪ owners (admins and owners are managers).
+					RelManager: {
+						Name:           RelManager,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelAdmin), computed(RelOwner)},
+					},
+					// Direct members ∪ managers.
+					RelMember: {
+						Name:           RelMember,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelManager)},
+					},
+					// Public wildcard read ∪ members. this allows user:*.
+					RelViewer: {
+						Name:           RelViewer,
+						DirectSubjects: []string{TypeUser, TypeUser + ":" + Wildcard},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelMember)},
+					},
+				},
+			},
+			TypeDocument: {
+				Name: TypeDocument,
+				Relations: map[string]RelationDef{
+					// Parent edge to the owning tenant.
+					RelTenant: {
+						Name:           RelTenant,
+						DirectSubjects: []string{TypeTenant},
+						Rewrites:       []Rewrite{thisRewrite()},
+					},
+					// Direct viewers ∪ editors ∪ viewers of the owning tenant.
+					// computed(editor) makes every editor a viewer (editor ⇒ viewer).
+					RelViewer: {
+						Name:           RelViewer,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite(), computed(RelEditor), from(RelTenant, RelViewer)},
+					},
+					// Direct editors ∪ members of the owning tenant.
+					RelEditor: {
+						Name:           RelEditor,
+						DirectSubjects: []string{TypeUser},
+						Rewrites:       []Rewrite{thisRewrite(), from(RelTenant, RelMember)},
+					},
+				},
+			},
+		},
+	}
+}

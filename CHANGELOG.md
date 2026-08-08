@@ -1,0 +1,141 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Version sections below are generated automatically on each release from the
+descriptions of the merged pull requests — see the pull request template for the
+`## Release notes` convention that feeds them.
+
+## [Unreleased]
+
+<!-- INSERT NEW RELEASES BELOW -->
+
+## [0.7.0] - 2026-08-08
+
+### Features
+
+- The default Memories page listed **category summary cards aggregated across all tenants** (`GROUP BY category, subcategory`), so a card had no single tenant and its spine fell back to the global accent. Per the chosen direction, the catalog now splits per tenant so every card is color-coded. ([#111](https://github.com/eliminyro/memory-system/pull/111))
+
+### Bug fixes
+
+- On the Memories list, each card's left spine is already tinted with its owning tenant's color (`--tc`), but the **hover glow** used the global accent (`--glow`), so hovering a memory lit it amber regardless of tenant. ([#110](https://github.com/eliminyro/memory-system/pull/110))
+
+## [0.6.5] - 2026-08-08
+
+### Bug fixes
+
+- The new-tenant **Type** (personal/shared) rocker sits in a stacked `.af-row`, so the segmented control stretched to the full row width (buttons left, empty bordered space right). ([#109](https://github.com/eliminyro/memory-system/pull/109))
+
+## [0.6.4] - 2026-08-08
+
+### Bug fixes
+
+- Rework of the new-memory tenant picker to match the intended search UX. ([#108](https://github.com/eliminyro/memory-system/pull/108))
+
+## [0.6.3] - 2026-08-08
+
+### Bug fixes
+
+- Follow-up UI/mobile fixes from QA. ([#107](https://github.com/eliminyro/memory-system/pull/107))
+
+## [0.6.2] - 2026-08-08
+
+### Bug fixes
+
+- UI fixes from the memtest QA pass. ([#106](https://github.com/eliminyro/memory-system/pull/106))
+
+## [0.6.1] - 2026-08-08
+
+### Bug fixes
+
+- Mobile-layout polish from the QA pass. CSS-only + one HTML tweak (no JS, no Go). All in a single `@media (max-width: 640px)` block. ([#105](https://github.com/eliminyro/memory-system/pull/105))
+
+## [0.6.0] - 2026-08-08
+
+### Features
+
+- QA-pass polish + fixes from the memtest walkthrough. One bundled PR. ([#104](https://github.com/eliminyro/memory-system/pull/104))
+
+## [0.5.0] - 2026-08-08
+
+### Features
+
+- **Category browse is paginated with infinite scroll.** The category view loads a page at a time and appends more as you scroll, instead of fetching an entire category at once (the one unbounded list — a slow query + heavy payload + growing DOM). `GET /api/documents` gained clamped `limit`/`offset`; internal callers (MCP `list_documents`, CLI) are unaffected. - **Tenant-tab rocker is smooth.** Shared/Personal both load once up front and switching only re-draws the grid, so the thumb slides cleanly with no reload flash. Also dropped the redundant scope pill on tenant cards — the rocker already splits them. ([#103](https://github.com/eliminyro/memory-system/pull/103))
+
+## [0.4.0] - 2026-08-08
+
+### Features
+
+- Document grants now load **as you type** the id — the "Load grants" button is gone (debounced auto-load). - The public-wildcard (`user:*`) member now shows a distinct "world-readable" eye icon + a "Public" label instead of a person-style letter avatar, so it never reads as a user. - The "viewing: <tenant>" filter chip moved into the **Memories** title as a **click-to-clear** pill — no ✕; hovering makes it obvious the whole chip clears the filter. ([#102](https://github.com/eliminyro/memory-system/pull/102))
+
+## [0.3.1] - 2026-08-08
+
+### Bug fixes
+
+- CI: the release-notes harvester can read PR titles/bodies/labels again — the release job was missing `pull-requests: read`. ([#101](https://github.com/eliminyro/memory-system/pull/101))
+
+## [0.3.0] - 2026-08-08
+
+### Features
+
+- feat(release): PR-sourced changelog with Telegram-gated publish (#99) ([#99](https://github.com/eliminyro/memory-system/pull/99))
+- feat(ui): amber-phosphor console redesign + create-doc & tenant-settings APIs (#75) ([#75](https://github.com/eliminyro/memory-system/pull/75))
+- feat(authz): optional admin-only lock on tenant self-service (#73) ([#73](https://github.com/eliminyro/memory-system/pull/73))
+- feat(authz): add personal-tenant owner relation (#72) ([#72](https://github.com/eliminyro/memory-system/pull/72))
+- feat(ui): tab restructure, aggregated color-coded memories, per-tenant panel (#66) ([#66](https://github.com/eliminyro/memory-system/pull/66))
+- feat: enforce tenant-type operation rules in the service (#65) ([#65](https://github.com/eliminyro/memory-system/pull/65))
+- feat: MCP admin/ACL parity + cross-tenant get_related (#64) ([#64](https://github.com/eliminyro/memory-system/pull/64))
+- feat: aggregate memory reads across the caller's readable tenants (#62) ([#62](https://github.com/eliminyro/memory-system/pull/62))
+- feat: self-serve OAuth signup, tenant type, safe retention defaults (#61) ([#61](https://github.com/eliminyro/memory-system/pull/61))
+- feat(ui): ACL management page + manager import/ACL affordances (#60) ([#60](https://github.com/eliminyro/memory-system/pull/60))
+- feat: delegated ACL management backend (manager role, per-doc sharing) (#59) ([#59](https://github.com/eliminyro/memory-system/pull/59))
+- feat(ui): dedicated import page with target-tenant picker (#58) ([#58](https://github.com/eliminyro/memory-system/pull/58))
+- feat: bootstrap OAuth status + mode tabs; auto-register /ui OAuth client (#52) ([#52](https://github.com/eliminyro/memory-system/pull/52))
+
+### Bug fixes
+
+- fix(ci): green golangci-lint (drop dead funcs, pin config, node24 action) (#100) ([#100](https://github.com/eliminyro/memory-system/pull/100))
+- fix: operational-resilience hardening (migrate lock, timeouts, panic recovery) (#97) ([#97](https://github.com/eliminyro/memory-system/pull/97))
+- fix(security): stop telegram-token log leak, cap zip imports, bump vuln deps (#93) ([#93](https://github.com/eliminyro/memory-system/pull/93))
+- fix: harden background workers + key rotation against multi-replica concurrency (#92) ([#92](https://github.com/eliminyro/memory-system/pull/92))
+- fix(authz): manager-gate tenant toggles; enforce wildcard subject typing (#91) ([#91](https://github.com/eliminyro/memory-system/pull/91))
+- fix: harden store concurrency + client lifecycle (signing keys, imports, grants) (#89) ([#89](https://github.com/eliminyro/memory-system/pull/89))
+- fix: clamp lint scan bounds, gcp fail-fast, rate-limit proxy-depth warning (#88) ([#88](https://github.com/eliminyro/memory-system/pull/88))
+- fix(ui): correct render-seq guard, add view error handling + dropzone drop (#87) ([#87](https://github.com/eliminyro/memory-system/pull/87))
+- fix: stop MCP internal-error leak, fix update_section + search/apikey parity (#86) ([#86](https://github.com/eliminyro/memory-system/pull/86))
+- fix: harden persistence integrity — partial path index, retention, import (#85) ([#85](https://github.com/eliminyro/memory-system/pull/85))
+- fix(authz): atomic role changes, svc-admin reconcile, prune doc tuples on delete (#84) ([#84](https://github.com/eliminyro/memory-system/pull/84))
+- fix(auth): physically purge expired refresh tokens (#83) ([#83](https://github.com/eliminyro/memory-system/pull/83))
+- fix(ui): guard stale renders, stop poll leak, de-dup UI helpers (#82) ([#82](https://github.com/eliminyro/memory-system/pull/82))
+- fix: spoof-safe rate-limit IP, reset ordering, http/service DRY (#81) ([#81](https://github.com/eliminyro/memory-system/pull/81))
+- fix: unify MCP tool error mapping + de-dup error/tuple helpers (#80) ([#80](https://github.com/eliminyro/memory-system/pull/80))
+- fix: hybrid-fusion boost + shared document path validation (#79) ([#79](https://github.com/eliminyro/memory-system/pull/79))
+- fix: harden tenant-scoped data integrity (repository + service) (#78) ([#78](https://github.com/eliminyro/memory-system/pull/78))
+- fix: correct OAuth per-user identity and by-id delete tenant scoping (#77) ([#77](https://github.com/eliminyro/memory-system/pull/77))
+- fix(ui): wire standalone segmented rockers, not just descendants (#76) ([#76](https://github.com/eliminyro/memory-system/pull/76))
+- fix(tenant): apply operator toggle defaults at tenant creation (#71) ([#71](https://github.com/eliminyro/memory-system/pull/71))
+- fix(ui): active tab underline sits on the header's bottom line (#70) ([#70](https://github.com/eliminyro/memory-system/pull/70))
+- fix(ui): collapse the "+ New tenant" form until toggled (#69) ([#69](https://github.com/eliminyro/memory-system/pull/69))
+- fix: aggregate generate_index across the readable tenant set (#67) ([#67](https://github.com/eliminyro/memory-system/pull/67))
+- fix: refuse self-serve auto-provision until the instance is bootstrapped (#63) ([#63](https://github.com/eliminyro/memory-system/pull/63))
+- fix(ui): unify top-level nav on a single hash router (#57) ([#57](https://github.com/eliminyro/memory-system/pull/57))
+- fix: clearer founding-admin-email help on the bootstrap page (#56) ([#56](https://github.com/eliminyro/memory-system/pull/56))
+- fix: OAuth-first bootstrap success + break-glass key copy + MCP config snippets (#55) ([#55](https://github.com/eliminyro/memory-system/pull/55))
+- fix: OAuth status as green/red badge; provider-neutral copy; no-store /ui assets (#54) ([#54](https://github.com/eliminyro/memory-system/pull/54))
+- fix: no-store the bootstrap setup surface; style mode selectors as tabs (#53) ([#53](https://github.com/eliminyro/memory-system/pull/53))
+- fix: bootstrap founding-admin as system admin; /ui empty-state + MCP connect (#51) ([#51](https://github.com/eliminyro/memory-system/pull/51))
+- fix: ignore ErrRecordNotFound in gorm logger to stop import-worker poll spam (#50) ([#50](https://github.com/eliminyro/memory-system/pull/50))
+
+### Other changes
+
+- refactor: cut N+1s and duplication across authz, service, and HTTP surface (#90) ([#90](https://github.com/eliminyro/memory-system/pull/90))
+- refactor(ui): drop the redundant Admin tab; Tenants tab owns tenant management (#68) ([#68](https://github.com/eliminyro/memory-system/pull/68))
+
+---
+
+Releases **v0.1.0** and **v0.2.0** predate this changelog; see the
+[GitHub Releases](https://github.com/eliminyro/memory-system/releases) page for
+their notes.

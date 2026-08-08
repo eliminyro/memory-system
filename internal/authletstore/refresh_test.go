@@ -1,0 +1,175 @@
+package authletstore
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/eliminyro/authlet/pkg/storage"
+)
+
+func TestRefreshStore_SaveAndGet(t *testing.T) {
+	s := New(openTestDB(t))
+	ctx := context.Background()
+
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if err := s.RefreshTokens().Save(ctx, storage.RefreshToken{
+		TokenHash: "h0", FamilyID: "fam0", ClientID: "c", UserID: "u",
+		Resource: "r", Scope: "s", ExpiresAt: exp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RefreshTokens().Get(ctx, "h0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TokenHash != "h0" || got.FamilyID != "fam0" || got.ClientID != "c" {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestRefreshStore_MarkUsedReuseDetection(t *testing.T) {
+	s := New(openTestDB(t))
+	ctx := context.Background()
+	if err := s.RefreshTokens().Save(ctx, storage.RefreshToken{
+		TokenHash: "h1", FamilyID: "fam", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshTokens().MarkUsed(ctx, "h1", "h2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshTokens().MarkUsed(ctx, "h1", "h3"); !errors.Is(err, storage.ErrAlreadyConsumed) {
+		t.Fatalf("expected ErrAlreadyConsumed on reuse, got %v", err)
+	}
+}
+
+func TestRefreshStore_MarkUsedNotFound(t *testing.T) {
+	s := New(openTestDB(t))
+	ctx := context.Background()
+	if err := s.RefreshTokens().MarkUsed(ctx, "ghost", "x"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRefreshStore_RevokeFamilyBlocksGet(t *testing.T) {
+	s := New(openTestDB(t))
+	ctx := context.Background()
+	if err := s.RefreshTokens().Save(ctx, storage.RefreshToken{
+		TokenHash: "h1", FamilyID: "fam", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshTokens().RevokeFamily(ctx, "fam"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RefreshTokens().Get(ctx, "h1"); !errors.Is(err, storage.ErrFamilyRevoked) {
+		t.Fatalf("expected ErrFamilyRevoked, got %v", err)
+	}
+}
+
+func TestRefreshStore_IsFamilyRevoked(t *testing.T) {
+	s := New(openTestDB(t))
+	ctx := context.Background()
+
+	ok, err := s.RefreshTokens().IsFamilyRevoked(ctx, "famX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("expected false for unknown family")
+	}
+
+	if err := s.RefreshTokens().RevokeFamily(ctx, "famX"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = s.RefreshTokens().IsFamilyRevoked(ctx, "famX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("expected true after revoke")
+	}
+
+	// Double-revoke is a no-op.
+	if err := s.RefreshTokens().RevokeFamily(ctx, "famX"); err != nil {
+		t.Fatalf("double revoke should be no-op, got %v", err)
+	}
+}
+
+func TestRefreshStore_DeleteExpired(t *testing.T) {
+	db := openTestDB(t)
+	s := New(db)
+	ctx := context.Background()
+
+	old := time.Now().Add(-2 * time.Hour)
+	fresh := time.Now().Add(time.Hour)
+	if err := s.RefreshTokens().Save(ctx, storage.RefreshToken{TokenHash: "old", FamilyID: "f1", ExpiresAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshTokens().Save(ctx, storage.RefreshToken{TokenHash: "new", FamilyID: "f2", ExpiresAt: fresh}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.RefreshTokens().DeleteExpired(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 deleted, got %d", n)
+	}
+	if _, err := s.RefreshTokens().Get(ctx, "old"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("expected old gone, got %v", err)
+	}
+
+	// B5 regression: the expired row must be PHYSICALLY deleted, not merely
+	// soft-deleted (revoked_at set). Unscoped bypasses the gorm.DeletedAt filter;
+	// the buggy soft-delete would leave the row present here (count 1).
+	var remaining int64
+	if err := db.Unscoped().Model(&OAuthRefreshToken{}).
+		Where("token_hash = ?", "old").Count(&remaining).Error; err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expired token was soft-deleted, not physically removed (found %d rows); DeleteExpired must Unscoped-delete", remaining)
+	}
+}
+
+// TestRefreshStore_DeleteExpiredPrunesFamilyTombstones proves DeleteExpired also
+// reclaims oauth_revoked_families rows older than the 90d retention (A2), while
+// sparing recent ones — otherwise tombstones grow unbounded forever.
+func TestRefreshStore_DeleteExpiredPrunesFamilyTombstones(t *testing.T) {
+	db := openTestDB(t)
+	s := New(db)
+	ctx := context.Background()
+
+	now := time.Now()
+	// Revoked 100d ago: past the 90d retention window → pruned.
+	if err := db.Create(&FamilyRevocation{FamilyID: "old-fam", RevokedAt: now.Add(-100 * 24 * time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Revoked 1d ago: still well within the window → retained.
+	if err := db.Create(&FamilyRevocation{FamilyID: "recent-fam", RevokedAt: now.Add(-24 * time.Hour)}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.RefreshTokens().DeleteExpired(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRevoked, err := s.RefreshTokens().IsFamilyRevoked(ctx, "old-fam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldRevoked {
+		t.Fatal("family revoked >90d ago should have been pruned from oauth_revoked_families")
+	}
+	recentRevoked, err := s.RefreshTokens().IsFamilyRevoked(ctx, "recent-fam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recentRevoked {
+		t.Fatal("family revoked 1d ago must be retained")
+	}
+}
