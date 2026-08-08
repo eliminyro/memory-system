@@ -992,7 +992,10 @@ function memHead() {
   // (WritableTenants returns {tenant, relation}). Empty defaults to your personal
   // tenant; each suggestion shows the tenant type. Replaces the old <select>.
   const tOpts = writableTenants.map((t) => ({ id: t.tenant.id, name: t.tenant.name || t.tenant.id, type: t.tenant.type, relation: t.relation }));
-  const tDefault = tOpts.find((o) => o.type === "personal" && o.relation === "owner") || tOpts[0] || null;
+  // Prefer the caller's own personal tenant: relation "owner" for a normal user;
+  // a system admin sees every tenant labeled "admin", so fall back to the first
+  // personal-type tenant (their own on a single-user instance) before the pool.
+  const tDefault = tOpts.find((o) => o.relation === "owner") || tOpts.find((o) => o.type === "personal") || tOpts[0] || null;
   let tSelected = tDefault;
   const tenantValue = () => (tSelected ? tSelected.id : "");
   const tInput = el("input", { className: "text-input", type: "text", autocomplete: "off", placeholder: tOpts.length ? "type to filter tenants…" : "(no writable tenant)" });
@@ -1000,8 +1003,8 @@ function memHead() {
   if (tDefault) tInput.value = tDefault.name;
   const tMenu = el("div", { className: "combo-menu" });
   tMenu.hidden = true;
-  function tRenderMenu() {
-    const f = tInput.value.trim().toLowerCase();
+  function tRenderMenu(filter) {
+    const f = String(filter || "").trim().toLowerCase();
     const shown = tOpts.filter((o) => !f || o.name.toLowerCase().includes(f) || o.id.toLowerCase().includes(f));
     tMenu.replaceChildren();
     if (!shown.length) { tMenu.hidden = true; return; }
@@ -1013,8 +1016,8 @@ function memHead() {
     }
     tMenu.hidden = false;
   }
-  tInput.addEventListener("focus", tRenderMenu);
-  tInput.addEventListener("input", () => { tSelected = null; tRenderMenu(); });
+  tInput.addEventListener("focus", () => { tInput.select(); tRenderMenu(""); });
+  tInput.addEventListener("input", () => { tSelected = null; tRenderMenu(tInput.value); });
   tInput.addEventListener("blur", () => setTimeout(() => {
     tMenu.hidden = true;
     if (!tSelected) {
