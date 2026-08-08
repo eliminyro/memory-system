@@ -140,12 +140,18 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		return err
 	}
 
-	// Bootstrap tenant: insert default tenant for existing data
-	if err := tx.Exec(`
-		INSERT INTO tenants (id, name, email, created_at, updated_at)
-		VALUES ('00000000-0000-0000-0000-000000000001', 'default', '', NOW(), NOW())
+	// Bootstrap tenant: insert the default tenant for existing data, carrying the
+	// operator-chosen toggle defaults (td). This insert runs before the ALTER COLUMN
+	// SET DEFAULT block below, so it must set the toggles explicitly or the default
+	// pool would fall to the static off/false/false column defaults and diverge from
+	// every tenant created via CreateTenant. td is pre-validated by
+	// config.ParseTenantDefaults, so interpolation is safe (DDL rejects bind params).
+	bootstrapSQL := fmt.Sprintf(`
+		INSERT INTO tenants (id, name, email, staleness_mode, duplicate_guard, cleanup_scan_enabled, created_at, updated_at)
+		VALUES ('00000000-0000-0000-0000-000000000001', 'default', '', '%s', %t, %t, NOW(), NOW())
 		ON CONFLICT (id) DO NOTHING
-	`).Error; err != nil {
+	`, td.StalenessMode, td.DuplicateGuard, td.CleanupScanEnabled)
+	if err := tx.Exec(bootstrapSQL).Error; err != nil {
 		return fmt.Errorf("bootstrap tenant: %w", err)
 	}
 

@@ -110,3 +110,13 @@ func (r *APIKeyRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 	return nil
 }
+
+// PurgeDeadBefore hard-deletes keys that went dead — revoked or expired — strictly
+// before cutoff, so long-retired keys stop cluttering listings. Returns the number
+// of rows removed. Used by the scheduled dead-key sweep.
+func (r *APIKeyRepository) PurgeDeadBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	result := r.db.WithContext(ctx).
+		Where("(revoked_at IS NOT NULL AND revoked_at < ?) OR (expires_at IS NOT NULL AND expires_at < ?)", cutoff, cutoff).
+		Delete(&models.APIKey{})
+	return result.RowsAffected, result.Error
+}

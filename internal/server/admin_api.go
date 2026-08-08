@@ -65,11 +65,13 @@ func (h *adminAPIHandler) mux() *http.ServeMux {
 	m.HandleFunc("GET /tenants", h.listTenants)
 	m.HandleFunc("POST /tenants", h.createTenant)
 	m.HandleFunc("PATCH /tenants/{id}", h.updateTenant)
+	m.HandleFunc("DELETE /tenants/{id}", h.deleteTenant)
 	m.HandleFunc("GET /tenants/{id}/users", h.listUsers)
 	m.HandleFunc("GET /tenants/{id}/keys", h.listKeys)
 	m.HandleFunc("POST /tenants/{id}/keys", h.createKey)
 	m.HandleFunc("POST /keys/{id}/rotate", h.rotateKey)
 	m.HandleFunc("DELETE /keys/{id}", h.revokeKey)
+	m.HandleFunc("DELETE /keys/{id}/purge", h.deleteKey)
 	m.HandleFunc("POST /users", h.grantUser)
 	m.HandleFunc("PATCH /users", h.updateUserRole)
 	m.HandleFunc("DELETE /users", h.revokeUser)
@@ -189,6 +191,20 @@ func (h *adminAPIHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// deleteKey hard-deletes an already-revoked key (DELETE /keys/{id}/purge), for
+// cleaning revoked rows out of the list. Soft revoke stays on DELETE /keys/{id}.
+func (h *adminAPIHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "id", "key")
+	if !ok {
+		return
+	}
+	if err := h.memory.DeleteAPIKey(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *adminAPIHandler) grantUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string `json:"email"`
@@ -212,28 +228,53 @@ func (h *adminAPIHandler) grantUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateTenant is the admin-only tenant patcher (PATCH /admin/tenants/{id}). The
-// UI wires it to the self-service-lock rocker, so it accepts only
-// self_service_policy (open | admin_only | inherit — the last clears the override
-// to NULL) and returns the settings projection. The /admin mux is adminOnly-gated
-// and UpdateTenant re-checks requireAdmin (defense in depth). The lock stays
-// admin-only by design — never wired to the self-service settings surface.
+// UI wires it to the self-service-lock rocker (self_service_policy: open |
+// admin_only | inherit — the last clears the override to NULL) and to the panel
+// rename affordance (name). It returns the settings projection. The /admin mux is
+// adminOnly-gated and UpdateTenant re-checks requireAdmin (defense in depth). The
+// lock stays admin-only by design — never wired to the self-service settings surface.
 func (h *adminAPIHandler) updateTenant(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(w, r, "id", "tenant")
 	if !ok {
 		return
 	}
 	var body struct {
+		Name              *string `json:"name"`
 		SelfServicePolicy *string `json:"self_service_policy"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	t, err := h.memory.UpdateTenant(r.Context(), id, service.UpdateTenantFields{SelfServicePolicy: body.SelfServicePolicy})
+	fields := service.UpdateTenantFields{SelfServicePolicy: body.SelfServicePolicy}
+	if body.Name != nil {
+		n := strings.TrimSpace(*body.Name)
+		if n == "" {
+			writeError(w, http.StatusBadRequest, "name cannot be empty")
+			return
+		}
+		fields.Name = &n
+	}
+	t, err := h.memory.UpdateTenant(r.Context(), id, fields)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, settingsResponse(t))
+}
+
+// deleteTenant hard-deletes a tenant and all of its data — documents, sections,
+// keys, jobs, and authz tuples (DELETE /admin/tenants/{id}). admin-only; the
+// service refuses the bootstrap/default tenant.
+func (h *adminAPIHandler) deleteTenant(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "id", "tenant")
+	if !ok {
+		return
+	}
+	if err := h.memory.DeleteTenant(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *adminAPIHandler) updateUserRole(w http.ResponseWriter, r *http.Request) {

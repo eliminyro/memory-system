@@ -274,6 +274,33 @@ func main() {
 		cleanupScanner.Start(rootCtx, time.Duration(cfg.CleanupIntervalHours)*time.Hour)
 	}
 
+	// Dead-key sweep — hard-deletes API keys dead (revoked/expired) longer than
+	// DEAD_KEY_TTL_DAYS so retired keys stop cluttering listings. Shares the cleanup
+	// cadence and rootCtx lifecycle; sweeps once at startup then on the interval.
+	if cfg.DeadKeyTTLDays > 0 {
+		deadKeyTTL := time.Duration(cfg.DeadKeyTTLDays) * 24 * time.Hour
+		sweepInterval := time.Duration(cfg.CleanupIntervalHours) * time.Hour
+		if sweepInterval <= 0 {
+			sweepInterval = 24 * time.Hour
+		}
+		go func() {
+			t := time.NewTicker(sweepInterval)
+			defer t.Stop()
+			for {
+				if n, err := memorySvc.PurgeDeadKeys(rootCtx, deadKeyTTL); err != nil {
+					slog.Warn("dead-key sweep failed", "error", err)
+				} else if n > 0 {
+					slog.Info("dead-key sweep purged keys", "count", n)
+				}
+				select {
+				case <-rootCtx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+	}
+
 	// Async document-import worker (design D7). Same background-goroutine lifecycle
 	// as the cleanup scanner, bound to rootCtx: it sweeps interrupted jobs on start
 	// (D9), then drains import_jobs honoring IMPORT_WORKER_CONCURRENCY.
