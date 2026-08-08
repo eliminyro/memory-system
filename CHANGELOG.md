@@ -13,6 +13,12 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [0.4.0] - 2026-08-08
+
+### Features
+
+- Document grants now load **as you type** the id — the "Load grants" button is gone (debounced auto-load). - The public-wildcard (`user:*`) member now shows a distinct "world-readable" eye icon + a "Public" label instead of a person-style letter avatar, so it never reads as a user. - The "viewing: <tenant>" filter chip moved into the **Memories** title as a **click-to-clear** pill — no ✕; hovering makes it obvious the whole chip clears the filter. ([#102](https://github.com/eliminyro/memory-system/pull/102))
+
 ## [0.3.1] - 2026-08-08
 
 ### Bug fixes
