@@ -509,6 +509,8 @@ select.text-input { cursor: pointer; }
 .af-inline .af-row { flex: 1; min-width: 160px; }
 /* a rocker column hugs its buttons and rides the right edge — the sibling field takes the slack */
 .af-inline .af-row.af-compact { flex: 0 0 auto; min-width: 0; }
+/* a segmented rocker stacked in an af-row (e.g. new-tenant Type) hugs its buttons instead of stretching to the row width */
+.af-row > .segmented { align-self: flex-start; }
 .af-path { display: flex; align-items: center; gap: .4rem; }
 .af-path .text-input { flex: 1; min-width: 0; }
 .af-path .sep { font-family: var(--mono); color: var(--faint); }
