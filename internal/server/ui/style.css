@@ -859,3 +859,23 @@ main { max-width: 900px; margin: 0 auto; padding: 1.75rem 1.25rem 5rem; }
 .import-status-succeeded { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: color-mix(in srgb, var(--ok) 11%, transparent); }
 .import-status-failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .import-status-running, .import-status-queued { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+/* ─────────────── mobile (≤640px): tighten the console chrome ─────────────── */
+@media (max-width: 640px) {
+  /* top bar: collapse the wordmark to just the accent swatch, close the gaps */
+  .topbar { gap: .5rem; padding: 0 .7rem; }
+  .brand { gap: 0; }
+  .brand-name { display: none; }
+  .nav { gap: 0; }
+  .nav button { padding: .5rem .6rem; font-size: 13.5px; }
+  .nav button.active::after { left: .6rem; right: .6rem; }
+  .top-right { gap: .4rem; }
+
+  /* connect: keep the endpoint's copy button on the URL's line (URL scrolls) */
+  .endpoint .eyebrow { flex: 1 0 100%; }
+  .endpoint code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
+  .endpoint .spacer { display: none; }
+
+  /* tenants: the filter is the lone fixed-width control — let it fill like the rest */
+  .tenant-filter { max-width: none; }
+}
