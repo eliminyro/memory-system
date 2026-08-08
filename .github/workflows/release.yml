@@ -21,6 +21,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      pull-requests: read  # harvester's `gh pr view` needs it (else 403 on a private repo)
     steps:
       - name: Check out master
         uses: actions/checkout@v7
