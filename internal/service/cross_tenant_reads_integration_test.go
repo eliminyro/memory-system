@@ -199,8 +199,8 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	// docs (a lexical-only hit scores fuseLexWeight*1.0 = 0.6 > scoreFloor 0.4, so
 	// it survives fusion, the score floor, and the result limit regardless of vector
 	// recall or shared-corpus size). A rare transient over the pgvector backend can
-	// still under-return, so retry a few times: the data is stable, so this only
-	// absorbs a backend blip — a real regression fails every attempt.
+	// still under-return (or return a hit before its guard verdict settles), so
+	// retry until both are present AND guarded: a real regression fails every attempt.
 	var ra, rb repository.SearchResult
 	var okA, okB bool
 	for attempt := 0; attempt < 5; attempt++ {
@@ -212,7 +212,7 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 		}
 		ra, okA = byTenant[f.tenantA]
 		rb, okB = byTenant[f.tenantB]
-		if okA && okB {
+		if okA && okB && ra.Status == "needs_verification" {
 			break
 		}
 		time.Sleep(150 * time.Millisecond)
