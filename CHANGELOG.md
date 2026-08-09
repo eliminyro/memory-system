@@ -13,6 +13,10 @@ descriptions of the merged pull requests — see the pull request template for t
 
 <!-- INSERT NEW RELEASES BELOW -->
 
+## [1.0.0] - 2026-08-09
+
+_No user-facing changes; see the [GitHub Release](https://github.com/eliminyro/memory-system/releases/tag/v1.0.0) for the full commit log._
+
 ## [0.7.0] - 2026-08-08
 
 ### Features
