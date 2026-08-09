@@ -1384,8 +1384,7 @@ async function renderTenants() {
       card.append(
         el("span", { className: "dot" }),
         el("div", {},
-          el("div", { className: "nm", textContent: t.name || "(unnamed)" }),
-          el("div", { className: "sub", textContent: t.relation || "" })),
+          el("div", { className: "nm", textContent: t.name || "(unnamed)" })),
         el("span", { className: "spacer" }));
       card.addEventListener("click", () => { location.hash = "tenants/" + t.id; });
       grid.append(card);
