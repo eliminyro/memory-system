@@ -195,30 +195,29 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	require.NoError(t, f.db.Model(&models.Section{}).
 		Where("id IN ?", []uuid.UUID{secA, secB}).Update("verified_at", old).Error)
 
-	// The unique-token keyword arm of hybrid search deterministically returns both
-	// docs (a lexical-only hit scores fuseLexWeight*1.0 = 0.6 > scoreFloor 0.4, so
-	// it survives fusion, the score floor, and the result limit regardless of vector
-	// recall or shared-corpus size). A rare transient over the pgvector backend can
-	// still under-return (or return a hit before its guard verdict settles), so
-	// retry until both are present AND guarded: a real regression fails every attempt.
+	// Key by section id, not tenant id: subjA can also read the shared fixture's
+	// other docs in tenants A/B, which the semantic arm may surface, so a
+	// tenant-keyed last-write-wins lookup could latch onto a non-target section.
+	// secA/secB are the sections we backdated; the retry absorbs a rare under-return
+	// of the unique-token keyword hits (lex-only score 0.6 > scoreFloor 0.4).
 	var ra, rb repository.SearchResult
 	var okA, okB bool
 	for attempt := 0; attempt < 5; attempt++ {
 		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil)
 		require.NoError(t, err)
-		byTenant := map[uuid.UUID]repository.SearchResult{}
+		bySection := map[uuid.UUID]repository.SearchResult{}
 		for _, r := range results {
-			byTenant[r.TenantID] = r
+			bySection[r.SectionID] = r
 		}
-		ra, okA = byTenant[f.tenantA]
-		rb, okB = byTenant[f.tenantB]
-		if okA && okB && ra.Status == "needs_verification" {
+		ra, okA = bySection[secA]
+		rb, okB = bySection[secB]
+		if okA && okB {
 			break
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	require.True(t, okA, "hard-mode tenant result present")
-	require.True(t, okB, "off-mode tenant result present")
+	require.True(t, okA, "hard-mode tenant section present")
+	require.True(t, okB, "off-mode tenant section present")
 
 	// Hard-mode tenant: guarded — content withheld, status set.
 	require.Equal(t, "needs_verification", ra.Status, "hard-mode tenant result is guarded")
