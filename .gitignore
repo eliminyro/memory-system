@@ -3,6 +3,7 @@
 /server
 /import
 /memory-admin
+/longmemeval
 *.exe
 dist/
 

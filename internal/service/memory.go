@@ -609,20 +609,39 @@ func (s *MemoryService) StoreDocument(
 		title = slug
 	}
 
-	// Embed everything before touching the DB (no partial state on failure)
+	// Embed everything before touching the DB (no partial state on failure). Use
+	// the provider's native batch when available (assign back by index; length
+	// must match), else fall back to a per-section Embed loop.
 	sectionModels := make([]models.Section, len(sections))
 	embeddings := make([]pgvector.Vector, len(sections))
-	for i, sec := range sections {
-		embedding, err := s.embedder.Embed(ctx, sec.content)
-		if err != nil {
-			return nil, fmt.Errorf("embed section %d: %w", i, err)
+	if batcher, ok := s.embedder.(BatchEmbedder); ok && len(sections) > 0 {
+		texts := make([]string, len(sections))
+		for i, sec := range sections {
+			texts[i] = sec.content
 		}
-		embeddings[i] = embedding
+		vecs, err := batcher.EmbedBatch(ctx, texts)
+		if err != nil {
+			return nil, fmt.Errorf("embed sections: %w", err)
+		}
+		if len(vecs) != len(sections) {
+			return nil, fmt.Errorf("embed sections: got %d vectors for %d sections", len(vecs), len(sections))
+		}
+		copy(embeddings, vecs)
+	} else {
+		for i, sec := range sections {
+			embedding, err := s.embedder.Embed(ctx, sec.content)
+			if err != nil {
+				return nil, fmt.Errorf("embed section %d: %w", i, err)
+			}
+			embeddings[i] = embedding
+		}
+	}
+	for i, sec := range sections {
 		sectionModels[i] = models.Section{
 			Ordinal:   i,
 			Heading:   sec.heading,
 			Content:   sec.content,
-			Embedding: embedding,
+			Embedding: embeddings[i],
 		}
 	}
 

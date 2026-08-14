@@ -1,0 +1,62 @@
+[
+  {
+    "question_id": "single_session_001",
+    "question_type": "single-session-user",
+    "question": "What is my favorite color?",
+    "answer": "Blue",
+    "question_date": "2023/05/20 (Sat) 10:00",
+    "haystack_session_ids": ["sess_1", "sess_2"],
+    "haystack_dates": ["2023/05/18 (Thu) 09:00", "2023/05/19 (Fri) 14:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "My favorite color is blue.", "has_answer": true},
+        {"role": "assistant", "content": "Good to know!"}
+      ],
+      [
+        {"role": "user", "content": "I like pizza."},
+        {"role": "assistant", "content": "Nice choice."}
+      ]
+    ],
+    "answer_session_ids": ["sess_1"]
+  },
+  {
+    "question_id": "multi_session_002",
+    "question_type": "multi-session",
+    "question": "Where did I say I was traveling to, across our chats?",
+    "answer": "Japan, then Italy",
+    "question_date": "2023/06/01 (Thu) 12:00",
+    "haystack_session_ids": ["sess_3", "sess_4", "sess_5"],
+    "haystack_dates": ["2023/05/25 (Thu) 08:00", "2023/05/28 (Sun) 08:00", "2023/05/30 (Tue) 08:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I'm planning a trip to Japan.", "has_answer": true},
+        {"role": "assistant", "content": "Japan sounds great!"}
+      ],
+      [
+        {"role": "user", "content": "Then I'll head to Italy.", "has_answer": true},
+        {"role": "assistant", "content": "Italy is lovely."}
+      ],
+      [
+        {"role": "user", "content": "Also I need to buy groceries."},
+        {"role": "assistant", "content": "Noted."}
+      ]
+    ],
+    "answer_session_ids": ["sess_3", "sess_4"]
+  },
+  {
+    "question_id": "knowledge_update_003_abs",
+    "question_type": "knowledge-update",
+    "question": "What is my pet's name?",
+    "answer": "I don't have enough information to answer this.",
+    "question_date": "2023/06/05 (Mon) 09:00",
+    "haystack_session_ids": ["sess_6"],
+    "haystack_dates": ["2023/05/29 (Mon) 09:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I went for a walk today."},
+        {"role": "assistant", "content": "Nice, where did you walk?"}
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]
