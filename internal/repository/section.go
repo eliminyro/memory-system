@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -60,6 +61,9 @@ type SearchParams struct {
 	Category    *string
 	Subcategory *string
 	Limit       int
+	// MMRLambda gates optional MMR diversity re-ranking; nil (default) leaves
+	// HybridSearch byte-identical to the plain fused, score-sorted path.
+	MMRLambda *float64
 }
 
 // Hybrid retrieval fusion constants. Lexical is weighted higher than vector: a row
@@ -91,6 +95,8 @@ type hybridRow struct {
 	TenantID       uuid.UUID  `gorm:"column:tenant_id"`
 	VerifiedAt     *time.Time `gorm:"column:verified_at"`
 	SectionCreated time.Time  `gorm:"column:section_created"`
+	// Embedding backs MMR re-ranking only; never copied onto SearchResult.
+	Embedding pgvector.Vector `gorm:"column:embedding"`
 }
 
 // relevanceTier calibrates a fused score into a label the model can act on.
@@ -105,11 +111,21 @@ func relevanceTier(score float64) string {
 	}
 }
 
-// fuseHybrid normalizes lexical ranks to the batch max, fuses with vector
-// similarity, drops sub-floor results, tiers, sorts desc, and caps to limit.
+// scoredRow pairs a fused SearchResult with its candidate embedding so the two
+// travel together through sorting — fuseHybridScored is the only place both
+// are known at once (SearchResult itself never carries the vector).
+type scoredRow struct {
+	result SearchResult
+	emb    pgvector.Vector
+}
+
+// fuseHybridScored normalizes lexical ranks to the batch max, fuses with vector
+// similarity, drops sub-floor results, tiers, and sorts desc — UNTRUNCATED.
 // Lexical-only matches are kept (the point of the FULL OUTER JOIN) but weighted by
-// lexical weight alone, so they top out at "standard" tier.
-func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
+// lexical weight alone, so they top out at "standard" tier. Returns results
+// alongside their embeddings (aligned 1:1, sub-floor rows dropped from both) for
+// callers that need them (applyMMR); fuseHybrid discards the embeddings.
+func fuseHybridScored(rows []hybridRow) ([]SearchResult, []pgvector.Vector) {
 	var maxLex float64
 	for _, r := range rows {
 		if r.HasLex && r.LexRank > maxLex {
@@ -117,7 +133,7 @@ func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
 		}
 	}
 
-	out := make([]SearchResult, 0, len(rows))
+	scored := make([]scoredRow, 0, len(rows))
 	for _, r := range rows {
 		vec := r.VecSim
 		if vec < 0 {
@@ -146,27 +162,126 @@ func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
 			continue
 		}
 
-		out = append(out, SearchResult{
-			SectionID:      r.SectionID,
-			DocumentID:     r.DocumentID,
-			Heading:        r.Heading,
-			Content:        r.Content,
-			Score:          score,
-			Tier:           relevanceTier(score),
-			Category:       r.Category,
-			Subcategory:    r.Subcategory,
-			Slug:           r.Slug,
-			DocTitle:       r.DocTitle,
-			DocType:        r.DocType,
-			TenantID:       r.TenantID,
-			VerifiedAt:     r.VerifiedAt,
-			SectionCreated: r.SectionCreated,
+		scored = append(scored, scoredRow{
+			result: SearchResult{
+				SectionID:      r.SectionID,
+				DocumentID:     r.DocumentID,
+				Heading:        r.Heading,
+				Content:        r.Content,
+				Score:          score,
+				Tier:           relevanceTier(score),
+				Category:       r.Category,
+				Subcategory:    r.Subcategory,
+				Slug:           r.Slug,
+				DocTitle:       r.DocTitle,
+				DocType:        r.DocType,
+				TenantID:       r.TenantID,
+				VerifiedAt:     r.VerifiedAt,
+				SectionCreated: r.SectionCreated,
+			},
+			emb: r.Embedding,
 		})
 	}
 
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	sort.SliceStable(scored, func(i, j int) bool { return scored[i].result.Score > scored[j].result.Score })
+
+	out := make([]SearchResult, len(scored))
+	embs := make([]pgvector.Vector, len(scored))
+	for i, s := range scored {
+		out[i] = s.result
+		embs[i] = s.emb
+	}
+	return out, embs
+}
+
+// fuseHybrid is the plain fuse-then-truncate path (MMR off). Thin wrapper
+// around fuseHybridScored so its signature and existing tests are unchanged.
+func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
+	out, _ := fuseHybridScored(rows)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out
+}
+
+// mmrMaxCandidates guards a pathologically large pool; the real CTEs cap at
+// 20+20=40 candidates so this never triggers in normal operation.
+const mmrMaxCandidates = 128
+
+// cosineSimilarity is the unit-normalized dot product of two embeddings. A
+// zero-norm vector (e.g. a lexical-only candidate with no real embedding) is
+// treated as maximally dissimilar — similarity 0, not an error.
+func cosineSimilarity(a, b pgvector.Vector) float64 {
+	av, bv := a.Slice(), b.Slice()
+	if len(av) == 0 || len(av) != len(bv) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range av {
+		dot += float64(av[i]) * float64(bv[i])
+		na += float64(av[i]) * float64(av[i])
+		nb += float64(bv[i]) * float64(bv[i])
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+}
+
+// applyMMR greedily re-ranks the fused, score-sorted, UNTRUNCATED scored list
+// by maximizing lambda*relevance - (1-lambda)*maxCosineToSelected at each
+// step (first pick has no penalty), then truncates to limit (limit<=0 means
+// no truncation). embs[i] must be the embedding of scored[i] (aligned, same
+// order as fuseHybridScored's output). lambda>=0.999 is an escape hatch that
+// returns the score-sorted order truncated — identical to the default path.
+// Every returned result is a member of scored (no fabrication), unique (no
+// duplicates), with count = min(len(scored), limit).
+func applyMMR(scored []SearchResult, embs []pgvector.Vector, lambda float64, limit int) []SearchResult {
+	if lambda >= 0.999 {
+		out := scored
+		if limit > 0 && len(out) > limit {
+			out = out[:limit]
+		}
+		return out
+	}
+
+	pool, poolEmbs := scored, embs
+	if len(pool) > mmrMaxCandidates {
+		pool, poolEmbs = pool[:mmrMaxCandidates], poolEmbs[:mmrMaxCandidates]
+	}
+
+	n := len(pool)
+	k := n
+	if limit > 0 && limit < n {
+		k = limit
+	}
+
+	picked := make([]bool, n)
+	maxSim := make([]float64, n) // running max cosine to already-selected, per candidate
+	out := make([]SearchResult, 0, k)
+
+	for len(out) < k {
+		best := -1
+		var bestMMR float64
+		for i := 0; i < n; i++ {
+			if picked[i] {
+				continue
+			}
+			mmr := lambda*pool[i].Score - (1-lambda)*maxSim[i]
+			if best == -1 || mmr > bestMMR {
+				best, bestMMR = i, mmr
+			}
+		}
+		picked[best] = true
+		out = append(out, pool[best])
+		for i := 0; i < n; i++ {
+			if picked[i] {
+				continue
+			}
+			if sim := cosineSimilarity(poolEmbs[best], poolEmbs[i]); sim > maxSim[i] {
+				maxSim[i] = sim
+			}
+		}
 	}
 	return out
 }
@@ -185,7 +300,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 	sql := `
 		WITH semantic AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
-				   s.created_at AS section_created,
+				   s.created_at AS section_created, s.embedding,
 				   1 - (s.embedding <=> ?::vector) AS vec_sim
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
@@ -199,7 +314,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		),
 		keyword AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
-				   s.created_at AS section_created,
+				   s.created_at AS section_created, s.embedding,
 				   ts_rank(s.tsv, plainto_tsquery('english', ?)) AS lex_rank
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
@@ -222,7 +337,11 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			   d.category, d.subcategory, d.slug, d.title    AS doc_title,
 			   d.doc_type, d.tenant_id,
 			   COALESCE(sem.verified_at, kw.verified_at)     AS verified_at,
-			   COALESCE(sem.section_created, kw.section_created) AS section_created
+			   COALESCE(sem.section_created, kw.section_created) AS section_created,
+			   -- '[0]'::vector fallback: guards the Go-side pgvector.Vector scan
+			   -- against a legacy NULL-embedding row (only sem is filtered
+			   -- NOT NULL); norm-zero so cosineSimilarity treats it as 0 anyway.
+			   COALESCE(sem.embedding, kw.embedding, '[0]'::vector) AS embedding
 		FROM semantic sem
 		FULL OUTER JOIN keyword kw ON kw.id = sem.id
 		JOIN documents d ON d.id = COALESCE(sem.document_id, kw.document_id)
@@ -237,7 +356,11 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 	if err := r.db.WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
-	return fuseHybrid(rows, p.Limit), nil
+	if p.MMRLambda == nil {
+		return fuseHybrid(rows, p.Limit), nil
+	}
+	scored, embs := fuseHybridScored(rows)
+	return applyMMR(scored, embs, *p.MMRLambda, p.Limit), nil
 }
 
 type RelatedResult struct {

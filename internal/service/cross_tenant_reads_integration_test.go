@@ -41,7 +41,7 @@ func TestCrossTenantReads_NoLeak(t *testing.T) {
 	require.ErrorIs(t, err, apperr.ErrNotFound, "by-id fetch of another tenant's doc must be not-found")
 
 	// Leak by search: tenant B's doc must not appear in a non-member's results.
-	results, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", nil)
+	results, _, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", nil)
 	require.NoError(t, err)
 	for _, r := range results {
 		require.NotEqual(t, f.tenantB, r.TenantID, "another tenant's doc must not leak via search")
@@ -55,7 +55,7 @@ func TestCrossTenantReads_NoLeak(t *testing.T) {
 	}
 
 	// Read filter to a non-readable tenant is empty / not-found, never a leak.
-	filtered, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", &f.tenantB)
+	filtered, _, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", &f.tenantB)
 	require.NoError(t, err)
 	require.Empty(t, filtered, "filter to a non-readable tenant returns empty")
 	_, err = f.svc.GetDocumentByID(ctxA, docBID, false, "", &f.tenantB)
@@ -91,7 +91,7 @@ func TestCrossTenantReads_FreshTenantPrivateByConstruction(t *testing.T) {
 	require.ErrorIs(t, err, apperr.ErrNotFound, "stranger cannot fetch a fresh tenant's doc by id")
 
 	// Search / list never surface T's doc.
-	results, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", nil)
+	results, _, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", nil)
 	require.NoError(t, err)
 	for _, r := range results {
 		require.NotEqual(t, newT.ID, r.TenantID, "fresh tenant's doc must not leak via search")
@@ -103,7 +103,7 @@ func TestCrossTenantReads_FreshTenantPrivateByConstruction(t *testing.T) {
 	}
 
 	// A read filter naming T is empty / not-found — never T's doc, never a leak.
-	filtered, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", &newT.ID)
+	filtered, _, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", &newT.ID)
 	require.NoError(t, err)
 	require.Empty(t, filtered, "filter to a non-readable fresh tenant returns empty")
 	_, err = f.svc.GetDocumentByID(ctxS, docTID, false, "", &newT.ID)
@@ -144,7 +144,7 @@ func TestCrossTenantReads_LabeledByOwningTenant(t *testing.T) {
 	ctxA := ctxFor(f.tenantA, f.subjA)
 
 	// SearchResult labeling: the cross-tenant hit carries tenant B's label.
-	results, err := f.svc.Search(ctxA, "betaonly", nil, nil, 20, false, "", nil)
+	results, _, err := f.svc.Search(ctxA, "betaonly", nil, nil, 20, false, "", nil)
 	require.NoError(t, err)
 	var sawB bool
 	for _, r := range results {
@@ -203,7 +203,7 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	var ra, rb repository.SearchResult
 	var okA, okB bool
 	for attempt := 0; attempt < 5; attempt++ {
-		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil)
+		results, _, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil)
 		require.NoError(t, err)
 		bySection := map[uuid.UUID]repository.SearchResult{}
 		for _, r := range results {

@@ -49,6 +49,9 @@ type MemoryService struct {
 	thresholds *staleness.ThresholdStore
 	overrides  *repository.OverrideLogRepository
 	cleanup    *repository.CleanupQueueRepository
+	// recallReceipts is nil-safe (offline CLI / tests may leave it unwired,
+	// silently disabling receipt recording — see recordRecallReceipt).
+	recallReceipts *repository.RecallReceiptRepository
 	// authz is the relationship-tuple store; lifecycle ops seed it out-of-band.
 	// Nil disables seeding.
 	authz authz.Store
@@ -82,6 +85,35 @@ type MemoryService struct {
 	// Set once at startup from config.SelfServicePolicy. Empty (offline CLI /
 	// tests) resolves to "open" — no lockout.
 	SelfServicePolicyDefault string
+	// mmrLambda is the configured MMR diversity re-rank default for Search; nil
+	// (no WithMMRLambda option) leaves HybridSearch's plain fused-and-sorted path
+	// unchanged, preserving existing behavior for every caller that doesn't set it.
+	mmrLambda *float64
+	// recallReceiptsEnabled gates receipt recording in Search (MEMORY_RECALL_RECEIPTS,
+	// default true). Set explicitly in NewMemoryService so a service built
+	// without WithRecallReceipts still defaults to enabled, not the bool zero value.
+	recallReceiptsEnabled bool
+}
+
+// Option configures optional MemoryService behavior at construction time.
+type Option func(*MemoryService)
+
+// WithMMRLambda sets the default MMR diversity lambda applied to every Search
+// call. Without this option mmrLambda stays nil and MMR re-ranking is off.
+func WithMMRLambda(lambda float64) Option {
+	return func(s *MemoryService) {
+		l := lambda
+		s.mmrLambda = &l
+	}
+}
+
+// WithRecallReceipts overrides the default (enabled) recall-receipt recording
+// gate (MEMORY_RECALL_RECEIPTS). Recording still requires a non-nil
+// recallReceipts repository; this only controls the config-level on/off switch.
+func WithRecallReceipts(enabled bool) Option {
+	return func(s *MemoryService) {
+		s.recallReceiptsEnabled = enabled
+	}
 }
 
 // NewMemoryService constructs the service. Optional deps may be nil outside the
@@ -98,26 +130,36 @@ func NewMemoryService(
 	thresholds *staleness.ThresholdStore,
 	overrides *repository.OverrideLogRepository,
 	cleanup *repository.CleanupQueueRepository,
+	recallReceipts *repository.RecallReceiptRepository,
 	authzStore authz.Store,
+	opts ...Option,
 ) *MemoryService {
 	var engine *authz.Engine
 	if authzStore != nil {
 		engine = authz.NewEngine(authzStore)
 	}
-	return &MemoryService{
-		db:          db,
-		docs:        docs,
-		sections:    sections,
-		embedder:    embedder,
-		tenants:     tenants,
-		keys:        keys,
-		lint:        lint,
-		thresholds:  thresholds,
-		overrides:   overrides,
-		cleanup:     cleanup,
-		authz:       authzStore,
-		authzEngine: engine,
+	s := &MemoryService{
+		db:             db,
+		docs:           docs,
+		sections:       sections,
+		embedder:       embedder,
+		tenants:        tenants,
+		keys:           keys,
+		lint:           lint,
+		thresholds:     thresholds,
+		overrides:      overrides,
+		cleanup:        cleanup,
+		recallReceipts: recallReceipts,
+		authz:          authzStore,
+		authzEngine:    engine,
+		// Default true (design D7): recording is harmless and additive. A caller
+		// that wants it off passes WithRecallReceipts(false).
+		recallReceiptsEnabled: true,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // seedTuple idempotently writes a relation tuple for a lifecycle event. Nil-safe
@@ -435,21 +477,23 @@ const (
 )
 
 // Search performs hybrid semantic + keyword search, applying staleness filter.
-// When forceRead is true, Reason is required and the override is audited.
-func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, error) {
+// When forceRead is true, Reason is required and the override is audited. The
+// second return value is a recall receipt id (uuid.Nil when results are empty,
+// recording is disabled, or the insert failed) — see recordRecallReceipt.
+func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, uuid.UUID, error) {
 	if forceRead && strings.TrimSpace(reason) == "" {
-		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
+		return nil, uuid.Nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
 	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 	if len(scope) == 0 {
-		return []repository.SearchResult{}, nil // non-readable filter target
+		return []repository.SearchResult{}, uuid.Nil, nil // non-readable filter target
 	}
 	embedding, err := s.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("embed query: %w", err)
+		return nil, uuid.Nil, fmt.Errorf("embed query: %w", err)
 	}
 	results, err := s.sections.HybridSearch(ctx, repository.SearchParams{
 		TenantIDs:   scope,
@@ -458,9 +502,10 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		Category:    category,
 		Subcategory: subcategory,
 		Limit:       limit,
+		MMRLambda:   s.mmrLambda,
 	})
 	if err != nil {
-		return nil, err
+		return nil, uuid.Nil, err
 	}
 	// Label each result by its owning tenant and resolve per-tenant staleness
 	// modes in one lookup, then apply staleness under each result's own mode.
@@ -468,7 +513,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if s.thresholds != nil {
 		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, modeByTenant, forceRead)
 		if err != nil {
-			return nil, err
+			return nil, uuid.Nil, err
 		}
 	}
 	if forceRead {
@@ -479,7 +524,81 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 			Reason:       reason,
 		})
 	}
-	return results, nil
+	recallID := s.recordRecallReceipt(ctx, results, overrideID)
+	return results, recallID, nil
+}
+
+// SearchResponse is the search envelope shared by the MCP and HTTP surfaces
+// (design D2): recall_id is JSON null when no receipt was issued, and results
+// is always a JSON array, never null.
+type SearchResponse struct {
+	RecallID *uuid.UUID                `json:"recall_id"`
+	Results  []repository.SearchResult `json:"results"`
+}
+
+// NewSearchResponse builds the envelope from Search's return values: uuid.Nil
+// becomes a nil RecallID (-> JSON null) and a nil Results slice becomes [].
+func NewSearchResponse(results []repository.SearchResult, recallID uuid.UUID) SearchResponse {
+	resp := SearchResponse{Results: results}
+	if resp.Results == nil {
+		resp.Results = []repository.SearchResult{}
+	}
+	if recallID != uuid.Nil {
+		id := recallID
+		resp.RecallID = &id
+	}
+	return resp
+}
+
+// recordRecallReceipt inserts a recall receipt naming the served sections,
+// gated by recallReceiptsEnabled (MEMORY_RECALL_RECEIPTS) and a non-empty
+// result set. The receipt's tenant is resolved via the SAME resolveTenant path
+// ReportRecallOutcome uses (home tenant when overrideID is nil, the
+// admin-verified override target otherwise) — NOT the read-scope aggregation
+// used to FIND the results — so a later report with the same overrideID always
+// resolves to this receipt (an admin searching tenant_id=X must be able to
+// report against X, not their own home tenant). resolveTenant rejects a
+// non-admin's overrideID outright; Search's readScope permits a narrower,
+// viewer-authorized override for non-admins, so that combination simply skips
+// the receipt (best-effort: recording never fails the search either way).
+func (s *MemoryService) recordRecallReceipt(ctx context.Context, results []repository.SearchResult, overrideID *uuid.UUID) uuid.UUID {
+	if !s.recallReceiptsEnabled || s.recallReceipts == nil || len(results) == 0 {
+		return uuid.Nil
+	}
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return uuid.Nil
+	}
+	sectionIDs := make([]uuid.UUID, len(results))
+	for i, r := range results {
+		sectionIDs[i] = r.SectionID
+	}
+	recallID, err := s.recallReceipts.Create(ctx, tid, sectionIDs)
+	if err != nil {
+		slog.Default().Warn("recall receipt insert failed", "error", err)
+		return uuid.Nil
+	}
+	return recallID
+}
+
+// ReportRecallOutcome credits hit_count (success) or miss_count (failure) on
+// every section named by recallID's receipt, exactly once. The receipt must
+// belong to the caller's tenant (or the admin-overridden target); a missing or
+// cross-tenant id is ErrNotFound so a caller can never learn a foreign
+// recall_id exists. A second report for an already-reported receipt is a no-op
+// (design D4).
+func (s *MemoryService) ReportRecallOutcome(ctx context.Context, recallID uuid.UUID, outcome string, overrideID *uuid.UUID) error {
+	if _, ok := models.ValidRecallOutcomes[outcome]; !ok {
+		return fmt.Errorf("%w: outcome must be success or failure", apperr.ErrInvalidInput)
+	}
+	if s.recallReceipts == nil {
+		return fmt.Errorf("%w: recall %s", apperr.ErrNotFound, recallID)
+	}
+	tid, err := s.resolveTenant(ctx, overrideID)
+	if err != nil {
+		return err
+	}
+	return s.recallReceipts.ReportOutcome(ctx, tid, recallID, outcome)
 }
 
 // GetDocument fetches a document with all sections by path, applying the
@@ -894,7 +1013,45 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 	if len(scope) == 0 {
 		return []models.Document{}, nil
 	}
-	return s.docs.List(ctx, scope, category, subcategory, limit, offset)
+	docs, err := s.docs.List(ctx, scope, category, subcategory, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	s.labelDocumentTenants(ctx, docs)
+	return docs, nil
+}
+
+// labelDocumentTenants fills the display-only TenantName/TenantType on each
+// document from one batched tenant lookup, so browse/list shows the tenant name
+// (not a raw UUID) — parity with search's resolveResultTenants. Best-effort:
+// a nil tenant repo or lookup error leaves the labels empty.
+func (s *MemoryService) labelDocumentTenants(ctx context.Context, docs []models.Document) {
+	if len(docs) == 0 || s.tenants == nil {
+		return
+	}
+	seen := make(map[uuid.UUID]struct{})
+	ids := make([]uuid.UUID, 0)
+	for i := range docs {
+		if _, ok := seen[docs[i].TenantID]; ok {
+			continue
+		}
+		seen[docs[i].TenantID] = struct{}{}
+		ids = append(ids, docs[i].TenantID)
+	}
+	tenants, err := s.tenants.GetByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
+	for _, t := range tenants {
+		byID[t.ID] = t
+	}
+	for i := range docs {
+		if t, ok := byID[docs[i].TenantID]; ok {
+			docs[i].TenantName = t.Name
+			docs[i].TenantType = t.Type
+		}
+	}
 }
 
 // --- Admin operations ---

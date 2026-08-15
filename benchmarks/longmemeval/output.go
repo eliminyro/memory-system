@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -50,9 +51,45 @@ func gitCommit() string {
 	return strings.TrimSpace(string(out))
 }
 
-// modeOrder is the fixed rendering order for modes — map iteration is
-// randomized, but RESULTS.md must be byte-for-byte deterministic.
+// modeOrder is the fixed rendering order for the base modes — map iteration
+// is randomized, but RESULTS.md must be byte-for-byte deterministic.
 var modeOrder = []string{"hybrid", "vector_only", "lexical_only"}
+
+// mmrModePrefix keys a hybrid+MMR mode (task 5.1); mmrModeKey/sortedMMRModes
+// are the paired encode/decode so ordering doesn't need a separate struct.
+const mmrModePrefix = "hybrid_mmr@"
+
+// mmrModeKey formats a λ into its mode key, e.g. 0.5 -> "hybrid_mmr@0.50".
+func mmrModeKey(lambda float64) string {
+	return fmt.Sprintf("%s%.2f", mmrModePrefix, lambda)
+}
+
+// sortedMMRModes returns the hybrid_mmr@<λ> keys present in modes, ascending
+// by λ (task 5.2) — map iteration order can't be trusted for rendering.
+func sortedMMRModes(modes map[string]Report) []string {
+	type entry struct {
+		key    string
+		lambda float64
+	}
+	var entries []entry
+	for k := range modes {
+		if !strings.HasPrefix(k, mmrModePrefix) {
+			continue
+		}
+		lambda, err := strconv.ParseFloat(strings.TrimPrefix(k, mmrModePrefix), 64)
+		if err != nil {
+			continue // not a key this package produced; ignore rather than panic
+		}
+		entries = append(entries, entry{k, lambda})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].lambda < entries[j].lambda })
+
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.key
+	}
+	return out
+}
 
 // RenderResultsMarkdown renders r as deterministic markdown: a run-metadata
 // header, an overall table (one row per mode), and a per-question-type
@@ -75,7 +112,9 @@ func sortedKs(ks []int) []int {
 }
 
 // presentModes returns modeOrder filtered to keys actually present in modes,
-// so a run missing a mode doesn't panic or scramble the row order.
+// followed by any hybrid_mmr@<λ> modes in ascending λ order — so a run
+// missing a mode doesn't panic or scramble the row order, and MMR sweep
+// modes render in a stable order regardless of map iteration.
 func presentModes(modes map[string]Report) []string {
 	out := make([]string, 0, len(modeOrder))
 	for _, m := range modeOrder {
@@ -83,7 +122,7 @@ func presentModes(modes map[string]Report) []string {
 			out = append(out, m)
 		}
 	}
-	return out
+	return append(out, sortedMMRModes(modes)...)
 }
 
 func writeHeader(b *strings.Builder, run RunMeta, ks []int) {

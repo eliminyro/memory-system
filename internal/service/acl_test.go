@@ -19,7 +19,7 @@ import (
 // every ceiling/validation rejection that must short-circuit before ever
 // touching the database.
 func newACLNoDBSvc(store authz.Store) *service.MemoryService {
-	return service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	return service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 }
 
 func TestCanManageTenant(t *testing.T) {
@@ -66,25 +66,25 @@ func TestCanManageTenant(t *testing.T) {
 // --- Unknown-relation rejection: must reject before any database access. ---
 
 func TestGrantTenantAccessRejectsUnknownRelation(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	err := svc.GrantTenantAccess(auth.WithLocalAdmin(context.Background()), uuid.New(), "user@example.com", "owner")
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
 }
 
 func TestRevokeTenantAccessRejectsUnknownRelation(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	err := svc.RevokeTenantAccess(auth.WithLocalAdmin(context.Background()), uuid.New(), "user@example.com", "owner")
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
 }
 
 func TestGrantDocumentAccessRejectsUnknownRelation(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	err := svc.GrantDocumentAccess(auth.WithLocalAdmin(context.Background()), uuid.New(), "user@example.com", "commenter")
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
 }
 
 func TestRevokeDocumentAccessRejectsUnknownRelation(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	err := svc.RevokeDocumentAccess(auth.WithLocalAdmin(context.Background()), uuid.New(), "user@example.com", "commenter")
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
 }
@@ -172,7 +172,7 @@ func TestWritableTenantsSubjectlessReturnsEmpty(t *testing.T) {
 }
 
 func TestWritableTenantsNoAuthzStoreReturnsEmpty(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := auth.WithSubject(context.Background(), auth.Subject{Type: auth.SubjectTypeUser, ID: "x"})
 	got, err := svc.WritableTenants(ctx)
 	require.NoError(t, err)

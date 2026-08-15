@@ -17,7 +17,7 @@ import (
 // The parseable-doc-stored path needs a real database and is covered by the
 // integration test.
 func newImportUnitSvc() *service.MemoryService {
-	return service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	return service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // TestImportDocumentsSkipsUnparseablePath proves a path that does not parse

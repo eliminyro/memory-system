@@ -51,6 +51,7 @@ func newWriteAPIFixture(t *testing.T) *writeAPIFixture {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
+		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 	return &writeAPIFixture{

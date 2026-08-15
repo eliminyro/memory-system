@@ -19,6 +19,12 @@ touches a known project, tool, or decision, search your memory first:
 Do not guess at facts the memory could confirm. If the answer likely lives in
 memory, look it up rather than inventing it.
 
+**Close the loop.** `search_memory`'s response carries a `recall_id`. After
+acting on a recalled result, call `report_recall_outcome` with that `recall_id`
+and `outcome: success` (it helped) or `failure` (it didn't). This is what lets
+future ranking learn which memories are actually useful — skipping it leaves
+the signal empty.
+
 Your reads span every tenant you can see — your own memory, the shared common
 pool, and any team or shared tenant you've been granted access to — and each
 result is labeled with the tenant that owns it. Treat a hit from a shared tenant

@@ -100,7 +100,7 @@ func main() {
 
 	// Real tuple store so bulk-imported documents get their document#tenant
 	// parent edge seeded during import.
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
 
 	ctx := auth.WithTenantID(context.Background(), tenantID)
 

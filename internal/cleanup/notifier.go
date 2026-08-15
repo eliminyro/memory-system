@@ -43,8 +43,9 @@ func (n *Notifier) SendScanSummary(ctx context.Context, stats ScanStats) error {
 			"already pending: %d\n"+
 			"docs archived: %d\n"+
 			"docs deleted: %d\n"+
+			"recall receipts pruned: %d\n"+
 			"errors: %d",
-		stats.TenantsScanned, stats.PairsFound, stats.PairsInserted, stats.PairsSkipped, stats.DocsArchived, stats.DocsDeleted, stats.Errors,
+		stats.TenantsScanned, stats.PairsFound, stats.PairsInserted, stats.PairsSkipped, stats.DocsArchived, stats.DocsDeleted, stats.ReceiptsPruned, stats.Errors,
 	)
 	return n.send(ctx, text)
 }

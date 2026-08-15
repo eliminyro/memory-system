@@ -34,7 +34,7 @@ func newAdminHarness(t *testing.T) (*apiHandler, context.Context, context.Contex
 		service.NewFakeEmbedder(apiTestDim),
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		store,
 	)
 	adminSubj := "admin-" + uuid.NewString()

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -121,6 +122,46 @@ func TestRenderResultsMarkdownDeterministic(t *testing.T) {
 		if got := RenderResultsMarkdown(fixture); got != first {
 			t.Fatalf("run %d: RenderResultsMarkdown not deterministic across repeated calls", i)
 		}
+	}
+}
+
+// TestRenderResultsMarkdownMMRModeOrder locks task 5.2: base modes render in
+// their fixed order, then hybrid_mmr@<λ> modes ascending by λ, regardless of
+// the (randomized) map iteration order the modes were inserted in.
+func TestRenderResultsMarkdownMMRModeOrder(t *testing.T) {
+	kmetrics := func(v float64) KMetrics {
+		return KMetrics{
+			NumQuestions:     2,
+			PartialRecallAtK: map[int]float64{5: v},
+			FullRecallAtK:    map[int]float64{5: v},
+			MeanMRRAtK:       map[int]float64{5: v},
+		}
+	}
+
+	r := BenchmarkResults{
+		Run: RunMeta{Dataset: "testdata/fixture.json", Seed: 42, N: 2, KValues: []int{5}},
+		Modes: map[string]Report{
+			"hybrid_mmr@0.90": {Overall: kmetrics(0.7)},
+			"lexical_only":    {Overall: kmetrics(0.3)},
+			"hybrid_mmr@0.50": {Overall: kmetrics(0.6)},
+			"hybrid":          {Overall: kmetrics(1.0)},
+			"vector_only":     {Overall: kmetrics(0.5)},
+		},
+	}
+
+	got := RenderResultsMarkdown(r)
+
+	wantOrder := []string{"hybrid", "vector_only", "lexical_only", "hybrid_mmr@0.50", "hybrid_mmr@0.90"}
+	lastIdx := -1
+	for _, mode := range wantOrder {
+		idx := strings.Index(got, "| "+mode+" |")
+		if idx == -1 {
+			t.Fatalf("mode %q not found in rendered markdown:\n%s", mode, got)
+		}
+		if idx <= lastIdx {
+			t.Fatalf("mode %q rendered out of order, want %v:\n%s", mode, wantOrder, got)
+		}
+		lastIdx = idx
 	}
 }
 

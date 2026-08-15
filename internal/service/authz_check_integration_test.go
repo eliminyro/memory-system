@@ -64,6 +64,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
+		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 
