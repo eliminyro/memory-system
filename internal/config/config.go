@@ -133,6 +133,10 @@ type Config struct {
 	// WorkerConcurrency bounds the in-process worker draining import_jobs.
 	ImportMaxUploadBytes    int64 `env:"IMPORT_MAX_UPLOAD_BYTES" envDefault:"33554432"`
 	ImportWorkerConcurrency int   `env:"IMPORT_WORKER_CONCURRENCY" envDefault:"1"`
+
+	// MMRLambda tunes HybridSearch's MMR diversity re-rank (repository.SearchParams.MMRLambda).
+	// Default 0.9 = MMR on; set 1.0 to disable (pure relevance, applyMMR's >=0.999 escape hatch).
+	MMRLambda float64 `env:"MEMORY_MMR_LAMBDA" envDefault:"0.9"`
 }
 
 // ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
@@ -281,6 +285,11 @@ func Load() (*Config, error) {
 	}
 	if cfg.RateLimitRPS > 0 && cfg.RateLimitTrustedProxyDepth == 0 {
 		slog.Default().Warn("rate limiting is on but RATE_LIMIT_TRUSTED_PROXY_DEPTH=0: X-Forwarded-For is ignored and clients are keyed by RemoteAddr — behind a reverse proxy/CDN every client shares one bucket. Set it to the number of trusted proxy hops (e.g. 1 behind a single ingress).")
+	}
+
+	// MMR lambda must stay in (0, 1] — fail fast rather than silently clamp a bad value.
+	if cfg.MMRLambda <= 0 || cfg.MMRLambda > 1 {
+		return nil, fmt.Errorf("MEMORY_MMR_LAMBDA must be in (0, 1], got %v", cfg.MMRLambda)
 	}
 
 	return cfg, nil

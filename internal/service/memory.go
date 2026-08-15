@@ -82,6 +82,22 @@ type MemoryService struct {
 	// Set once at startup from config.SelfServicePolicy. Empty (offline CLI /
 	// tests) resolves to "open" — no lockout.
 	SelfServicePolicyDefault string
+	// mmrLambda is the configured MMR diversity re-rank default for Search; nil
+	// (no WithMMRLambda option) leaves HybridSearch's plain fused-and-sorted path
+	// unchanged, preserving existing behavior for every caller that doesn't set it.
+	mmrLambda *float64
+}
+
+// Option configures optional MemoryService behavior at construction time.
+type Option func(*MemoryService)
+
+// WithMMRLambda sets the default MMR diversity lambda applied to every Search
+// call. Without this option mmrLambda stays nil and MMR re-ranking is off.
+func WithMMRLambda(lambda float64) Option {
+	return func(s *MemoryService) {
+		l := lambda
+		s.mmrLambda = &l
+	}
 }
 
 // NewMemoryService constructs the service. Optional deps may be nil outside the
@@ -99,12 +115,13 @@ func NewMemoryService(
 	overrides *repository.OverrideLogRepository,
 	cleanup *repository.CleanupQueueRepository,
 	authzStore authz.Store,
+	opts ...Option,
 ) *MemoryService {
 	var engine *authz.Engine
 	if authzStore != nil {
 		engine = authz.NewEngine(authzStore)
 	}
-	return &MemoryService{
+	s := &MemoryService{
 		db:          db,
 		docs:        docs,
 		sections:    sections,
@@ -118,6 +135,10 @@ func NewMemoryService(
 		authz:       authzStore,
 		authzEngine: engine,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // seedTuple idempotently writes a relation tuple for a lifecycle event. Nil-safe
@@ -458,6 +479,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		Category:    category,
 		Subcategory: subcategory,
 		Limit:       limit,
+		MMRLambda:   s.mmrLambda,
 	})
 	if err != nil {
 		return nil, err

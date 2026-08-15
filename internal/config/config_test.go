@@ -476,6 +476,43 @@ func TestLoadDefaultEmbeddingDimensionsMatchesDefaultModel(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsMMRLambdaOutOfRange guards the fail-fast contract for
+// MEMORY_MMR_LAMBDA: must be in (0, 1], no silent clamping.
+func TestLoadRejectsMMRLambdaOutOfRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "default unset ok", value: ""},
+		{name: "0.9 ok", value: "0.9"},
+		{name: "1.0 ok (disables MMR)", value: "1.0"},
+		{name: "zero rejected", value: "0", wantErr: "MEMORY_MMR_LAMBDA must be in (0, 1]"},
+		{name: "negative rejected", value: "-0.5", wantErr: "MEMORY_MMR_LAMBDA must be in (0, 1]"},
+		{name: "above 1 rejected", value: "1.5", wantErr: "MEMORY_MMR_LAMBDA must be in (0, 1]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.value != "" {
+				t.Setenv("MEMORY_MMR_LAMBDA", tc.value)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.MMRLambda <= 0 || cfg.MMRLambda > 1 {
+				t.Fatalf("loaded out-of-range MMRLambda: %v", cfg.MMRLambda)
+			}
+		})
+	}
+}
+
 // TestEmbeddingModelResolvesPerProvider verifies the model fingerprint used by
 // the migration swap guard (audit #13/#16) tracks the active provider.
 func TestEmbeddingModelResolvesPerProvider(t *testing.T) {

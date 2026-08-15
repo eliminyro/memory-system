@@ -221,7 +221,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore)
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda))
 	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
 	// Toggle defaults stamped onto every tenant created through the service.

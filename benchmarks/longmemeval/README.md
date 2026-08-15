@@ -57,14 +57,35 @@ go run ./benchmarks/longmemeval \
 ```
 
 Flags: `--data` (required), `--seed` (default 42), `--n` (slice size or `all`, default 150),
-`--k` (CSV, default `5,10`), `--concurrency` (ingest workers, default 16), `--out-json`
-(default `benchmarks/longmemeval/results.json`), `--out-md` (default
+`--k` (CSV, default `5,10`), `--concurrency` (ingest workers, default 16), `--skip-ingest`
+(score against an already-ingested corpus, see below), `--mmr` (CSV of λ values, see below),
+`--out-json` (default `benchmarks/longmemeval/results.json`), `--out-md` (default
 `benchmarks/longmemeval/RESULTS.md`).
 
 The slice is a **seeded, deterministic** subset — same `--seed`+`--n` selects the same
 questions. Ingestion is idempotent (fixed bench tenant + upsert on deterministic paths), so
 re-runs overwrite rather than duplicate. Ingestion is parallelized across questions because the
 embedder is single-call per section.
+
+### Ingest once, score many
+
+`--skip-ingest` skips ingestion entirely and scores against the corpus a prior run of the
+**same** `--data`/`--seed`/`--n` already ingested — ingestion is the slow, embedder-bound part,
+so this makes ranking A/B runs near-instant. It probes that the expected corpus is actually
+present before scoring and fails loudly (rather than reporting zero recall) if it isn't:
+
+```sh
+go run ./benchmarks/longmemeval --data data/longmemeval_s_cleaned.json --seed 42 --n 150   # ingest + score once
+go run ./benchmarks/longmemeval --data data/longmemeval_s_cleaned.json --seed 42 --n 150 \
+  --skip-ingest --mmr 0.5,0.7,0.9                                                          # re-score only
+```
+
+### Measuring hybrid+MMR
+
+`--mmr <λ1,λ2,...>` adds one `hybrid_mmr@<λ>` mode per λ (each in `(0,1]`) alongside `hybrid` /
+`vector_only` / `lexical_only`, reusing the same query embedding and scoring path as `hybrid` —
+only the retrieval (server-side MMR re-rank, `SearchParams.MMRLambda`) differs. Modes render in
+a fixed order: the three base modes, then the MMR modes ascending by λ.
 
 Outputs: `results.json` (machine-readable, with run provenance — dataset/seed/n/embedder/commit)
 and `RESULTS.md` (the human-readable tables).

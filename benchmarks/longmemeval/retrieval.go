@@ -20,7 +20,9 @@ const candidatePoolLimit = 20
 // HybridRetrieve runs the shipped hybrid search (task 3.1), scoped to one
 // question's bench subcategory via Category/Subcategory. section.go is
 // untouched; results are already rank-ordered by fuseHybrid's score sort.
-func HybridRetrieve(ctx context.Context, sections *repository.SectionRepository, tenantID uuid.UUID, subcategory string, embedding pgvector.Vector, query string, maxK int) ([]RetrievedSection, error) {
+// mmrLambda is nil for the plain hybrid mode; pass a non-nil λ (task 5.1) to
+// additionally exercise the server's MMR re-rank via SearchParams.MMRLambda.
+func HybridRetrieve(ctx context.Context, sections *repository.SectionRepository, tenantID uuid.UUID, subcategory string, embedding pgvector.Vector, query string, maxK int, mmrLambda *float64) ([]RetrievedSection, error) {
 	category := benchCategory
 	results, err := sections.HybridSearch(ctx, repository.SearchParams{
 		TenantIDs:   []uuid.UUID{tenantID},
@@ -29,6 +31,7 @@ func HybridRetrieve(ctx context.Context, sections *repository.SectionRepository,
 		Category:    &category,
 		Subcategory: &subcategory,
 		Limit:       maxK,
+		MMRLambda:   mmrLambda,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("hybrid retrieve: %w", err)

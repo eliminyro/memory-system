@@ -34,6 +34,8 @@ func main() {
 	nFlag := flag.String("n", "150", `slice size, or "all" for the full dataset`)
 	kFlag := flag.String("k", "5,10", "comma-separated recall@k / MRR@k cutoffs")
 	concurrencyFlag := flag.Int("concurrency", 16, "bounded worker pool size for parallel ingest")
+	skipIngestFlag := flag.Bool("skip-ingest", false, "skip ingestion; score against the corpus a prior run of the same dataset/seed/n already ingested (fails loudly if that corpus is missing)")
+	mmrFlag := flag.String("mmr", "", `comma-separated MMR lambda values in (0,1] (e.g. "0.5,0.7,0.9"); each adds a hybrid_mmr@<lambda> mode reusing the baseline query embedding`)
 	outJSONFlag := flag.String("out-json", "benchmarks/longmemeval/results.json", "path to write machine-readable JSON results")
 	outMDFlag := flag.String("out-md", "benchmarks/longmemeval/RESULTS.md", "path to write human-readable RESULTS.md")
 	flag.Usage = func() {
@@ -60,6 +62,12 @@ func main() {
 	n, err := parseN(*nFlag)
 	if err != nil {
 		slog.Error("invalid --n", "error", err)
+		os.Exit(1)
+	}
+
+	mmrLambdas, err := parseMMRLambdas(*mmrFlag)
+	if err != nil {
+		slog.Error("invalid --mmr", "error", err)
 		os.Exit(1)
 	}
 
@@ -115,16 +123,28 @@ func main() {
 	slice := SelectSlice(instances, *seedFlag, n)
 	slog.Info("selected question slice", "n", len(slice), "seed", *seedFlag, "total_available", len(instances))
 
-	// Idempotent re-runs (task 5.3): the bench tenant id is fixed (EnsureBenchTenant)
-	// and every doc path is deterministic (bench/<qid>/<sid>), so StoreDocument's
-	// existing get-by-path + overwrite-sections upsert (force=true, already the
-	// path ImportDocuments drives) makes a second run replace rather than
-	// duplicate documents — no separate pre-run cleanup step is needed.
-	if err := ingestSlice(ctx, memorySvc, benchTenantID, slice, *concurrencyFlag); err != nil {
-		slog.Error("ingest failed", "error", err)
-		os.Exit(1)
+	if *skipIngestFlag {
+		// --skip-ingest (task 4.1) reuses a prior run's corpus: the bench tenant id
+		// is fixed and doc paths are deterministic, so the same dataset/seed/n
+		// always ingests to the same rows. Verify they're actually there first —
+		// scoring an absent/partial corpus would silently read as zero recall.
+		if err := VerifyCorpusPresence(ctx, db, benchTenantID, slice); err != nil {
+			slog.Error("skip-ingest corpus check failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("skip-ingest: reusing existing corpus", "questions", len(slice))
+	} else {
+		// Idempotent re-runs (task 5.3): the bench tenant id is fixed (EnsureBenchTenant)
+		// and every doc path is deterministic (bench/<qid>/<sid>), so StoreDocument's
+		// existing get-by-path + overwrite-sections upsert (force=true, already the
+		// path ImportDocuments drives) makes a second run replace rather than
+		// duplicate documents — no separate pre-run cleanup step is needed.
+		if err := ingestSlice(ctx, memorySvc, benchTenantID, slice, *concurrencyFlag); err != nil {
+			slog.Error("ingest failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("ingest complete", "questions", len(slice))
 	}
-	slog.Info("ingest complete", "questions", len(slice))
 
 	// driftSamples caps the mirror-drift check (Risks: "Mirror drift") to the
 	// first few successfully-evaluated questions — it's a diagnostic, not part
@@ -133,6 +153,7 @@ func main() {
 	driftSamples := 0
 
 	var hybridResults, vectorResults, lexicalResults []QuestionResult
+	mmrResults := make(map[string][]QuestionResult, len(mmrLambdas))
 	for _, inst := range slice {
 		if ctx.Err() != nil {
 			slog.Warn("evaluation interrupted before completion", "scored", len(hybridResults), "remaining", len(slice)-len(hybridResults))
@@ -140,7 +161,7 @@ func main() {
 		}
 
 		sampleDrift := driftSamples < driftSampleCap
-		qr, err := evaluateQuestion(ctx, sectionRepo, db, embedder, benchTenantID, inst, maxK, sampleDrift)
+		qr, err := evaluateQuestion(ctx, sectionRepo, db, embedder, benchTenantID, inst, maxK, sampleDrift, mmrLambdas)
 		if err != nil {
 			slog.Error("failed to evaluate question", "question_id", inst.QuestionID, "error", err)
 			continue
@@ -151,6 +172,9 @@ func main() {
 		hybridResults = append(hybridResults, qr.hybrid)
 		vectorResults = append(vectorResults, qr.vectorOnly)
 		lexicalResults = append(lexicalResults, qr.lexicalOnly)
+		for mode, res := range qr.mmr {
+			mmrResults[mode] = append(mmrResults[mode], res)
+		}
 	}
 
 	hybridReport := Aggregate(hybridResults)
@@ -159,6 +183,20 @@ func main() {
 	printReport("hybrid", hybridReport)
 	printReport("vector-only", vectorReport)
 	printReport("lexical-only", lexicalReport)
+
+	modes := map[string]Report{
+		"hybrid":       hybridReport,
+		"vector_only":  vectorReport,
+		"lexical_only": lexicalReport,
+	}
+	// mmrLambdas is already ascending (parseMMRLambdas), so this prints/reports
+	// the sweep in the same deterministic order RenderResultsMarkdown uses.
+	for _, lambda := range mmrLambdas {
+		key := mmrModeKey(lambda)
+		report := Aggregate(mmrResults[key])
+		modes[key] = report
+		printReport(key, report)
+	}
 
 	results := BenchmarkResults{
 		Run: RunMeta{
@@ -172,11 +210,7 @@ func main() {
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			KValues:          ks,
 		},
-		Modes: map[string]Report{
-			"hybrid":       hybridReport,
-			"vector_only":  vectorReport,
-			"lexical_only": lexicalReport,
-		},
+		Modes: modes,
 	}
 
 	if err := WriteJSON(*outJSONFlag, results); err != nil {
@@ -243,17 +277,21 @@ func ingestSlice(ctx context.Context, svc *service.MemoryService, tenantID uuid.
 }
 
 // questionResults bundles one question's per-mode QuestionResult so the
-// caller can accumulate all three aggregates in one pass over the slice.
+// caller can accumulate all aggregates in one pass over the slice. mmr is
+// keyed by mmrModeKey(λ) and only populated for the requested λ sweep.
 type questionResults struct {
 	hybrid, vectorOnly, lexicalOnly QuestionResult
+	mmr                             map[string]QuestionResult
 }
 
-// evaluateQuestion embeds inst.Question once and runs all three retrieval
-// modes (task 3) at maxK; sampleDrift additionally runs the mirror-drift
-// check (Risks: "Mirror drift") at its own candidate-pool depth (see
+// evaluateQuestion embeds inst.Question once and runs the three base
+// retrieval modes (task 3) at maxK, plus one additional hybrid+MMR retrieval
+// per λ in mmrLambdas (task 5.1) — all reusing the same qEmbedding, so no
+// extra embedder calls. sampleDrift additionally runs the mirror-drift check
+// (Risks: "Mirror drift") at its own candidate-pool depth (see
 // checkMirrorDrift) — a warn-only diagnostic, gated to a sample of questions
 // by the caller.
-func evaluateQuestion(ctx context.Context, sections *repository.SectionRepository, db *gorm.DB, embedder service.EmbeddingProvider, tenantID uuid.UUID, inst Instance, maxK int, sampleDrift bool) (questionResults, error) {
+func evaluateQuestion(ctx context.Context, sections *repository.SectionRepository, db *gorm.DB, embedder service.EmbeddingProvider, tenantID uuid.UUID, inst Instance, maxK int, sampleDrift bool, mmrLambdas []float64) (questionResults, error) {
 	subcat := CanonicalSegment(inst.QuestionID)
 
 	qEmbedding, err := embedder.Embed(ctx, inst.Question)
@@ -261,7 +299,7 @@ func evaluateQuestion(ctx context.Context, sections *repository.SectionRepositor
 		return questionResults{}, fmt.Errorf("embed question: %w", err)
 	}
 
-	hybrid, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, maxK)
+	hybrid, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, maxK, nil)
 	if err != nil {
 		return questionResults{}, err
 	}
@@ -293,11 +331,24 @@ func evaluateQuestion(ctx context.Context, sections *repository.SectionRepositor
 		}
 	}
 
-	return questionResults{
+	qr := questionResults{
 		hybrid:      mk(hybrid),
 		vectorOnly:  mk(vectorOnly),
 		lexicalOnly: mk(lexicalOnly),
-	}, nil
+	}
+
+	if len(mmrLambdas) > 0 {
+		qr.mmr = make(map[string]QuestionResult, len(mmrLambdas))
+		for _, lambda := range mmrLambdas {
+			ranked, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, maxK, &lambda)
+			if err != nil {
+				return questionResults{}, fmt.Errorf("hybrid+mmr retrieve (lambda=%.2f): %w", lambda, err)
+			}
+			qr.mmr[mmrModeKey(lambda)] = mk(ranked)
+		}
+	}
+
+	return qr, nil
 }
 
 // parseKs parses "--k" (e.g. "5,10") into a positive-int slice.
@@ -319,6 +370,33 @@ func parseKs(spec string) ([]int, error) {
 		return nil, fmt.Errorf("--k must list at least one positive integer")
 	}
 	return ks, nil
+}
+
+// parseMMRLambdas parses "--mmr" (e.g. "0.5,0.7,0.9") into an ascending,
+// validated λ list; empty/unset input yields nil (no MMR modes measured).
+func parseMMRLambdas(spec string) ([]float64, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+	parts := strings.Split(spec, ",")
+	lambdas := make([]float64, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		lambda, err := strconv.ParseFloat(p, 64)
+		if err != nil || lambda <= 0 || lambda > 1 {
+			return nil, fmt.Errorf("invalid --mmr value %q: want a number in (0, 1]", p)
+		}
+		lambdas = append(lambdas, lambda)
+	}
+	if len(lambdas) == 0 {
+		return nil, fmt.Errorf("--mmr must list at least one value in (0, 1]")
+	}
+	sort.Float64s(lambdas)
+	return lambdas, nil
 }
 
 func maxInt(ks []int) int {
