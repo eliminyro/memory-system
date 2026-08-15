@@ -278,7 +278,7 @@ func TestAPIGetDocument_ReturnsSeededDoc(t *testing.T) {
 }
 
 // TestAPISearch_CallsService proves getSearch forwards the q param to the service
-// and marshals a results array.
+// and returns the {recall_id, results} envelope.
 func TestAPISearch_CallsService(t *testing.T) {
 	f := newAPIFixture(t)
 
@@ -288,9 +288,12 @@ func TestAPISearch_CallsService(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
-	var results []repository.SearchResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
-		t.Fatalf("body not a search-results array: %v (%s)", err, rec.Body.String())
+	var resp struct {
+		RecallID *uuid.UUID                `json:"recall_id"`
+		Results  []repository.SearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body not a search envelope: %v (%s)", err, rec.Body.String())
 	}
 }
 
