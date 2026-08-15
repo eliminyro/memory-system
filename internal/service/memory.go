@@ -1013,7 +1013,45 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 	if len(scope) == 0 {
 		return []models.Document{}, nil
 	}
-	return s.docs.List(ctx, scope, category, subcategory, limit, offset)
+	docs, err := s.docs.List(ctx, scope, category, subcategory, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	s.labelDocumentTenants(ctx, docs)
+	return docs, nil
+}
+
+// labelDocumentTenants fills the display-only TenantName/TenantType on each
+// document from one batched tenant lookup, so browse/list shows the tenant name
+// (not a raw UUID) — parity with search's resolveResultTenants. Best-effort:
+// a nil tenant repo or lookup error leaves the labels empty.
+func (s *MemoryService) labelDocumentTenants(ctx context.Context, docs []models.Document) {
+	if len(docs) == 0 || s.tenants == nil {
+		return
+	}
+	seen := make(map[uuid.UUID]struct{})
+	ids := make([]uuid.UUID, 0)
+	for i := range docs {
+		if _, ok := seen[docs[i].TenantID]; ok {
+			continue
+		}
+		seen[docs[i].TenantID] = struct{}{}
+		ids = append(ids, docs[i].TenantID)
+	}
+	tenants, err := s.tenants.GetByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
+	for _, t := range tenants {
+		byID[t.ID] = t
+	}
+	for i := range docs {
+		if t, ok := byID[docs[i].TenantID]; ok {
+			docs[i].TenantName = t.Name
+			docs[i].TenantType = t.Type
+		}
+	}
 }
 
 // --- Admin operations ---

@@ -42,6 +42,11 @@ type Document struct {
 	// excluded from all reads; hard-deleted after the delete grace period.
 	ArchivedAt *time.Time `gorm:"index:idx_documents_archived_at" json:"archived_at,omitempty"`
 
+	// Display-only owning-tenant labels (not columns) — populated by the service
+	// for list responses so browse shows the tenant name/type, like search does.
+	TenantName string `gorm:"-" json:"tenant_name,omitempty"`
+	TenantType string `gorm:"-" json:"tenant_type,omitempty"`
+
 	Tenant   *Tenant   `gorm:"foreignKey:TenantID" json:"-"`
 	Sections []Section `gorm:"foreignKey:DocumentID;constraint:OnDelete:CASCADE" json:"sections,omitempty"`
 }
