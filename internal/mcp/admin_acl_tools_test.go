@@ -18,7 +18,7 @@ import (
 // must short-circuit before any database access — the same no-DB surface the
 // service unit tests use.
 func newNoDBToolServer(store authz.Store) *Server {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 	return &Server{memory: svc}
 }
 

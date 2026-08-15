@@ -872,9 +872,9 @@ async function runSearch(q) {
   view.replaceChildren(el("p", { className: "state-msg", textContent: "searching…" }));
   try {
     const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
-    const results = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20${tf}`);
+    const resp = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20${tf}`);
     if (seq !== _renderSeq) return; // discard stale render (B7)
-    renderSearchResults(results);
+    renderSearchResults(resp.results || []); // envelope: {recall_id, results}
   } catch (err) {
     if (seq !== _renderSeq) return; // discard stale render (B7)
     view.replaceChildren(el("p", { className: "state-msg state-err", textContent: `search failed: ${err.message}` }));

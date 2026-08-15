@@ -180,6 +180,7 @@ func main() {
 	cleanupRepo := repository.NewCleanupQueueRepository(db)
 	retentionRepo := repository.NewRetentionRepository(db)
 	importJobRepo := repository.NewImportJobRepository(db)
+	recallReceiptRepo := repository.NewRecallReceiptRepository(db)
 
 	// Staleness threshold cache — loads from staleness_thresholds table.
 	thresholdStore := staleness.NewThresholdStore(db)
@@ -221,7 +222,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, recallReceiptRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithRecallReceipts(cfg.RecallReceipts))
 	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
 	// Toggle defaults stamped onto every tenant created through the service.
@@ -269,6 +270,7 @@ func main() {
 		lintRepo, tenantRepo, cleanupRepo, retentionRepo, thresholdStore,
 		cfg.RetentionMultiplier, cfg.DeleteGraceDays,
 		cleanupNotifier, slog.Default(),
+		recallReceiptRepo, cfg.RecallReceiptTTL,
 	)
 	if cfg.CleanupEnabled {
 		cleanupScanner.Start(rootCtx, time.Duration(cfg.CleanupIntervalHours)*time.Hour)

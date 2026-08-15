@@ -79,6 +79,7 @@ func TestMCPBoundaryAdminGating(t *testing.T) {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
+		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 	engine := authz.NewEngine(store)

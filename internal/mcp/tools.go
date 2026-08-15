@@ -75,6 +75,11 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 	}, s.MarkVerified)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "report_recall_outcome",
+		Description: "Report whether a memory recalled by search_memory actually helped. Pass the recall_id from the search response envelope and outcome success or failure. Credits hit/miss counts on the served sections; safe to call once per recall_id (idempotent).",
+	}, s.ReportRecallOutcome)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "get_cleanup_queue",
 		Description: "Return pending near-duplicate candidates detected by the nightly cleanup scan. Each entry names two documents that collide above threshold; the cleanup agent reads these, merges with merge_documents, and resolves with mark_cleanup_done.",
 	}, s.GetCleanupQueue)
@@ -126,6 +131,12 @@ type GetDocumentByIDInput struct {
 type MarkVerifiedInput struct {
 	SectionID string  `json:"section_id" jsonschema:"Section UUID to mark as verified"`
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
+type ReportRecallOutcomeInput struct {
+	RecallID string  `json:"recall_id" jsonschema:"recall_id from a search_memory response envelope"`
+	Outcome  string  `json:"outcome" jsonschema:"success or failure — whether the recalled memory actually helped"`
+	TenantID *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type GetCleanupQueueInput struct {
@@ -229,11 +240,11 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride)
+	results, recallID, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride)
 	if err != nil {
 		return toolErr("search", err)
 	}
-	return jsonResult(results), nil, nil
+	return jsonResult(service.NewSearchResponse(results, recallID)), nil, nil
 }
 
 func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetDocumentInput) (*mcpsdk.CallToolResult, any, error) {
@@ -289,6 +300,24 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		return toolErr("mark verified", err)
 	}
 	return jsonResult(map[string]string{"status": "verified", "section_id": id.String()}), nil, nil
+}
+
+func (s *Server) ReportRecallOutcome(ctx context.Context, _ *mcpsdk.CallToolRequest, input ReportRecallOutcomeInput) (*mcpsdk.CallToolResult, any, error) {
+	if input.RecallID == "" {
+		return errorResult("recall_id is required"), nil, nil
+	}
+	id, err := uuid.Parse(input.RecallID)
+	if err != nil {
+		return errorResult("invalid recall_id: " + err.Error()), nil, nil
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	if err := s.memory.ReportRecallOutcome(ctx, id, input.Outcome, tenantOverride); err != nil {
+		return toolErr("report recall outcome", err)
+	}
+	return jsonResult(map[string]string{"status": "recorded", "recall_id": id.String(), "outcome": input.Outcome}), nil, nil
 }
 
 func (s *Server) GetCleanupQueue(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetCleanupQueueInput) (*mcpsdk.CallToolResult, any, error) {

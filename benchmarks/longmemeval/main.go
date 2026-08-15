@@ -112,7 +112,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
 
 	instances, err := LoadDataset(*dataFlag)
 	if err != nil {

@@ -17,7 +17,7 @@ import (
 // (canGrantTenantRelation, CanManageTenant) in isolation. Mirrors
 // newBootstrapUnitSvc in bootstrap_test.go.
 func newACLUnitSvc(store authz.Store) *MemoryService {
-	return NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	return NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 }
 
 // TestCanGrantTenantRelation covers the grant-ceiling matrix (design.md §6):

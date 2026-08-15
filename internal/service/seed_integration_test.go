@@ -67,7 +67,7 @@ func TestLifecycleSeeding(t *testing.T) {
 		service.NewFakeEmbedder(fakeDim),
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		store,
 	)
 

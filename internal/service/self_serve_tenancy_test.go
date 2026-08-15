@@ -25,7 +25,7 @@ func strPtr(s string) *string { return &s }
 func TestProvisionPersonalTenantGateBlocks(t *testing.T) {
 	store := authz.NewMemoryStore()
 	require.NoError(t, store.Write(context.Background(), authzseed.SystemAdmin("svc:founding-admin")))
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 	id, err := svc.ProvisionPersonalTenant(context.Background(), "bob@other.com", "Bob", "", []string{"example.com"})
 	require.ErrorIs(t, err, service.ErrSignupNotAllowed)
 	require.Empty(t, id, "a blocked signup must not return a tenant id")
@@ -38,7 +38,7 @@ func TestProvisionPersonalTenantGateBlocks(t *testing.T) {
 // gate would otherwise pass — proving the refusal comes from HasAnyAdmin, not
 // the domain gate. Nothing is created; this is the 403 path.
 func TestProvisionPersonalTenantRefusedBeforeBootstrap(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
 	id, err := svc.ProvisionPersonalTenant(context.Background(), "alice@example.com", "Alice", "", nil)
 	require.ErrorIs(t, err, service.ErrSignupNotAllowed)
 	require.Empty(t, id, "no founding admin yet: nothing may be provisioned")
@@ -47,7 +47,7 @@ func TestProvisionPersonalTenantRefusedBeforeBootstrap(t *testing.T) {
 // TestProvisionPersonalTenantEmptyEmail rejects an empty email before any DB or
 // gate work.
 func TestProvisionPersonalTenantEmptyEmail(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	id, err := svc.ProvisionPersonalTenant(context.Background(), "", "", "", nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
 	require.Empty(t, id)
@@ -57,7 +57,7 @@ func TestProvisionPersonalTenantEmptyEmail(t *testing.T) {
 // tenants repository is touched (nil here): an unknown type yields
 // ErrInvalidInput. Runs under a local-admin context so requireAdmin passes.
 func TestCreateTenantRejectsInvalidType(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := auth.WithLocalAdmin(context.Background())
 	_, err := svc.CreateTenant(ctx, "acme", "a@b.com", "bogus")
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
@@ -66,7 +66,7 @@ func TestCreateTenantRejectsInvalidType(t *testing.T) {
 // TestUpdateTenantRejectsInvalidType proves the admin update path validates the
 // type patch before the DB read (nil db) — the never-persist-garbage guard.
 func TestUpdateTenantRejectsInvalidType(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ctx := auth.WithLocalAdmin(context.Background())
 	_, err := svc.UpdateTenant(ctx, uuid.New(), service.UpdateTenantFields{Type: strPtr("bogus")})
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
@@ -75,7 +75,7 @@ func TestUpdateTenantRejectsInvalidType(t *testing.T) {
 // TestListTenantsByTypeRejectsBadType proves a non-empty, invalid type is
 // rejected before WritableTenants runs (so the handler can map it to 400).
 func TestListTenantsByTypeRejectsBadType(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	_, err := svc.ListTenantsByType(context.Background(), "bogus", "")
 	require.ErrorIs(t, err, apperr.ErrInvalidInput)
 }
@@ -84,7 +84,7 @@ func TestListTenantsByTypeRejectsBadType(t *testing.T) {
 // yields an empty (non-error) list without any DB access — WritableTenants
 // returns early for a subjectless caller.
 func TestListTenantsByTypeSubjectlessEmpty(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
 	got, err := svc.ListTenantsByType(context.Background(), models.TenantTypeShared, "")
 	require.NoError(t, err)
 	require.Empty(t, got)
@@ -101,7 +101,7 @@ func TestAuthzDecisionIndependentOfTenantType(t *testing.T) {
 	for tenantType := range models.ValidTenantTypes {
 		t.Run("manager granted, type="+tenantType, func(t *testing.T) {
 			store := authz.NewMemoryStore()
-			svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+			svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 			tenantID := uuid.New()
 			subj := "mgr-" + uuid.NewString()
 			require.NoError(t, store.Write(context.Background(), authzseed.TenantManager(tenantID, subj)))
@@ -112,7 +112,7 @@ func TestAuthzDecisionIndependentOfTenantType(t *testing.T) {
 
 		t.Run("plain member denied, type="+tenantType, func(t *testing.T) {
 			store := authz.NewMemoryStore()
-			svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+			svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 			tenantID := uuid.New()
 			subj := "mem-" + uuid.NewString()
 			require.NoError(t, store.Write(context.Background(), authzseed.TenantMember(tenantID, subj)))

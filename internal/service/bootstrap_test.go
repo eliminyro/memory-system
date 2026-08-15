@@ -17,7 +17,7 @@ import (
 // configured bootstrap token. db/repos are nil: the paths under test here
 // (HasAnyAdmin, and every Bootstrap rejection) never touch the database.
 func newBootstrapUnitSvc(store authz.Store, token string) *service.MemoryService {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 	svc.BootstrapToken = token
 	return svc
 }
@@ -87,7 +87,7 @@ func TestBootstrapTokenGates(t *testing.T) {
 // call stops at the very next check ("authz store not configured") instead of
 // reaching the database, proving the gate was bypassed without needing Postgres.
 func TestBootstrapLocalAdminBypassesTokenGate(t *testing.T) {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	svc.BootstrapToken = "" // a network caller would be rejected here
 
 	ctx := auth.WithLocalAdmin(context.Background())

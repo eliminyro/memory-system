@@ -40,7 +40,7 @@ func TestImportWorker_AllFailed_IsTerminalFailed(t *testing.T) {
 		errEmbedder{dim: fakeDim},
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		store,
 	)
 

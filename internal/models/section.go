@@ -15,8 +15,12 @@ type Section struct {
 	Content    string          `gorm:"type:text;not null" json:"content"`
 	Embedding  pgvector.Vector `gorm:"type:vector" json:"-"`
 	VerifiedAt *time.Time      `gorm:"index:idx_sections_verified_at" json:"verified_at,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	// HitCount/MissCount accrue from report_recall_outcome (Phase A: data
+	// collection only — never read at rank/retention time; see design D1).
+	HitCount  int       `gorm:"not null;default:0" json:"hit_count"`
+	MissCount int       `gorm:"not null;default:0" json:"miss_count"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	Document *Document `gorm:"foreignKey:DocumentID" json:"document,omitempty"`
 }

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v10"
 
@@ -137,6 +138,16 @@ type Config struct {
 	// MMRLambda tunes HybridSearch's MMR diversity re-rank (repository.SearchParams.MMRLambda).
 	// Default 0.9 = MMR on; set 1.0 to disable (pure relevance, applyMMR's >=0.999 escape hatch).
 	MMRLambda float64 `env:"MEMORY_MMR_LAMBDA" envDefault:"0.9"`
+
+	// Recall reconsolidation loop (Phase A: data collection only — see
+	// openspec/changes/recall-reconsolidation-loop). RecallReceipts gates
+	// receipt recording in Search; RecallReceiptTTL bounds the receipts table
+	// via the cleanup sweep. UsageWeight/UsageRetention are declared for
+	// Phase B/C but unused (0 / false = fully off) in Phase A.
+	RecallReceipts   bool          `env:"MEMORY_RECALL_RECEIPTS" envDefault:"true"`
+	RecallReceiptTTL time.Duration `env:"MEMORY_RECALL_RECEIPT_TTL" envDefault:"72h"`
+	UsageWeight      float64       `env:"MEMORY_USAGE_WEIGHT" envDefault:"0"`
+	UsageRetention   bool          `env:"MEMORY_USAGE_RETENTION" envDefault:"false"`
 }
 
 // ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
@@ -290,6 +301,20 @@ func Load() (*Config, error) {
 	// MMR lambda must stay in (0, 1] — fail fast rather than silently clamp a bad value.
 	if cfg.MMRLambda <= 0 || cfg.MMRLambda > 1 {
 		return nil, fmt.Errorf("MEMORY_MMR_LAMBDA must be in (0, 1], got %v", cfg.MMRLambda)
+	}
+
+	// Usage weight (Phase B, unused here) must stay in [0, 5] — 0 is the
+	// off/no-op default; the upper bound keeps a misconfigured weight from
+	// dominating relevance whenever Phase B reads it.
+	if cfg.UsageWeight < 0 || cfg.UsageWeight > 5 {
+		return nil, fmt.Errorf("MEMORY_USAGE_WEIGHT must be in [0, 5], got %v", cfg.UsageWeight)
+	}
+
+	// Recall receipt TTL must be positive — <= 0 would silently disable the
+	// prune (every receipt matches "created_at < now") and let the table grow
+	// unbounded.
+	if cfg.RecallReceiptTTL <= 0 {
+		return nil, fmt.Errorf("MEMORY_RECALL_RECEIPT_TTL must be > 0, got %v", cfg.RecallReceiptTTL)
 	}
 
 	return cfg, nil

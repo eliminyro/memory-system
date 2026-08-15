@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eliminyro/memory-system/internal/models"
 )
@@ -510,6 +511,100 @@ func TestLoadRejectsMMRLambdaOutOfRange(t *testing.T) {
 				t.Fatalf("loaded out-of-range MMRLambda: %v", cfg.MMRLambda)
 			}
 		})
+	}
+}
+
+// TestLoadRejectsUsageWeightOutOfRange guards the fail-fast contract for
+// MEMORY_USAGE_WEIGHT: must be in [0, 5], no silent clamping. 0 is the Phase-A
+// no-op default.
+func TestLoadRejectsUsageWeightOutOfRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "default unset ok", value: ""},
+		{name: "zero ok (off)", value: "0"},
+		{name: "5 ok (upper bound)", value: "5"},
+		{name: "negative rejected", value: "-0.1", wantErr: "MEMORY_USAGE_WEIGHT must be in [0, 5]"},
+		{name: "above 5 rejected", value: "5.1", wantErr: "MEMORY_USAGE_WEIGHT must be in [0, 5]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.value != "" {
+				t.Setenv("MEMORY_USAGE_WEIGHT", tc.value)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.UsageWeight < 0 || cfg.UsageWeight > 5 {
+				t.Fatalf("loaded out-of-range UsageWeight: %v", cfg.UsageWeight)
+			}
+		})
+	}
+}
+
+// TestLoadRejectsNonPositiveRecallReceiptTTL guards the fail-fast contract for
+// MEMORY_RECALL_RECEIPT_TTL: must be > 0, or the prune silently never fires
+// and the receipts table grows unbounded.
+func TestLoadRejectsNonPositiveRecallReceiptTTL(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "default unset ok (72h)", value: ""},
+		{name: "positive ok", value: "1h"},
+		{name: "zero rejected", value: "0", wantErr: "MEMORY_RECALL_RECEIPT_TTL must be > 0"},
+		{name: "negative rejected", value: "-1h", wantErr: "MEMORY_RECALL_RECEIPT_TTL must be > 0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.value != "" {
+				t.Setenv("MEMORY_RECALL_RECEIPT_TTL", tc.value)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.RecallReceiptTTL <= 0 {
+				t.Fatalf("loaded non-positive RecallReceiptTTL: %v", cfg.RecallReceiptTTL)
+			}
+		})
+	}
+}
+
+// TestLoadRecallReconsolidationDefaults guards the Phase-A safe-landing
+// defaults (design D7): receipts on, a 72h TTL, and both Phase B/C toggles off.
+func TestLoadRecallReconsolidationDefaults(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.RecallReceipts {
+		t.Error("RecallReceipts default = false, want true")
+	}
+	if cfg.RecallReceiptTTL != 72*time.Hour {
+		t.Errorf("RecallReceiptTTL default = %v, want 72h", cfg.RecallReceiptTTL)
+	}
+	if cfg.UsageWeight != 0 {
+		t.Errorf("UsageWeight default = %v, want 0", cfg.UsageWeight)
+	}
+	if cfg.UsageRetention {
+		t.Error("UsageRetention default = true, want false")
 	}
 }
 

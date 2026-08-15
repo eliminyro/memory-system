@@ -28,6 +28,7 @@ type ScanStats struct {
 	Errors         int
 	DocsArchived   int
 	DocsDeleted    int
+	ReceiptsPruned int
 }
 
 // Scanner runs the near-duplicate scan and keeps cleanup_queue populated.
@@ -41,6 +42,11 @@ type Scanner struct {
 	graceDays  int
 	notifier   *Notifier
 	logger     *slog.Logger
+	// recallReceipts/recallReceiptTTL prune expired recall_receipts rows
+	// (design D3/task 4.1); nil-safe (a service built without it skips the
+	// prune), TTL<=0 also skips.
+	recallReceipts   *repository.RecallReceiptRepository
+	recallReceiptTTL time.Duration
 
 	// runMu serialises RunOnce so an overlapping ticker fire can't cause
 	// concurrent upserts (which, absent a partial unique index, duplicate rows).
@@ -58,17 +64,21 @@ func NewScanner(
 	graceDays int,
 	notifier *Notifier,
 	logger *slog.Logger,
+	recallReceipts *repository.RecallReceiptRepository,
+	recallReceiptTTL time.Duration,
 ) *Scanner {
 	return &Scanner{
-		lint:       lint,
-		tenants:    tenants,
-		queue:      queue,
-		retention:  retentionRepo,
-		thresholds: thresholds,
-		multiplier: multiplier,
-		graceDays:  graceDays,
-		notifier:   notifier,
-		logger:     logger,
+		lint:             lint,
+		tenants:          tenants,
+		queue:            queue,
+		retention:        retentionRepo,
+		thresholds:       thresholds,
+		multiplier:       multiplier,
+		graceDays:        graceDays,
+		notifier:         notifier,
+		logger:           logger,
+		recallReceipts:   recallReceipts,
+		recallReceiptTTL: recallReceiptTTL,
 	}
 }
 
@@ -98,6 +108,16 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 				s.logger.Warn("retention sweep: tenant failed", "tenant_id", tenant.ID, "error", err)
 				stats.Errors++
 			}
+		}
+	}
+
+	if s.recallReceipts != nil && s.recallReceiptTTL > 0 {
+		n, err := s.recallReceipts.PruneExpired(ctx, time.Now().Add(-s.recallReceiptTTL))
+		if err != nil {
+			s.logger.Warn("recall receipt prune failed", "error", err)
+			stats.Errors++
+		} else {
+			stats.ReceiptsPruned = int(n)
 		}
 	}
 
@@ -218,5 +238,6 @@ func (s *Scanner) runAndLog(ctx context.Context) {
 		"errors", stats.Errors,
 		"docs_archived", stats.DocsArchived,
 		"docs_deleted", stats.DocsDeleted,
+		"receipts_pruned", stats.ReceiptsPruned,
 	)
 }
