@@ -201,16 +201,25 @@ func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *S
 	}
 
 	now := time.Now()
-	cutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+	// Partition per-doc_type cutoffs: curated doc_types archive-then-delete as
+	// before; episodic ones (journal, ...) skip archive entirely and roll off
+	// via direct-delete (DeleteEpisodicExpired) instead.
+	curatedCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+	episodicCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
 	for docType := range models.ValidDocTypes {
 		days, err := s.thresholds.DaysFor(ctx, docType)
 		if err != nil {
 			return fmt.Errorf("threshold for %s: %w", docType, err)
 		}
-		cutoffs[docType] = retention.ExpiryCutoff(now, days, s.multiplier)
+		cutoff := retention.ExpiryCutoff(now, days, s.multiplier)
+		if models.IsEpisodic(docType) {
+			episodicCutoffs[docType] = cutoff
+		} else {
+			curatedCutoffs[docType] = cutoff
+		}
 	}
 
-	archived, err := s.retention.ArchiveExpired(ctx, tenantID, cutoffs)
+	archived, err := s.retention.ArchiveExpired(ctx, tenantID, curatedCutoffs)
 	if err != nil {
 		return err
 	}
@@ -221,6 +230,12 @@ func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *S
 		return err
 	}
 	stats.DocsDeleted += int(deleted)
+
+	episodicDeleted, err := s.retention.DeleteEpisodicExpired(ctx, tenantID, episodicCutoffs)
+	if err != nil {
+		return err
+	}
+	stats.DocsDeleted += int(episodicDeleted)
 	return nil
 }
 

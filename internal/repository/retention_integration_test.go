@@ -253,3 +253,103 @@ func TestRetentionArchiveExpired(t *testing.T) {
 		t.Error("doc_type absent from the cutoff map must be untouched")
 	}
 }
+
+// TestRetentionEpisodic_DirectDeleteVsArchive is the load-bearing episodic
+// retention safety test: an over-window journal is hard-deleted (with a
+// deletion_event, never archived), a within-window journal survives, and a
+// curated doc at the SAME age is archived (not deleted) — proving the two
+// retention paths can't cross-contaminate even when a cutoffs map is misrouted.
+func TestRetentionEpisodic_DirectDeleteVsArchive(t *testing.T) {
+	db := openRetentionPG(t)
+	ctx := context.Background()
+	repo := repository.NewRetentionRepository(db)
+
+	tenantA := retTenant(t, db)
+
+	now := time.Now()
+	old := now.Add(-40 * 24 * time.Hour)
+	recent := now.Add(-2 * 24 * time.Hour)
+	cutoff := now.Add(-30 * 24 * time.Hour)
+
+	overJournal := retDoc(t, db, tenantA, models.DocTypeJournal, "over-journal-"+uuid.NewString(), nil)
+	retSection(t, db, overJournal, old, old, nil)
+
+	withinJournal := retDoc(t, db, tenantA, models.DocTypeJournal, "within-journal-"+uuid.NewString(), nil)
+	retSection(t, db, withinJournal, recent, recent, nil)
+
+	curated := retDoc(t, db, tenantA, models.DocTypeLearning, "curated-"+uuid.NewString(), nil)
+	retSection(t, db, curated, old, old, nil)
+
+	episodicCutoffs := map[string]time.Time{models.DocTypeJournal: cutoff}
+	curatedCutoffs := map[string]time.Time{models.DocTypeLearning: cutoff}
+
+	// ArchiveExpired must never archive an episodic doc_type, even if misfed one.
+	archived, err := repo.ArchiveExpired(ctx, tenantA, episodicCutoffs)
+	if err != nil {
+		t.Fatalf("ArchiveExpired(episodic): %v", err)
+	}
+	if archived != 0 {
+		t.Fatalf("ArchiveExpired archived %d episodic docs, want 0", archived)
+	}
+	if docArchived(t, db, overJournal) {
+		t.Error("episodic doc must never be archived")
+	}
+
+	// Curated doc at the same age archives normally, unaffected.
+	archivedCurated, err := repo.ArchiveExpired(ctx, tenantA, curatedCutoffs)
+	if err != nil {
+		t.Fatalf("ArchiveExpired(curated): %v", err)
+	}
+	if archivedCurated != 1 {
+		t.Fatalf("ArchiveExpired(curated) = %d, want 1", archivedCurated)
+	}
+	if !docArchived(t, db, curated) {
+		t.Error("curated doc at the window edge must be archived")
+	}
+	if !docExists(t, db, curated) {
+		t.Error("archived curated doc must not be hard-deleted by ArchiveExpired")
+	}
+
+	// Misrouting curated cutoffs into the episodic delete must be a no-op
+	// (doubly scoped: doc_type = ANY(episodic) excludes it regardless).
+	misrouted, err := repo.DeleteEpisodicExpired(ctx, tenantA, curatedCutoffs)
+	if err != nil {
+		t.Fatalf("DeleteEpisodicExpired(curated cutoffs): %v", err)
+	}
+	if misrouted != 0 {
+		t.Fatalf("DeleteEpisodicExpired deleted %d curated docs, want 0", misrouted)
+	}
+	if !docExists(t, db, curated) {
+		t.Error("curated doc must survive a misrouted episodic-delete call")
+	}
+
+	// The real path: over-window journal is hard-deleted with an audit row;
+	// within-window journal survives.
+	deleted, err := repo.DeleteEpisodicExpired(ctx, tenantA, episodicCutoffs)
+	if err != nil {
+		t.Fatalf("DeleteEpisodicExpired(episodic): %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("DeleteEpisodicExpired = %d, want 1", deleted)
+	}
+	if docExists(t, db, overJournal) {
+		t.Error("over-window journal must be hard-deleted")
+	}
+	if !docExists(t, db, withinJournal) {
+		t.Error("within-window journal must survive")
+	}
+
+	var events []models.DeletionEvent
+	if err := db.Where("tenant_id = ? AND doc_type = ?", tenantA, models.DocTypeJournal).Find(&events).Error; err != nil {
+		t.Fatalf("load deletion events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("deletion_events for journal = %d, want 1", len(events))
+	}
+	if events[0].ArchivedAt != nil {
+		t.Error("direct-deleted episodic doc must show archived_at NULL in its audit row (never archived)")
+	}
+	if events[0].Reason != models.DeletionReasonRetention {
+		t.Errorf("deletion event reason = %q, want %q", events[0].Reason, models.DeletionReasonRetention)
+	}
+}

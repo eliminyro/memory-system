@@ -176,6 +176,38 @@ func TestCreateDocument_DuplicateGuardConflict(t *testing.T) {
 	require.Equal(t, "similar_exists", body["status"])
 }
 
+// TestCreateDocument_EpisodicBypassesDuplicateGuard proves a journal-category
+// (episodic) document is never refused as similar_exists, even with the
+// tenant's duplicate guard on and byte-identical content — unlike the
+// non-episodic case in TestCreateDocument_DuplicateGuardConflict above.
+func TestCreateDocument_EpisodicBypassesDuplicateGuard(t *testing.T) {
+	f := newWriteAPIFixture(t)
+	tenant, err := f.svc.CreateTenant(f.adminCtx, "wr-journal-"+uuid.NewString(), "", models.TenantTypeShared)
+	require.NoError(t, err)
+
+	dg := true
+	_, err = f.svc.UpdateTenant(f.adminCtx, tenant.ID, service.UpdateTenantFields{DuplicateGuard: &dg})
+	require.NoError(t, err)
+
+	content := "# Shared Title\n\n## Body\nidentical distinctive content for the journal guard"
+
+	rec1 := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(rec1, ctxJSONReq(http.MethodPost, "/documents", adminReqCtx(tenant.ID), map[string]any{
+		"category": "journal", "slug": "day-a-" + uuid.NewString(), "content": content,
+	}))
+	require.Equal(t, http.StatusCreated, rec1.Code, rec1.Body.String())
+
+	rec2 := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(rec2, ctxJSONReq(http.MethodPost, "/documents", adminReqCtx(tenant.ID), map[string]any{
+		"category": "journal", "slug": "day-b-" + uuid.NewString(), "content": content,
+	}))
+	require.Equal(t, http.StatusCreated, rec2.Code, rec2.Body.String())
+
+	var doc models.Document
+	require.NoError(t, f.db.Where("tenant_id = ? AND slug LIKE ?", tenant.ID, "day-b-%").First(&doc).Error)
+	require.Equal(t, models.DocTypeJournal, doc.DocType)
+}
+
 // TestCreateDocument_ValidationErrors proves the input guards: a bad body is 400,
 // and missing required fields are 400 before any authz/store work.
 func TestCreateDocument_ValidationErrors(t *testing.T) {

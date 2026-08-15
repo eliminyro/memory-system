@@ -93,7 +93,7 @@ func sectionViewFromModel(ctx context.Context, store *staleness.ThresholdStore, 
 	view.ThresholdDays = check.ThresholdDays
 	view.StaleDays = int(check.Age / (24 * time.Hour))
 
-	if mode == models.StalenessModeHard && check.Guarded && !forceRead {
+	if mode == models.StalenessModeHard && check.Guarded && !forceRead && !models.IsEpisodic(docType) {
 		view.Status = "needs_verification"
 		view.Preview = staleness.Preview(sec.Content, 200)
 		view.VerifyHints = staleness.ExtractVerifyHints(sec.Content, 5)
@@ -131,7 +131,7 @@ func applyStalenessToSearchResults(ctx context.Context, store *staleness.Thresho
 		}
 		r.ThresholdDays = check.ThresholdDays
 		r.StaleDays = int(check.Age / (24 * time.Hour))
-		if mode == models.StalenessModeHard && check.Guarded && !forceRead {
+		if mode == models.StalenessModeHard && check.Guarded && !forceRead && !models.IsEpisodic(r.DocType) {
 			r.Status = "needs_verification"
 			r.Preview = staleness.Preview(r.Content, 200)
 			r.VerifyHints = staleness.ExtractVerifyHints(r.Content, 5)

@@ -45,9 +45,33 @@ func InferDocType(category string, subcategory *string, slug string) string {
 		return DocTypePreference
 	case "tools":
 		return DocTypeTool
+	case "journal":
+		return DocTypeJournal
 	default:
 		return DocTypeReference
 	}
+}
+
+// episodicDocTypes marks doc_types exempt from all curation machinery
+// (duplicate guard, verification withholding, lint stale-check, cleanup scan)
+// but still subject to retention — as direct-delete instead of archive.
+var episodicDocTypes = map[string]bool{
+	DocTypeJournal: true,
+}
+
+// IsEpisodic reports whether a doc_type is episodic (see episodicDocTypes).
+func IsEpisodic(docType string) bool {
+	return episodicDocTypes[docType]
+}
+
+// EpisodicDocTypes returns the episodic doc_type set as a slice, for binding
+// as a SQL array parameter (e.g. `doc_type <> ALL(?)` / `doc_type = ANY(?)`).
+func EpisodicDocTypes() []string {
+	out := make([]string, 0, len(episodicDocTypes))
+	for dt := range episodicDocTypes {
+		out = append(out, dt)
+	}
+	return out
 }
 
 // containsFold is a local case-insensitive substring test.
@@ -87,4 +111,5 @@ var DefaultStalenessThresholds = []StalenessThreshold{
 	{DocType: DocTypePreference, Days: 365},
 	{DocType: DocTypeTool, Days: 90},
 	{DocType: DocTypeReference, Days: 90},
+	{DocType: DocTypeJournal, Days: 10},
 }

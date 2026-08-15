@@ -21,6 +21,8 @@ func TestInferDocType(t *testing.T) {
 		{"tool doc", "tools", "jq", nil, DocTypeTool},
 		{"unknown category", "misc", "something", nil, DocTypeReference},
 		{"case-insensitive plan match", "projects", "AuditPlan", nil, DocTypeAudit},
+		{"journal category", "journal", "2026-08-15", nil, DocTypeJournal},
+		{"journal category any slug", "journal", "morning-notes", strPtr("work"), DocTypeJournal},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -29,6 +31,28 @@ func TestInferDocType(t *testing.T) {
 				t.Errorf("InferDocType(%q, %v, %q) = %q, want %q", tc.category, tc.subcategory, tc.slug, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsEpisodic asserts journal is the only episodic doc_type among every
+// member of ValidDocTypes — a fifth doc_type accidentally marked episodic (or
+// journal not being episodic) would silently defeat the curation exemptions.
+func TestIsEpisodic(t *testing.T) {
+	for dt := range ValidDocTypes {
+		want := dt == DocTypeJournal
+		if got := IsEpisodic(dt); got != want {
+			t.Errorf("IsEpisodic(%q) = %v, want %v", dt, got, want)
+		}
+	}
+	if IsEpisodic("not_a_real_doc_type") {
+		t.Error("IsEpisodic on an unknown doc_type must be false")
+	}
+}
+
+func TestEpisodicDocTypes(t *testing.T) {
+	set := EpisodicDocTypes()
+	if len(set) != 1 || set[0] != DocTypeJournal {
+		t.Errorf("EpisodicDocTypes() = %v, want [%q]", set, DocTypeJournal)
 	}
 }
 
