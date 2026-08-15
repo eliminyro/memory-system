@@ -55,7 +55,12 @@ func TestSearch_EmptyResultsIssueNoReceipt(t *testing.T) {
 	var before int64
 	require.NoError(t, f.db.Table("recall_receipts").Count(&before).Error)
 
-	results, recallID, err := f.svc.Search(ctx, "no-such-token-"+uuid.NewString(), nil, nil, 20, false, "", nil)
+	// Filter to a category no document has: the shared common pool accumulates
+	// docs across tests and the fake embedder can score any token above the
+	// floor, so a nil-category search is not reliably empty — a category filter
+	// makes "zero results" deterministic (SQL yields no candidates).
+	emptyCat := "no-such-category-" + uuid.NewString()
+	results, recallID, err := f.svc.Search(ctx, "anything", &emptyCat, nil, 20, false, "", nil)
 	require.NoError(t, err)
 	require.Empty(t, results)
 	require.Equal(t, uuid.Nil, recallID)
