@@ -26,12 +26,15 @@ func hasSentinel(s string) bool {
 	return strings.Contains(s, repository.SnippetStartSel) || strings.Contains(s, repository.SnippetStopSel)
 }
 
-// findSection runs the search and returns the result for secID, retrying to
-// absorb the rare under-return of unique-token hits (see PerTenantStaleness).
-func findSection(t *testing.T, f *authzFixture, ctx context.Context, query string, secID uuid.UUID, snippet bool) repository.SearchResult {
+// findSection runs the search filtered to a per-test subcategory and returns the
+// result for secID. The subcategory filter isolates the search from the shared
+// persistent DB + common pool the fixture accumulates across tests (the fake
+// embedder scores unrelated docs ~0.74, which otherwise crowds a unique-token hit
+// out of the top-K — the pollution that flaked the recall suite).
+func findSection(t *testing.T, f *authzFixture, ctx context.Context, query, sub string, secID uuid.UUID, snippet bool) repository.SearchResult {
 	t.Helper()
 	for attempt := 0; attempt < 5; attempt++ {
-		results, _, err := f.svc.Search(ctx, query, nil, nil, 20, false, "", nil, snippet)
+		results, _, err := f.svc.Search(ctx, query, nil, &sub, 20, false, "", nil, snippet)
 		require.NoError(t, err)
 		for _, r := range results {
 			if r.SectionID == secID {
@@ -40,7 +43,7 @@ func findSection(t *testing.T, f *authzFixture, ctx context.Context, query strin
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	t.Fatalf("section %s not found in search results", secID)
+	t.Fatalf("section %s not found in search results (sub=%s)", secID, sub)
 	return repository.SearchResult{}
 }
 
@@ -50,16 +53,17 @@ func TestSearchSnippet_OmittedPreservesFullContent(t *testing.T) {
 	f := newAuthzFixture(t)
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "snip" + uuid.NewString()[:8]
+	sub := "sub" + uuid.NewString()[:8]
 	body := strings.Repeat("alpha beta gamma delta ", 40) + " " + token + " tail"
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &sub, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
 	var sec models.Section
 	require.NoError(t, f.db.Where("id = ?", secID).First(&sec).Error)
 
-	r := findSection(t, f, ctx, token, secID, false)
+	r := findSection(t, f, ctx, token, sub, secID, false)
 	require.Equal(t, sec.Content, r.Content, "snippet=false returns full content unchanged")
 	require.Nil(t, r.SnippetCentered, "snippet_centered absent when snippet mode is off")
 }
@@ -70,17 +74,18 @@ func TestSearchSnippet_LexicalHitIsCentered(t *testing.T) {
 	f := newAuthzFixture(t)
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "snip" + uuid.NewString()[:8]
+	sub := "sub" + uuid.NewString()[:8]
 	// Match sits deep in the body so a leading-text window would not contain it.
 	body := strings.Repeat("alpha beta gamma delta epsilon zeta ", 30) + " " + token + " " + strings.Repeat("omega ", 30)
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &sub, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
 	var sec models.Section
 	require.NoError(t, f.db.Where("id = ?", secID).First(&sec).Error)
 
-	r := findSection(t, f, ctx, token, secID, true)
+	r := findSection(t, f, ctx, token, sub, secID, true)
 	require.NotNil(t, r.SnippetCentered)
 	require.True(t, *r.SnippetCentered, "lexical hit is centered")
 	require.Contains(t, r.Content, token, "window contains the matched term")
@@ -97,15 +102,16 @@ func TestSearchSnippet_CenteredWindowSurvivesLongLeadingTokens(t *testing.T) {
 	f := newAuthzFixture(t)
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "snip" + uuid.NewString()[:8]
+	sub := "sub" + uuid.NewString()[:8]
 	// Long single-lexeme filler well past the cap, THEN the match near the end.
 	lead := strings.Repeat("longleadingfillertokenaaaaaaaaaa ", 80) // ~2600 chars
 	body := lead + " " + token + " trailing text here"
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &sub, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	r := findSection(t, f, ctx, token, secID, true)
+	r := findSection(t, f, ctx, token, sub, secID, true)
 	require.NotNil(t, r.SnippetCentered)
 	require.True(t, *r.SnippetCentered, "lexical hit is centered")
 	require.Contains(t, r.Content, token, "centered window keeps the matched term despite long leading tokens")
@@ -120,9 +126,10 @@ func TestSearchSnippet_SemanticOnlyHitNotCentered(t *testing.T) {
 	f := newAuthzFixture(t)
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "sem" + uuid.NewString()[:8] // absent from the body -> no lexical match
+	sub := "sub" + uuid.NewString()[:8]
 	body := strings.Repeat("unrelated filler words here ", 40)
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "sem-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &sub, "sem-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
@@ -132,7 +139,7 @@ func TestSearchSnippet_SemanticOnlyHitNotCentered(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.db.Model(&models.Section{}).Where("id = ?", secID).Update("embedding", emb).Error)
 
-	r := findSection(t, f, ctx, token, secID, true)
+	r := findSection(t, f, ctx, token, sub, secID, true)
 	require.NotNil(t, r.SnippetCentered)
 	require.False(t, *r.SnippetCentered, "purely-semantic hit falls back to leading text")
 	require.NotEmpty(t, r.Content, "leading-text window is non-empty")
@@ -154,12 +161,13 @@ func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 		Update("staleness_mode", models.StalenessModeOff).Error)
 
 	token := "snip" + uuid.NewString()[:8]
+	sub := "sub" + uuid.NewString()[:8]
 	// Mentions a code path -> guard-eligible once stale.
 	body := "internal/service/memory.go is where it lives " + token
-	resA, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", nil,
+	resA, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", &sub,
 		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
-	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
+	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", &sub,
 		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
 
@@ -172,7 +180,7 @@ func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 	var ra, rb repository.SearchResult
 	var okA, okB bool
 	for attempt := 0; attempt < 5; attempt++ {
-		results, _, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil, true)
+		results, _, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, &sub, 20, false, "", nil, true)
 		require.NoError(t, err)
 		bySection := map[uuid.UUID]repository.SearchResult{}
 		for _, r := range results {
@@ -208,9 +216,10 @@ func TestSearchSnippet_GetDocumentStillFull(t *testing.T) {
 	f := newAuthzFixture(t)
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "snip" + uuid.NewString()[:8]
+	sub := "sub" + uuid.NewString()[:8]
 	body := strings.Repeat("alpha beta gamma delta epsilon ", 40) + " " + token + " tail"
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &sub, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
 	require.NoError(t, err)
 	doc := res.Document
 	secID := doc.Sections[0].ID
@@ -219,7 +228,7 @@ func TestSearchSnippet_GetDocumentStillFull(t *testing.T) {
 	require.NoError(t, f.db.Where("id = ?", secID).First(&sec).Error)
 
 	// Snippet search windows the content...
-	r := findSection(t, f, ctx, token, secID, true)
+	r := findSection(t, f, ctx, token, sub, secID, true)
 	require.Less(t, len(r.Content), len(sec.Content), "search snippet is windowed")
 
 	// ...but get_document returns the full body untouched.
