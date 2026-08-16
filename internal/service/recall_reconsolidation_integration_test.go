@@ -32,7 +32,7 @@ func TestSearch_RecordsReceiptForNonEmptyResults(t *testing.T) {
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	results, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
+	results, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil, false)
 	require.NoError(t, err)
 	require.NotEmpty(t, results, "expected the seeded section to match")
 	require.NotEqual(t, uuid.Nil, recallID, "non-empty search must return a recall id")
@@ -60,7 +60,7 @@ func TestSearch_EmptyResultsIssueNoReceipt(t *testing.T) {
 	// floor, so a nil-category search is not reliably empty — a category filter
 	// makes "zero results" deterministic (SQL yields no candidates).
 	emptyCat := "no-such-category-" + uuid.NewString()
-	results, recallID, err := f.svc.Search(ctx, "anything", &emptyCat, nil, 20, false, "", nil)
+	results, recallID, err := f.svc.Search(ctx, "anything", &emptyCat, nil, 20, false, "", nil, false)
 	require.NoError(t, err)
 	require.Empty(t, results)
 	require.Equal(t, uuid.Nil, recallID)
@@ -81,7 +81,7 @@ func TestReportRecallOutcome_SuccessCreditsHit(t *testing.T) {
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil, false)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, recallID)
 
@@ -103,7 +103,7 @@ func TestReportRecallOutcome_FailureCreditsMiss(t *testing.T) {
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil, false)
 	require.NoError(t, err)
 
 	require.NoError(t, f.svc.ReportRecallOutcome(ctx, recallID, models.RecallOutcomeFailure, nil))
@@ -124,7 +124,7 @@ func TestReportRecallOutcome_DuplicateIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil, false)
 	require.NoError(t, err)
 
 	require.NoError(t, f.svc.ReportRecallOutcome(ctx, recallID, models.RecallOutcomeSuccess, nil))
@@ -156,7 +156,7 @@ func TestReportRecallOutcome_CrossTenantRejected(t *testing.T) {
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctxA, token, nil, &token, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctxA, token, nil, &token, 20, false, "", nil, false)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, recallID)
 
@@ -193,7 +193,7 @@ func TestReportRecallOutcome_AdminOverrideFindsReceipt(t *testing.T) {
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(adminCtx, token, nil, &token, 20, false, "", &f.tenantB)
+	_, recallID, err := f.svc.Search(adminCtx, token, nil, &token, 20, false, "", &f.tenantB, false)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, recallID, "admin override search must still issue a receipt")
 

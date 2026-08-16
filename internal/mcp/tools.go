@@ -21,7 +21,7 @@ const maxContentSize = 10 << 20 // 10 MB
 func (s *Server) registerTools(srv *mcpsdk.Server) {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "search_memory",
-		Description: "Search memories using semantic similarity and keyword matching. Returns the most relevant sections across all documents.",
+		Description: "Search memories using semantic similarity and keyword matching. Returns the most relevant sections across all documents. Pass snippet=true for a short match-centered window of each result instead of full content (cheap triage); use get_document to fetch full text.",
 	}, s.SearchMemory)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -110,6 +110,7 @@ type SearchMemoryInput struct {
 	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Bypass staleness guard. Requires reason. Audited in override_log."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+	Snippet     bool    `json:"snippet,omitempty" jsonschema:"Return a short match-centered snippet of each result's content instead of the full section; use get_document for full text. Default false."`
 }
 
 type GetDocumentInput struct {
@@ -240,7 +241,7 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	results, recallID, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride)
+	results, recallID, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride, input.Snippet)
 	if err != nil {
 		return toolErr("search", err)
 	}

@@ -514,6 +514,45 @@ func TestLoadRejectsMMRLambdaOutOfRange(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsNonPositiveSnippetChars guards the fail-fast contract for
+// MEMORY_SNIPPET_CHARS: must be > 0 (a zero/negative cap yields empty snippets).
+// Default unset is 400.
+func TestLoadRejectsNonPositiveSnippetChars(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "default unset ok (400)", value: ""},
+		{name: "positive ok", value: "800"},
+		{name: "zero rejected", value: "0", wantErr: "MEMORY_SNIPPET_CHARS must be > 0"},
+		{name: "negative rejected", value: "-1", wantErr: "MEMORY_SNIPPET_CHARS must be > 0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.value != "" {
+				t.Setenv("MEMORY_SNIPPET_CHARS", tc.value)
+			}
+			cfg, err := Load()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.SnippetChars <= 0 {
+				t.Fatalf("loaded non-positive SnippetChars: %d", cfg.SnippetChars)
+			}
+			if tc.value == "" && cfg.SnippetChars != 400 {
+				t.Fatalf("want default SnippetChars 400, got %d", cfg.SnippetChars)
+			}
+		})
+	}
+}
+
 // TestLoadRejectsUsageWeightOutOfRange guards the fail-fast contract for
 // MEMORY_USAGE_WEIGHT: must be in [0, 5], no silent clamping. 0 is the Phase-A
 // no-op default.

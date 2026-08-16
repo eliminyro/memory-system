@@ -93,7 +93,15 @@ type MemoryService struct {
 	// default true). Set explicitly in NewMemoryService so a service built
 	// without WithRecallReceipts still defaults to enabled, not the bool zero value.
 	recallReceiptsEnabled bool
+	// snippetChars caps the match-centered window Search returns when snippet=true.
+	// Set explicitly in NewMemoryService so a service built without WithSnippetChars
+	// still gets the default, not the int zero value (which would blank snippets).
+	snippetChars int
 }
+
+// defaultSnippetChars mirrors config MEMORY_SNIPPET_CHARS default so a service
+// built without WithSnippetChars (offline CLI / tests) still windows sensibly.
+const defaultSnippetChars = 400
 
 // Option configures optional MemoryService behavior at construction time.
 type Option func(*MemoryService)
@@ -104,6 +112,14 @@ func WithMMRLambda(lambda float64) Option {
 	return func(s *MemoryService) {
 		l := lambda
 		s.mmrLambda = &l
+	}
+}
+
+// WithSnippetChars sets the match-centered snippet window size (chars) applied
+// when Search runs in snippet mode. Without it snippetChars keeps its default.
+func WithSnippetChars(chars int) Option {
+	return func(s *MemoryService) {
+		s.snippetChars = chars
 	}
 }
 
@@ -155,6 +171,7 @@ func NewMemoryService(
 		// Default true (design D7): recording is harmless and additive. A caller
 		// that wants it off passes WithRecallReceipts(false).
 		recallReceiptsEnabled: true,
+		snippetChars:          defaultSnippetChars,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -480,7 +497,7 @@ const (
 // When forceRead is true, Reason is required and the override is audited. The
 // second return value is a recall receipt id (uuid.Nil when results are empty,
 // recording is disabled, or the insert failed) — see recordRecallReceipt.
-func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID) ([]repository.SearchResult, uuid.UUID, error) {
+func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID, snippet bool) ([]repository.SearchResult, uuid.UUID, error) {
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, uuid.Nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
@@ -523,6 +540,12 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 			OverrideType: models.OverrideTypeForceRead,
 			Reason:       reason,
 		})
+	}
+	// Post-staleness snippet step: rewrites non-withheld content in place. Runs
+	// after withholding so blanked (Content=="") results are excluded by
+	// construction — no withheld body can be reconstructed via ts_headline.
+	if snippet {
+		s.applySnippets(ctx, results, query, scope)
 	}
 	recallID := s.recordRecallReceipt(ctx, results, overrideID)
 	return results, recallID, nil

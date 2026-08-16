@@ -259,7 +259,7 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
-	results, recallID, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", tenantID)
+	results, recallID, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", tenantID, false)
 	if err != nil {
 		writeErr(w, err)
 		return
