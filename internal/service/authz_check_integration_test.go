@@ -77,6 +77,15 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	require.NoError(t, store.Write(ctx, authzseed.TenantSystemEdge(models.BootstrapTenantID)))
 	require.NoError(t, store.Write(ctx, authzseed.CommonPoolViewerWildcard()))
 
+	// Start every test from an empty common pool. The suite runs -p 1 and each
+	// fixture seeds 2 pool docs (docC/docC2 below) readable by all tests via
+	// CommonPoolViewerWildcard; without this they accumulate across the run, and
+	// because the fake embedder ties every vector at ~0.74 similarity an
+	// accumulated pool crowds unique-token search hits out of the top-K — making
+	// search-based tests order-dependent (the recall + snippet flakes). This
+	// runs before docC/docC2 are seeded, so it only clears prior tests' docs.
+	require.NoError(t, resetCommonPool(db))
+
 	// Tenant A + member subject.
 	f.tenantA = f.mkTenant(t)
 	f.subjA = "userA-" + uuid.NewString()
@@ -108,6 +117,30 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	f.docC2, _ = f.storeDoc(t, adminBase, &models.BootstrapTenantID)
 
 	return f
+}
+
+// resetCommonPool clears the shared common-pool tenant's documents (sections
+// cascade via the OnDelete:CASCADE FK) plus their cleanup_queue rows and
+// document relation_tuples — mirroring the retention delete's child-cleanup
+// order (retention.go). It intentionally writes NO deletion_events: this is
+// test-fixture isolation, not a real deletion, so retention/audit counts stay
+// untouched. Safe under the suite's -p 1 (no concurrent fixture).
+func resetCommonPool(db *gorm.DB) error {
+	const sql = `
+		WITH victims AS (
+			SELECT id FROM documents WHERE tenant_id = ?
+		),
+		purge AS (
+			DELETE FROM cleanup_queue
+			WHERE doc_a_id IN (SELECT id FROM victims)
+			   OR doc_b_id IN (SELECT id FROM victims)
+		),
+		tuples AS (
+			DELETE FROM relation_tuples
+			WHERE object_type = ? AND object_id IN (SELECT id::text FROM victims)
+		)
+		DELETE FROM documents WHERE id IN (SELECT id FROM victims)`
+	return db.Exec(sql, models.BootstrapTenantID, authz.TypeDocument).Error
 }
 
 func (f *authzFixture) mkTenant(t *testing.T) uuid.UUID {
