@@ -89,6 +89,9 @@ type MemoryService struct {
 	// (no WithMMRLambda option) leaves HybridSearch's plain fused-and-sorted path
 	// unchanged, preserving existing behavior for every caller that doesn't set it.
 	mmrLambda *float64
+	// usageWeight scales the per-section recall-usage term in fusion (MEMORY_USAGE_WEIGHT).
+	// 0 (default, no WithUsageWeight option) leaves ranking byte-identical.
+	usageWeight float64
 	// recallReceiptsEnabled gates receipt recording in Search (MEMORY_RECALL_RECEIPTS,
 	// default true). Set explicitly in NewMemoryService so a service built
 	// without WithRecallReceipts still defaults to enabled, not the bool zero value.
@@ -112,6 +115,15 @@ func WithMMRLambda(lambda float64) Option {
 	return func(s *MemoryService) {
 		l := lambda
 		s.mmrLambda = &l
+	}
+}
+
+// WithUsageWeight sets the recall-usage weight blended into every Search's
+// fused ranking. Without this option usageWeight stays 0 and ranking is
+// unchanged (MEMORY_USAGE_WEIGHT, default 0).
+func WithUsageWeight(w float64) Option {
+	return func(s *MemoryService) {
+		s.usageWeight = w
 	}
 }
 
@@ -520,6 +532,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		Subcategory: subcategory,
 		Limit:       limit,
 		MMRLambda:   s.mmrLambda,
+		UsageWeight: s.usageWeight,
 	})
 	if err != nil {
 		return nil, uuid.Nil, err

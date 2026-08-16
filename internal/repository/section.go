@@ -69,6 +69,9 @@ type SearchParams struct {
 	// MMRLambda gates optional MMR diversity re-ranking; nil (default) leaves
 	// HybridSearch byte-identical to the plain fused, score-sorted path.
 	MMRLambda *float64
+	// UsageWeight scales the per-section recall-usage term in fusion; 0 (default)
+	// skips it entirely, leaving scores byte-identical to the pre-usage path.
+	UsageWeight float64
 }
 
 // Hybrid retrieval fusion constants. Lexical is weighted higher than vector: a row
@@ -100,6 +103,9 @@ type hybridRow struct {
 	TenantID       uuid.UUID  `gorm:"column:tenant_id"`
 	VerifiedAt     *time.Time `gorm:"column:verified_at"`
 	SectionCreated time.Time  `gorm:"column:section_created"`
+	// Recall counters back the optional usage-weight term (0 weight ⇒ unused).
+	HitCount  int `gorm:"column:hit_count"`
+	MissCount int `gorm:"column:miss_count"`
 	// Embedding backs MMR re-ranking only; never copied onto SearchResult.
 	Embedding pgvector.Vector `gorm:"column:embedding"`
 }
@@ -116,6 +122,24 @@ func relevanceTier(score float64) string {
 	}
 }
 
+// Usage-term constants: Laplace smoothing α and saturating confidence κ. Both
+// are fixed here (not config) — tunable later if the benchmark motivates it.
+const (
+	usageAlpha = 1.0
+	usageKappa = 5.0
+)
+
+// usageTerm is the bounded, confidence-damped success-rate adjustment added to a
+// floor-surviving candidate's score when weight > 0: (2p̂−1)·conf·weight, with
+// p̂ Laplace-smoothed and conf saturating in n=hit+miss. n=0 ⇒ 0 (cold-start
+// neutral; denominators are never zero), bounded by ±weight.
+func usageTerm(hit, miss int, weight float64) float64 {
+	n := float64(hit + miss)
+	p := (float64(hit) + usageAlpha) / (n + 2*usageAlpha)
+	conf := n / (n + usageKappa)
+	return weight * (2*p - 1) * conf
+}
+
 // scoredRow pairs a fused SearchResult with its candidate embedding so the two
 // travel together through sorting — fuseHybridScored is the only place both
 // are known at once (SearchResult itself never carries the vector).
@@ -130,7 +154,13 @@ type scoredRow struct {
 // lexical weight alone, so they top out at "standard" tier. Returns results
 // alongside their embeddings (aligned 1:1, sub-floor rows dropped from both) for
 // callers that need them (applyMMR); fuseHybrid discards the embeddings.
-func fuseHybridScored(rows []hybridRow) ([]SearchResult, []pgvector.Vector) {
+//
+// usageWeight > 0 adds each floor-surviving candidate's recall-usage term to the
+// ranking score (consumed by the sort and MMR relevance). The floor still gates
+// the BASE score, and the tier is calibrated from the BASE score — usage only
+// re-orders survivors, it never resurrects a sub-floor row nor re-tiers one.
+// usageWeight == 0 skips the term entirely ⇒ output byte-identical to pre-change.
+func fuseHybridScored(rows []hybridRow, usageWeight float64) ([]SearchResult, []pgvector.Vector) {
 	var maxLex float64
 	for _, r := range rows {
 		if r.HasLex && r.LexRank > maxLex {
@@ -167,6 +197,11 @@ func fuseHybridScored(rows []hybridRow) ([]SearchResult, []pgvector.Vector) {
 			continue
 		}
 
+		tier := relevanceTier(score) // from BASE score; usage re-orders, never re-tiers.
+		if usageWeight > 0 {
+			score += usageTerm(r.HitCount, r.MissCount, usageWeight)
+		}
+
 		scored = append(scored, scoredRow{
 			result: SearchResult{
 				SectionID:      r.SectionID,
@@ -174,7 +209,7 @@ func fuseHybridScored(rows []hybridRow) ([]SearchResult, []pgvector.Vector) {
 				Heading:        r.Heading,
 				Content:        r.Content,
 				Score:          score,
-				Tier:           relevanceTier(score),
+				Tier:           tier,
 				Category:       r.Category,
 				Subcategory:    r.Subcategory,
 				Slug:           r.Slug,
@@ -200,9 +235,9 @@ func fuseHybridScored(rows []hybridRow) ([]SearchResult, []pgvector.Vector) {
 }
 
 // fuseHybrid is the plain fuse-then-truncate path (MMR off). Thin wrapper
-// around fuseHybridScored so its signature and existing tests are unchanged.
-func fuseHybrid(rows []hybridRow, limit int) []SearchResult {
-	out, _ := fuseHybridScored(rows)
+// around fuseHybridScored, threading the usage weight through.
+func fuseHybrid(rows []hybridRow, usageWeight float64, limit int) []SearchResult {
+	out, _ := fuseHybridScored(rows, usageWeight)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -306,6 +341,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		WITH semantic AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
 				   s.created_at AS section_created, s.embedding,
+				   s.hit_count, s.miss_count,
 				   1 - (s.embedding <=> ?::vector) AS vec_sim
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
@@ -320,6 +356,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		keyword AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
 				   s.created_at AS section_created, s.embedding,
+				   s.hit_count, s.miss_count,
 				   ts_rank(s.tsv, plainto_tsquery('english', ?)) AS lex_rank
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
@@ -341,6 +378,8 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			   (kw.id IS NOT NULL)                           AS has_lex,
 			   d.category, d.subcategory, d.slug, d.title    AS doc_title,
 			   d.doc_type, d.tenant_id,
+			   COALESCE(sem.hit_count, kw.hit_count, 0)      AS hit_count,
+			   COALESCE(sem.miss_count, kw.miss_count, 0)    AS miss_count,
 			   COALESCE(sem.verified_at, kw.verified_at)     AS verified_at,
 			   COALESCE(sem.section_created, kw.section_created) AS section_created,
 			   -- '[0]'::vector fallback: guards the Go-side pgvector.Vector scan
@@ -362,9 +401,9 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
 	if p.MMRLambda == nil {
-		return fuseHybrid(rows, p.Limit), nil
+		return fuseHybrid(rows, p.UsageWeight, p.Limit), nil
 	}
-	scored, embs := fuseHybridScored(rows)
+	scored, embs := fuseHybridScored(rows, p.UsageWeight)
 	return applyMMR(scored, embs, *p.MMRLambda, p.Limit), nil
 }
 

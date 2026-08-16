@@ -12,6 +12,12 @@
 > Note: results here always re-ingest the corpus (corpus + query embeddings share one embedding
 > epoch); scoring a stale corpus with fresh query vectors (`--skip-ingest` against an old run)
 > drifts and understates every mode — use `--skip-ingest` only for relative within-run deltas.
+>
+> **Pending next run — gap-prevalence probe (D6):** this snapshot predates the recall@pool /
+> rescuable-gap probe (task 3.6). The harness now emits a **Rescuable Gap** section and
+> `RecallAtPool` / `RescuableGapAtK` JSON fields; they populate on the next run (they cannot be
+> recomputed from these committed aggregates — the raw pool-depth rankings aren't stored). See
+> `README.md` → "Gap-prevalence probe" for what they mean and their role in the Phase B go/no-go.
 
 - Dataset: `https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json`
 - Seed: 42

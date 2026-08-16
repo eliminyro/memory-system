@@ -17,6 +17,13 @@ import (
 // distinct from maxK (the scoring depth all three modes report at).
 const candidatePoolLimit = 20
 
+// fusedPoolDepth is the max size of hybrid's fused candidate pool: both CTE
+// arms cap at candidatePoolLimit, so the deduped union is ≤ 2·that (section.go
+// comment: "20+20=40 candidates"). Retrieving hybrid at this depth returns the
+// whole pool before top-K truncation — the reorderable ceiling the D6
+// gap-prevalence probe measures recall@pool over.
+const fusedPoolDepth = 2 * candidatePoolLimit
+
 // HybridRetrieve runs the shipped hybrid search (task 3.1), scoped to one
 // question's bench subcategory via Category/Subcategory. section.go is
 // untouched; results are already rank-ordered by fuseHybrid's score sort.

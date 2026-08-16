@@ -82,27 +82,38 @@ var KValues = []int{5, 10}
 
 // QuestionResult is one scored question: its ranked sessions, gold session
 // set, and effective type (question_type, or "abstention" for "_abs" ids).
+// PoolDepth is the candidate-pool depth this mode was retrieved at (D6): recall
+// over the top-PoolDepth of Ranked is recall@pool, the reorderable ceiling.
 type QuestionResult struct {
 	QuestionID    string
 	EffectiveType string
 	Ranked        []string
 	Gold          map[string]bool
+	PoolDepth     int
 }
 
 // KMetrics holds recall@k / MRR@k stats, keyed by k, for one slice of
-// questions.
+// questions. RecallAtPool / RescuableGapAtK are the D6 gap-prevalence probe:
+// recall@pool is partial recall over the full candidate pool (gold present
+// anywhere before top-K truncation); RescuableGapAtK[k] = RecallAtPool −
+// PartialRecallAtK[k] is the fraction whose gold sits in the reorderable pool
+// but below top-k — the ceiling on what usage-weighting could rescue.
 type KMetrics struct {
 	NumQuestions     int
 	PartialRecallAtK map[int]float64
 	FullRecallAtK    map[int]float64
 	MeanMRRAtK       map[int]float64
+	RecallAtPool     float64
+	RescuableGapAtK  map[int]float64
 }
 
 // Report is the full aggregation: overall metrics plus a breakdown per
-// EffectiveType.
+// EffectiveType. PoolDepth is the candidate-pool depth recall@pool was measured
+// at for this mode (fusedPoolDepth for hybrid, candidatePoolLimit per arm).
 type Report struct {
-	Overall KMetrics
-	ByType  map[string]KMetrics
+	Overall   KMetrics
+	ByType    map[string]KMetrics
+	PoolDepth int
 }
 
 // Aggregate computes recall@k/MRR@k over results, overall and per
@@ -124,6 +135,9 @@ func Aggregate(results []QuestionResult) Report {
 		Overall: aggregateOne(overall),
 		ByType:  make(map[string]KMetrics, len(byType)),
 	}
+	if len(overall) > 0 {
+		report.PoolDepth = overall[0].PoolDepth // uniform across a mode's results
+	}
 	for t, rs := range byType {
 		report.ByType[t] = aggregateOne(rs)
 	}
@@ -136,11 +150,24 @@ func aggregateOne(results []QuestionResult) KMetrics {
 		PartialRecallAtK: make(map[int]float64, len(KValues)),
 		FullRecallAtK:    make(map[int]float64, len(KValues)),
 		MeanMRRAtK:       make(map[int]float64, len(KValues)),
+		RescuableGapAtK:  make(map[int]float64, len(KValues)),
 	}
 	if len(results) == 0 {
 		return m
 	}
 	n := float64(len(results))
+
+	// recall@pool: partial recall over the whole candidate pool (top-PoolDepth
+	// of the pool-depth retrieval), i.e. gold present anywhere it could be
+	// reordered from. PoolDepth is uniform across a mode's results.
+	var poolHits int
+	for _, r := range results {
+		if PartialRecallAtK(r.Ranked, r.Gold, r.PoolDepth) {
+			poolHits++
+		}
+	}
+	m.RecallAtPool = float64(poolHits) / n
+
 	for _, k := range KValues {
 		var partial, full int
 		var mrrSum float64
@@ -156,6 +183,12 @@ func aggregateOne(results []QuestionResult) KMetrics {
 		m.PartialRecallAtK[k] = float64(partial) / n
 		m.FullRecallAtK[k] = float64(full) / n
 		m.MeanMRRAtK[k] = mrrSum / n
+		// gap ≥ 0: when served depth k ≥ pool depth, nothing is rescuable.
+		gap := m.RecallAtPool - m.PartialRecallAtK[k]
+		if gap < 0 {
+			gap = 0
+		}
+		m.RescuableGapAtK[k] = gap
 	}
 	return m
 }

@@ -285,9 +285,11 @@ type questionResults struct {
 }
 
 // evaluateQuestion embeds inst.Question once and runs the three base
-// retrieval modes (task 3) at maxK, plus one additional hybrid+MMR retrieval
-// per λ in mmrLambdas (task 5.1) — all reusing the same qEmbedding, so no
-// extra embedder calls. sampleDrift additionally runs the mirror-drift check
+// retrieval modes (task 3) at candidate-pool depth (≥ maxK, task 3.6 D6 probe),
+// plus one additional hybrid+MMR retrieval per λ in mmrLambdas (task 5.1) — all
+// reusing the same qEmbedding, so no extra embedder calls. Retrieving at pool
+// depth leaves every R@k unchanged (p.Limit only truncates post-fusion) while
+// exposing recall@pool. sampleDrift additionally runs the mirror-drift check
 // (Risks: "Mirror drift") at its own candidate-pool depth (see
 // checkMirrorDrift) — a warn-only diagnostic, gated to a sample of questions
 // by the caller.
@@ -299,15 +301,23 @@ func evaluateQuestion(ctx context.Context, sections *repository.SectionRepositor
 		return questionResults{}, fmt.Errorf("embed question: %w", err)
 	}
 
-	hybrid, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, maxK, nil)
+	// Retrieve at pool depth, not just maxK, so recall@pool (D6) is measured on
+	// the SAME run: p.Limit only truncates AFTER fusion/MMR, so slicing this
+	// deeper list to any k yields identical R@k while also exposing the full
+	// reorderable pool. hybrid fuses ≤ fusedPoolDepth candidates; each mirror
+	// arm ≤ candidatePoolLimit. max() guards a caller passing k > pool depth.
+	hybridDepth := maxDepth(maxK, fusedPoolDepth)
+	armDepth := maxDepth(maxK, candidatePoolLimit)
+
+	hybrid, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, hybridDepth, nil)
 	if err != nil {
 		return questionResults{}, err
 	}
-	vectorOnly, err := VectorOnlyRetrieve(ctx, db, tenantID, subcat, qEmbedding, maxK)
+	vectorOnly, err := VectorOnlyRetrieve(ctx, db, tenantID, subcat, qEmbedding, armDepth)
 	if err != nil {
 		return questionResults{}, err
 	}
-	lexicalOnly, err := LexicalOnlyRetrieve(ctx, db, tenantID, subcat, inst.Question, maxK)
+	lexicalOnly, err := LexicalOnlyRetrieve(ctx, db, tenantID, subcat, inst.Question, armDepth)
 	if err != nil {
 		return questionResults{}, err
 	}
@@ -322,29 +332,30 @@ func evaluateQuestion(ctx context.Context, sections *repository.SectionRepositor
 	}
 	effType := EffectiveType(inst)
 
-	mk := func(ranked []RetrievedSection) QuestionResult {
+	mk := func(ranked []RetrievedSection, poolDepth int) QuestionResult {
 		return QuestionResult{
 			QuestionID:    inst.QuestionID,
 			EffectiveType: effType,
 			Ranked:        RankedSessions(ranked),
 			Gold:          gold,
+			PoolDepth:     poolDepth,
 		}
 	}
 
 	qr := questionResults{
-		hybrid:      mk(hybrid),
-		vectorOnly:  mk(vectorOnly),
-		lexicalOnly: mk(lexicalOnly),
+		hybrid:      mk(hybrid, fusedPoolDepth),
+		vectorOnly:  mk(vectorOnly, candidatePoolLimit),
+		lexicalOnly: mk(lexicalOnly, candidatePoolLimit),
 	}
 
 	if len(mmrLambdas) > 0 {
 		qr.mmr = make(map[string]QuestionResult, len(mmrLambdas))
 		for _, lambda := range mmrLambdas {
-			ranked, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, maxK, &lambda)
+			ranked, err := HybridRetrieve(ctx, sections, tenantID, subcat, qEmbedding, inst.Question, hybridDepth, &lambda)
 			if err != nil {
 				return questionResults{}, fmt.Errorf("hybrid+mmr retrieve (lambda=%.2f): %w", lambda, err)
 			}
-			qr.mmr[mmrModeKey(lambda)] = mk(ranked)
+			qr.mmr[mmrModeKey(lambda)] = mk(ranked, fusedPoolDepth)
 		}
 	}
 
@@ -409,6 +420,14 @@ func maxInt(ks []int) int {
 	return m
 }
 
+// maxDepth returns the larger of two retrieval depths.
+func maxDepth(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // parseN parses "--n" ("all" or a positive integer) into SelectSlice's n
 // convention (0 = all).
 func parseN(spec string) (int, error) {
@@ -444,5 +463,6 @@ func printKMetrics(label string, m KMetrics) {
 		fmt.Printf(" | R@%d=%.3f fullR@%d=%.3f MRR@%d=%.3f",
 			k, m.PartialRecallAtK[k], k, m.FullRecallAtK[k], k, m.MeanMRRAtK[k])
 	}
+	fmt.Printf(" | R@pool=%.3f", m.RecallAtPool)
 	fmt.Println()
 }

@@ -1,0 +1,41 @@
+{
+  "run": {
+    "status": "not_yet_run",
+    "seed": 42,
+    "dim": 768,
+    "embedder_provider": "fake",
+    "weights": [0, 0.5, 1, 2, 3, 5],
+    "noises": [0, 0.1, 0.2, 0.35, 0.5],
+    "commit": "",
+    "timestamp": ""
+  },
+  "gap_workload_params": {
+    "seed": 42,
+    "topics": 8,
+    "easy_per_topic": 6,
+    "distractors_per_topic": 6,
+    "gap_fraction": 0.4,
+    "secondary_fraction": 0.35,
+    "dim": 768,
+    "history_queries": 1600,
+    "held_out_queries": 240,
+    "zipf_s": 1.3,
+    "easy_cos": 0.92,
+    "distractor_cos_a": 0.65,
+    "distractor_cos_b": 0.65,
+    "gap_cos": 0.5
+  },
+  "cells": [],
+  "verdict": {
+    "decision": "PENDING",
+    "noise": 0.2,
+    "baseline_ndcg_10": 0,
+    "best_weight": 0,
+    "best_weight_ndcg_10": 0,
+    "gap_lift": 0,
+    "control_delta": 0,
+    "lift_threshold": 0.03,
+    "control_tolerance": 0.01,
+    "rationale": "not yet run — populated by section 4 against a disposable Postgres"
+  }
+}

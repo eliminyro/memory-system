@@ -22,6 +22,22 @@ slug; the ranked session list is retrieved sections deduped to first occurrence.
 
 Reported per mode and per `question_type` (`_abs` → `abstention`), at k ∈ {5, 10}.
 
+### Gap-prevalence probe (recall@pool / rescuable-gap)
+
+The hybrid query fuses a bounded **candidate pool** (each CTE arm caps at 20, so the deduped
+union is ≤40) and only then truncates to the served top-K. **recall@pool** is partial recall over
+that full pool — the fraction of questions whose gold sits *anywhere* the ranker could reorder it
+from (pool-depth N = 40 for `hybrid`/`hybrid_mmr`, 20 per single arm). **rescuable-gap@k =
+recall@pool − partial-R@k** is then the fraction whose gold is in the pool but ranked below top-k:
+the *ceiling* on what a re-ranking signal (e.g. usage-weighting) could ever rescue on real Vertex
+embeddings + gold labels. This is the "Y% prevalence" multiplier for the **Phase B usage-weight
+go/no-go decision** (design D6) — the real-embedding realism estimate, computed on this existing
+harness rather than by running the synthetic `usagebench` corpus through Vertex. A small gap here
+means embeddings already surface the golds and usage-weighting has little to rescue; a large gap
+means the rescuable population is real. It is measured on the *same* retrieval runs (results are
+pulled at pool depth, which leaves every R@k identical since the server's `Limit` only truncates
+after fusion/MMR), so it costs no extra queries beyond the deeper pull.
+
 Three retrieval **modes** run over the same corpus so the shipped default can be compared to
 each single arm:
 - **hybrid** — the shipped `SectionRepository.HybridSearch`, unchanged.

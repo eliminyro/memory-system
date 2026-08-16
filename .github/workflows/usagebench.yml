@@ -1,0 +1,68 @@
+name: UsageBench
+
+# Synthetic recall-stream benchmark for usage-weighted ranking (Phase B decision).
+# Runs the `usagebench`-tagged sweep the normal CI skips. Path-filtered so it only
+# fires for this work; also manually dispatchable. NOT a merge gate.
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'benchmarks/usagebench/**'
+      - 'internal/repository/section.go'
+      - '.github/workflows/usagebench.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: usagebench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  usagebench:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: memory
+          POSTGRES_USER: memory
+          POSTGRES_PASSWORD: memory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memory -d memory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://memory:memory@localhost:5432/memory?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The full weight × noise × {gap,control} sweep. -v so the verdict + per-cell
+      # metrics land in the run log even if the artifact upload is skipped.
+      - name: Run usagebench sweep
+        run: go test -tags usagebench -run TestUsageBench -timeout 45m -v ./benchmarks/usagebench/
+
+      - name: Show RESULTS.md
+        if: always()
+        run: |
+          echo "=== benchmarks/usagebench/RESULTS.md ==="
+          cat benchmarks/usagebench/RESULTS.md || echo "(no RESULTS.md written)"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: usagebench-results
+          path: |
+            benchmarks/usagebench/RESULTS.md
+            benchmarks/usagebench/results.json
+          if-no-files-found: warn

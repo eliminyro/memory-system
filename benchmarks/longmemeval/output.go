@@ -102,7 +102,38 @@ func RenderResultsMarkdown(r BenchmarkResults) string {
 	writeHeader(&b, r.Run, ks)
 	writeOverallTable(&b, r.Modes, modes, ks)
 	writePerTypeSection(&b, r.Modes, modes, ks)
+	writeRescuableGapSection(&b, r.Modes, modes, ks)
 	return b.String()
+}
+
+// rescuableGapNote explains the D6 pool-depth probe columns; kept to one line
+// so the rendered markdown stays diff-stable (fuller prose lives in README.md).
+const rescuableGapNote = "recall@pool is partial recall over the full candidate pool (gold present anywhere, at pool-depth N, before the top-K cut); rescuable-gap@k = recall@pool − partial-R@k = golds in the reorderable pool but below top-k — the ceiling on what usage-weighting could rescue, i.e. the real-embedding prevalence estimate that feeds the Phase B go/no-go."
+
+// writeRescuableGapSection renders the D6 gap-prevalence probe: one row per mode
+// with its pool depth, recall@pool, and rescuable-gap@k per k.
+func writeRescuableGapSection(b *strings.Builder, modes map[string]Report, order []string, ks []int) {
+	b.WriteString("## Rescuable Gap (D6 pool-depth probe)\n\n")
+	b.WriteString(rescuableGapNote + "\n\n")
+	cols := []string{"Mode", "N", "pool-depth", "recall@pool"}
+	for _, k := range ks {
+		cols = append(cols, fmt.Sprintf("rescuable-gap@%d", k))
+	}
+	writeTableHeader(b, cols)
+	for _, mode := range order {
+		rep := modes[mode]
+		row := []string{
+			mode,
+			fmt.Sprintf("%d", rep.Overall.NumQuestions),
+			fmt.Sprintf("%d", rep.PoolDepth),
+			pct(rep.Overall.RecallAtPool),
+		}
+		for _, k := range ks {
+			row = append(row, pct(rep.Overall.RescuableGapAtK[k]))
+		}
+		writeTableRow(b, row)
+	}
+	b.WriteString("\n")
 }
 
 func sortedKs(ks []int) []int {

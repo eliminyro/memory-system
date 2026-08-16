@@ -21,7 +21,7 @@ func TestFuseHybrid_LexicalCoMatchIsBoostNotPenalty(t *testing.T) {
 		{SectionID: target, DocumentID: uuid.New(), HasVec: true, VecSim: 0.5, HasLex: true, LexRank: 0.1},
 	}
 
-	out := fuseHybrid(rows, 10)
+	out := fuseHybrid(rows, 0, 10)
 
 	var got *SearchResult
 	for i := range out {
@@ -48,7 +48,7 @@ func TestFuseHybrid_StrongLexicalStillBoosts(t *testing.T) {
 	rows := []hybridRow{
 		{SectionID: target, DocumentID: uuid.New(), HasVec: true, VecSim: 0.5, HasLex: true, LexRank: 1.0},
 	}
-	out := fuseHybrid(rows, 10)
+	out := fuseHybrid(rows, 0, 10)
 	if len(out) != 1 {
 		t.Fatalf("got %d results, want 1", len(out))
 	}

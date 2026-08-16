@@ -25,11 +25,14 @@ func fixtureResults() BenchmarkResults {
 		Modes: map[string]Report{
 			// vector_only intentionally omitted: renderer must skip absent modes.
 			"hybrid": {
+				PoolDepth: fusedPoolDepth,
 				Overall: KMetrics{
 					NumQuestions:     2,
 					PartialRecallAtK: map[int]float64{5: 1, 10: 1},
 					FullRecallAtK:    map[int]float64{5: 0.5, 10: 1},
 					MeanMRRAtK:       map[int]float64{5: 0.75, 10: 0.8},
+					RecallAtPool:     1,
+					RescuableGapAtK:  map[int]float64{5: 0, 10: 0},
 				},
 				ByType: map[string]KMetrics{
 					"multi-session": {
@@ -47,11 +50,14 @@ func fixtureResults() BenchmarkResults {
 				},
 			},
 			"lexical_only": {
+				PoolDepth: candidatePoolLimit,
 				Overall: KMetrics{
 					NumQuestions:     2,
 					PartialRecallAtK: map[int]float64{5: 0.5, 10: 0.5},
 					FullRecallAtK:    map[int]float64{5: 0, 10: 0.5},
 					MeanMRRAtK:       map[int]float64{5: 1.0 / 3.0, 10: 0.4},
+					RecallAtPool:     1,
+					RescuableGapAtK:  map[int]float64{5: 0.5, 10: 0.5},
 				},
 				ByType: map[string]KMetrics{
 					"multi-session": {
@@ -106,6 +112,15 @@ const wantResultsMarkdown = "# LongMemEval Retrieval Benchmark Results\n" +
 	"| --- | --- | --- | --- | --- | --- | --- | --- |\n" +
 	"| multi-session | 1 | 0.0% | 0.0% | 0.0% | 0.0% | 0.000 | 0.000 |\n" +
 	"| single-session-user | 1 | 100.0% | 0.0% | 100.0% | 100.0% | 0.667 | 0.800 |\n" +
+	"\n" +
+	"## Rescuable Gap (D6 pool-depth probe)\n" +
+	"\n" +
+	rescuableGapNote + "\n" +
+	"\n" +
+	"| Mode | N | pool-depth | recall@pool | rescuable-gap@5 | rescuable-gap@10 |\n" +
+	"| --- | --- | --- | --- | --- | --- |\n" +
+	"| hybrid | 2 | 40 | 100.0% | 0.0% | 0.0% |\n" +
+	"| lexical_only | 2 | 20 | 100.0% | 50.0% | 50.0% |\n" +
 	"\n"
 
 func TestRenderResultsMarkdown(t *testing.T) {
