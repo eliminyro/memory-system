@@ -51,6 +51,11 @@ type SearchResult struct {
 	VerifyHints   []string `json:"verify_hints,omitempty"`   // code paths to check
 	StaleDays     int      `json:"age_days,omitempty"`       // age of verified_at in days
 	ThresholdDays int      `json:"threshold_days,omitempty"` // threshold for this doc_type
+
+	// SnippetCentered is set only when search ran in snippet mode: true if the
+	// window landed on a real lexical match, false for the leading-text fallback
+	// (purely-semantic hit). Nil (omitted) when snippet mode is off.
+	SnippetCentered *bool `json:"snippet_centered,omitempty"`
 }
 
 // SearchParams groups the inputs for hybrid search.
@@ -361,6 +366,51 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 	}
 	scored, embs := fuseHybridScored(rows)
 	return applyMMR(scored, embs, *p.MMRLambda, p.Limit), nil
+}
+
+// Snippet highlight sentinels: PUA runes ts_headline wraps around matched terms.
+// Their presence signals a centered match; absence signals the leading-text
+// fallback. Shared with the service-side strip/detect helpers — single source.
+const (
+	SnippetStartSel = ""
+	SnippetStopSel  = ""
+)
+
+// hlSnippet is the raw ts_headline scan row (text still carries the sentinels).
+type hlSnippet struct {
+	ID   uuid.UUID `gorm:"column:id"`
+	Snip string    `gorm:"column:snip"`
+}
+
+// Snippets returns per-section ts_headline windows for the given section IDs,
+// keyed by id. snippetChars sets the word budget (MaxWords ~= chars/6, floor 8);
+// the d.tenant_id filter is defense-in-depth (IDs already came from a scoped
+// result). Empty sectionIDs -> empty map, no query. Values still contain the PUA
+// sentinels so the caller can detect centering before stripping.
+func (r *SectionRepository) Snippets(ctx context.Context, tenantIDs []uuid.UUID, query string, sectionIDs []uuid.UUID, snippetChars int) (map[uuid.UUID]string, error) {
+	out := make(map[uuid.UUID]string, len(sectionIDs))
+	if len(sectionIDs) == 0 {
+		return out, nil
+	}
+	maxWords := snippetChars / 6
+	if maxWords < 8 {
+		maxWords = 8
+	}
+	opts := fmt.Sprintf("StartSel=%s, StopSel=%s, MaxWords=%d, MinWords=%d, ShortWord=3, MaxFragments=0, HighlightAll=FALSE",
+		SnippetStartSel, SnippetStopSel, maxWords, maxWords/2)
+	const sql = `
+		SELECT s.id, ts_headline('english', s.content, plainto_tsquery('english', ?), ?) AS snip
+		FROM sections s
+		JOIN documents d ON d.id = s.document_id
+		WHERE s.id IN ? AND d.tenant_id IN ?`
+	var rows []hlSnippet
+	if err := r.db.WithContext(ctx).Raw(sql, query, opts, sectionIDs, tenantIDs).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("snippets: %w", err)
+	}
+	for _, row := range rows {
+		out[row.ID] = row.Snip
+	}
+	return out, nil
 }
 
 type RelatedResult struct {

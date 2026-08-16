@@ -139,6 +139,10 @@ type Config struct {
 	// Default 0.9 = MMR on; set 1.0 to disable (pure relevance, applyMMR's >=0.999 escape hatch).
 	MMRLambda float64 `env:"MEMORY_MMR_LAMBDA" envDefault:"0.9"`
 
+	// SnippetChars caps the match-centered window search_memory returns when
+	// snippet=true (approximate on the low end — ts_headline windows by words).
+	SnippetChars int `env:"MEMORY_SNIPPET_CHARS" envDefault:"400"`
+
 	// Recall reconsolidation loop (Phase A: data collection only — see
 	// openspec/changes/recall-reconsolidation-loop). RecallReceipts gates
 	// receipt recording in Search; RecallReceiptTTL bounds the receipts table
@@ -301,6 +305,11 @@ func Load() (*Config, error) {
 	// MMR lambda must stay in (0, 1] — fail fast rather than silently clamp a bad value.
 	if cfg.MMRLambda <= 0 || cfg.MMRLambda > 1 {
 		return nil, fmt.Errorf("MEMORY_MMR_LAMBDA must be in (0, 1], got %v", cfg.MMRLambda)
+	}
+
+	// Snippet window must be positive — a zero/negative cap yields empty snippets.
+	if cfg.SnippetChars <= 0 {
+		return nil, fmt.Errorf("MEMORY_SNIPPET_CHARS must be > 0, got %d", cfg.SnippetChars)
 	}
 
 	// Usage weight (Phase B, unused here) must stay in [0, 5] — 0 is the

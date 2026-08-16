@@ -38,6 +38,11 @@ direct grant on, while **writes stay scoped to a single tenant**.
 
 - **Hybrid retrieval** — pgvector HNSW cosine search fused with a GIN-indexed `tsvector`
   lexical search, scored as `1 - (embedding <=> query_vector)`.
+- **Snippet mode** — opt-in `snippet: true` on `search_memory` returns a short
+  match-centered window (`MEMORY_SNIPPET_CHARS`, default ~400) of each result instead of
+  full content — cheap triage on search, then `get_document` for full text. A
+  `snippet_centered` flag distinguishes a real lexical match from a leading-text fallback
+  (purely-semantic hit). Verbatim (no LLM); withheld results are never snippet-expanded.
 - **Pluggable embedding providers** — `ollama`, `gcp` (Vertex AI), `openai` (any
   OpenAI-compatible `/embeddings` endpoint: OpenAI, Azure, vLLM, LM Studio, LocalAI,
   HuggingFace TEI), `aws` (Bedrock Titan / Cohere), and a deterministic `fake` provider
@@ -169,6 +174,7 @@ Ollama deploy works out of the box.
 | `TELEGRAM_BOT_TOKEN` | *(unset)* | Optional — post a per-scan cleanup summary. |
 | `TELEGRAM_CHAT_ID` | *(unset)* | Optional — target chat for the summary. |
 | `MEMORY_MMR_LAMBDA` | `0.9` | MMR diversity re-rank lambda for hybrid search; range `(0, 1]`. `1.0` disables (pure relevance). |
+| `MEMORY_SNIPPET_CHARS` | `400` | Match-centered window size (chars) returned when `search_memory` is called with `snippet: true`; must be `> 0`. Approximate on the low end (`ts_headline` windows by words). |
 | `MEMORY_DEFAULT_OPTS` | *(safe bundle)* | Per-tenant toggle defaults, applied at **tenant-create time only** (existing tenants keep their settings). The built-in default is the safe bundle `staleness=hard,duplicate_guard=true,cleanup_scan_enabled=true`; override to loosen, e.g. `staleness=off,duplicate_guard=false,cleanup_scan_enabled=false`. See [`docs/administering.md`](docs/administering.md#retention-defaults-for-new-tenants). |
 | `MEMORY_SELF_SERVICE_POLICY` | `open` | Global default for the self-service gate (`open` \| `admin_only`) over per-tenant settings editing and API-key creation. `open` lets a tenant's manager/owner self-serve; `admin_only` raises both to system-admin. A per-tenant override (set by an admin) takes precedence. |
 | `AUTHLET_MASTER_KEY` | *(unset)* | 32-byte hex key encrypting OAuth signing material at rest. |
