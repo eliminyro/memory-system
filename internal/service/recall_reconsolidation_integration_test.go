@@ -28,11 +28,11 @@ func TestSearch_RecordsReceiptForNonEmptyResults(t *testing.T) {
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "recalltok" + uuid.NewString()[:8]
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "recall-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &token, "recall-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	results, recallID, err := f.svc.Search(ctx, token, nil, nil, 20, false, "", nil)
+	results, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, results, "expected the seeded section to match")
 	require.NotEqual(t, uuid.Nil, recallID, "non-empty search must return a recall id")
@@ -77,11 +77,11 @@ func TestReportRecallOutcome_SuccessCreditsHit(t *testing.T) {
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "hittok" + uuid.NewString()[:8]
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "hit-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &token, "hit-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctx, token, nil, nil, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, recallID)
 
@@ -99,11 +99,11 @@ func TestReportRecallOutcome_FailureCreditsMiss(t *testing.T) {
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "misstok" + uuid.NewString()[:8]
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "miss-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &token, "miss-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctx, token, nil, nil, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
 	require.NoError(t, err)
 
 	require.NoError(t, f.svc.ReportRecallOutcome(ctx, recallID, models.RecallOutcomeFailure, nil))
@@ -120,11 +120,11 @@ func TestReportRecallOutcome_DuplicateIsNoOp(t *testing.T) {
 	ctx := ctxFor(f.tenantA, f.subjA)
 	token := "duptok" + uuid.NewString()[:8]
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "dup-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", &token, "dup-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctx, token, nil, nil, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctx, token, nil, &token, 20, false, "", nil)
 	require.NoError(t, err)
 
 	require.NoError(t, f.svc.ReportRecallOutcome(ctx, recallID, models.RecallOutcomeSuccess, nil))
@@ -152,11 +152,11 @@ func TestReportRecallOutcome_CrossTenantRejected(t *testing.T) {
 	ctxB := ctxFor(f.tenantB, f.subjB)
 	token := "xtenanttok" + uuid.NewString()[:8]
 
-	res, err := f.svc.StoreDocument(ctxA, "learnings", nil, "xten-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctxA, "learnings", &token, "xten-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", nil)
+	_, recallID, err := f.svc.Search(ctxA, token, nil, &token, 20, false, "", nil)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, recallID)
 
@@ -189,11 +189,11 @@ func TestReportRecallOutcome_AdminOverrideFindsReceipt(t *testing.T) {
 	adminCtx := ctxFor(f.tenantA, f.admin)
 	token := "admintok" + uuid.NewString()[:8]
 
-	res, err := f.svc.StoreDocument(adminCtx, "learnings", nil, "admin-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", &f.tenantB)
+	res, err := f.svc.StoreDocument(adminCtx, "learnings", &token, "admin-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", &f.tenantB)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
-	_, recallID, err := f.svc.Search(adminCtx, token, nil, nil, 20, false, "", &f.tenantB)
+	_, recallID, err := f.svc.Search(adminCtx, token, nil, &token, 20, false, "", &f.tenantB)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, recallID, "admin override search must still issue a receipt")
 
