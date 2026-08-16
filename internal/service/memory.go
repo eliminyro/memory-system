@@ -765,9 +765,11 @@ func (s *MemoryService) StoreDocument(
 	}
 
 	// Duplicate guard: compare new embeddings against same-tenant docs, excluding
-	// the target path so re-saves don't trip. Only when enabled per-tenant and not forcing.
+	// the target path so re-saves don't trip. Only when enabled per-tenant, not
+	// forcing, and not episodic (journals are exempt from all curation).
+	docType := models.InferDocType(category, subcategory, slug)
 	settings := s.tenantSettings(ctx, tid)
-	if settings.DuplicateGuard && !force && len(embeddings) > 0 {
+	if settings.DuplicateGuard && !force && len(embeddings) > 0 && !models.IsEpisodic(docType) {
 		candidates, err := s.sections.FindSimilarDocuments(
 			ctx, tid, embeddings, models.DuplicateGuardThreshold, 5, category, subcategory, slug,
 		)
@@ -789,7 +791,7 @@ func (s *MemoryService) StoreDocument(
 		Subcategory: subcategory,
 		Slug:        slug,
 		Title:       title,
-		DocType:     models.InferDocType(category, subcategory, slug),
+		DocType:     docType,
 	}
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

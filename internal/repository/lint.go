@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"gorm.io/gorm"
 
 	"github.com/eliminyro/memory-system/internal/models"
@@ -119,6 +120,7 @@ func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thr
 		FROM documents
 		WHERE tenant_id IN ?
 		  AND archived_at IS NULL
+		  AND doc_type <> ALL(?)
 		  AND updated_at < NOW() - make_interval(days => ?)
 		ORDER BY updated_at ASC
 	`
@@ -131,7 +133,8 @@ func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thr
 	}
 
 	var rows []row
-	if err := r.db.WithContext(ctx).Raw(sql, tenants, thresholds.StaleDays).Scan(&rows).Error; err != nil {
+	episodic := pq.StringArray(models.EpisodicDocTypes())
+	if err := r.db.WithContext(ctx).Raw(sql, tenants, episodic, thresholds.StaleDays).Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("check stale: %w", err)
 	}
 
@@ -208,6 +211,7 @@ type NearDuplicatePair struct {
 // set, under a statement_timeout (runBoundedScan).
 func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uuid.UUID, threshold float64) ([]NearDuplicatePair, error) {
 	maxSections, neighbors, maxPairs := DefaultLintThresholds().dupScanCaps()
+	episodic := pq.StringArray(models.EpisodicDocTypes())
 
 	sql := `
 		WITH cand AS (
@@ -216,6 +220,7 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id = ?
 			  AND d.archived_at IS NULL
+			  AND d.doc_type <> ALL(?)
 			  AND s.embedding IS NOT NULL
 			LIMIT ?
 		)
@@ -229,6 +234,7 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 			JOIN sections s2 ON s2.document_id = d2.id
 			WHERE d2.tenant_id = ?
 			  AND d2.archived_at IS NULL
+			  AND d2.doc_type <> ALL(?)
 			  AND s2.embedding IS NOT NULL
 			  AND s2.document_id <> c.document_id
 			ORDER BY s2.embedding <=> c.embedding
@@ -241,7 +247,7 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 	`
 	var pairs []NearDuplicatePair
 	if err := r.runBoundedScan(ctx, &pairs, sql,
-		tenantID, maxSections, tenantID, neighbors, threshold, maxPairs); err != nil {
+		tenantID, episodic, maxSections, tenantID, episodic, neighbors, threshold, maxPairs); err != nil {
 		return nil, fmt.Errorf("find near duplicate pairs: %w", err)
 	}
 	return pairs, nil
@@ -252,6 +258,7 @@ func (r *LintRepository) FindNearDuplicatePairs(ctx context.Context, tenantID uu
 func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.UUID, thresholds LintThresholds) ([]LintFinding, error) {
 	tenants := readTenants(tenantID)
 	maxSections, neighbors, maxPairs := thresholds.dupScanCaps()
+	episodic := pq.StringArray(models.EpisodicDocTypes())
 
 	// Cost control (audit #10): user-triggerable, so the exact O(N^2) cross join is
 	// replaced by a bounded per-section HNSW k-NN probe under a statement_timeout
@@ -264,6 +271,7 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 			JOIN sections s ON s.document_id = d.id
 			WHERE d.tenant_id IN ?
 			  AND d.archived_at IS NULL
+			  AND d.doc_type <> ALL(?)
 			  AND s.embedding IS NOT NULL
 			LIMIT ?
 		),
@@ -278,6 +286,7 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 				JOIN sections s2 ON s2.document_id = d2.id
 				WHERE d2.tenant_id IN ?
 				  AND d2.archived_at IS NULL
+				  AND d2.doc_type <> ALL(?)
 				  AND s2.embedding IS NOT NULL
 				  AND s2.document_id <> c.document_id
 				ORDER BY s2.embedding <=> c.embedding
@@ -309,7 +318,7 @@ func (r *LintRepository) CheckNearDuplicates(ctx context.Context, tenantID uuid.
 
 	var rows []row
 	if err := r.runBoundedScan(ctx, &rows, sql,
-		tenants, maxSections, tenants, neighbors, thresholds.DuplicateSimilarity, maxPairs); err != nil {
+		tenants, episodic, maxSections, tenants, episodic, neighbors, thresholds.DuplicateSimilarity, maxPairs); err != nil {
 		return nil, fmt.Errorf("check near duplicates: %w", err)
 	}
 

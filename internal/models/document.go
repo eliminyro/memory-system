@@ -16,6 +16,7 @@ const (
 	DocTypePreference   = "preference"
 	DocTypeTool         = "tool"
 	DocTypeReference    = "reference"
+	DocTypeJournal      = "journal"
 )
 
 // ValidDocTypes lists all accepted doc_type values.
@@ -26,6 +27,7 @@ var ValidDocTypes = map[string]struct{}{
 	DocTypePreference:   {},
 	DocTypeTool:         {},
 	DocTypeReference:    {},
+	DocTypeJournal:      {},
 }
 
 type Document struct {
