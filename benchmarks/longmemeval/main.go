@@ -38,6 +38,9 @@ func main() {
 	mmrFlag := flag.String("mmr", "", `comma-separated MMR lambda values in (0,1] (e.g. "0.5,0.7,0.9"); each adds a hybrid_mmr@<lambda> mode reusing the baseline query embedding`)
 	outJSONFlag := flag.String("out-json", "benchmarks/longmemeval/results.json", "path to write machine-readable JSON results")
 	outMDFlag := flag.String("out-md", "benchmarks/longmemeval/RESULTS.md", "path to write human-readable RESULTS.md")
+	scaleSweepFlag := flag.String("scale-sweep", "", `comma-separated per-subcategory distractor counts (e.g. "100,500,2000"); when set, after the base run the corpus is grown with irrelevant distractors at each level and R@K re-measured vs corpus size (real embeddings only — informs the access-retention default window)`)
+	scaleOutJSONFlag := flag.String("scale-out-json", "benchmarks/longmemeval/results_scale.json", "path to write the scale-sweep JSON results")
+	scaleOutMDFlag := flag.String("scale-out-md", "benchmarks/longmemeval/RESULTS_SCALE.md", "path to write the scale-sweep RESULTS_SCALE.md")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: longmemeval --data <path> [flags]\n")
 		fmt.Fprintf(os.Stderr, "Example: longmemeval --data longmemeval_s_cleaned.json --n 150 --k 5,10\n\n")
@@ -68,6 +71,12 @@ func main() {
 	mmrLambdas, err := parseMMRLambdas(*mmrFlag)
 	if err != nil {
 		slog.Error("invalid --mmr", "error", err)
+		os.Exit(1)
+	}
+
+	scaleSizes, err := parseScaleSizes(*scaleSweepFlag)
+	if err != nil {
+		slog.Error("invalid --scale-sweep", "error", err)
 		os.Exit(1)
 	}
 
@@ -112,7 +121,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, nil, nil, nil, nil, nil, nil, authz.NewPostgresStore(db))
 
 	instances, err := LoadDataset(*dataFlag)
 	if err != nil {
@@ -231,6 +240,29 @@ func main() {
 	fmt.Printf("\n===== RESULTS.md BEGIN =====\n%s\n===== RESULTS.md END =====\n", md)
 	if data, err := json.MarshalIndent(results, "", "  "); err == nil {
 		fmt.Printf("===== results.json BEGIN =====\n%s\n===== results.json END =====\n", data)
+	}
+
+	// Corpus-scale sweep (task 6.1 / D8a): additive, gated on --scale-sweep. Grows
+	// the corpus with distractors and re-measures R@K vs corpus size. Needs real
+	// embeddings (FakeEmbedder fakes crowding), so it runs on demand, not by default.
+	if len(scaleSizes) > 0 {
+		sweep, err := RunScaleSweep(ctx, sectionRepo, db, embedder, memorySvc, benchTenantID, slice, scaleSizes, maxK, mmrLambdas, *concurrencyFlag, results.Run)
+		if err != nil {
+			slog.Error("scale sweep failed", "error", err)
+			os.Exit(1)
+		}
+		if err := WriteScaleSweepJSON(*scaleOutJSONFlag, sweep); err != nil {
+			slog.Error("failed to write scale-sweep JSON", "path", *scaleOutJSONFlag, "error", err)
+			os.Exit(1)
+		}
+		slog.Info("wrote scale-sweep JSON", "path", *scaleOutJSONFlag)
+		smd := RenderScaleSweepMarkdown(sweep)
+		if err := os.WriteFile(*scaleOutMDFlag, []byte(smd), 0o644); err != nil {
+			slog.Error("failed to write RESULTS_SCALE.md", "path", *scaleOutMDFlag, "error", err)
+			os.Exit(1)
+		}
+		slog.Info("wrote RESULTS_SCALE.md", "path", *scaleOutMDFlag)
+		fmt.Printf("\n===== RESULTS_SCALE.md BEGIN =====\n%s\n===== RESULTS_SCALE.md END =====\n", smd)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/caarlos0/env/v10"
 
@@ -142,16 +141,6 @@ type Config struct {
 	// SnippetChars caps the match-centered window search_memory returns when
 	// snippet=true (approximate on the low end — ts_headline windows by words).
 	SnippetChars int `env:"MEMORY_SNIPPET_CHARS" envDefault:"400"`
-
-	// Recall reconsolidation loop (Phase A: data collection only — see
-	// openspec/changes/recall-reconsolidation-loop). RecallReceipts gates
-	// receipt recording in Search; RecallReceiptTTL bounds the receipts table
-	// via the cleanup sweep. UsageWeight/UsageRetention are declared for
-	// Phase B/C but unused (0 / false = fully off) in Phase A.
-	RecallReceipts   bool          `env:"MEMORY_RECALL_RECEIPTS" envDefault:"true"`
-	RecallReceiptTTL time.Duration `env:"MEMORY_RECALL_RECEIPT_TTL" envDefault:"72h"`
-	UsageWeight      float64       `env:"MEMORY_USAGE_WEIGHT" envDefault:"0"`
-	UsageRetention   bool          `env:"MEMORY_USAGE_RETENTION" envDefault:"false"`
 }
 
 // ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
@@ -310,20 +299,6 @@ func Load() (*Config, error) {
 	// Snippet window must be positive — a zero/negative cap yields empty snippets.
 	if cfg.SnippetChars <= 0 {
 		return nil, fmt.Errorf("MEMORY_SNIPPET_CHARS must be > 0, got %d", cfg.SnippetChars)
-	}
-
-	// Usage weight (Phase B, unused here) must stay in [0, 5] — 0 is the
-	// off/no-op default; the upper bound keeps a misconfigured weight from
-	// dominating relevance whenever Phase B reads it.
-	if cfg.UsageWeight < 0 || cfg.UsageWeight > 5 {
-		return nil, fmt.Errorf("MEMORY_USAGE_WEIGHT must be in [0, 5], got %v", cfg.UsageWeight)
-	}
-
-	// Recall receipt TTL must be positive — <= 0 would silently disable the
-	// prune (every receipt matches "created_at < now") and let the table grow
-	// unbounded.
-	if cfg.RecallReceiptTTL <= 0 {
-		return nil, fmt.Errorf("MEMORY_RECALL_RECEIPT_TTL must be > 0, got %v", cfg.RecallReceiptTTL)
 	}
 
 	return cfg, nil

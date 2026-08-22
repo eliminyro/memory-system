@@ -29,7 +29,7 @@ func TestRetainTenant_RefusesUnsafeWindow(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := &Scanner{multiplier: c.multiplier, graceDays: c.graceDays}
 			stats := &ScanStats{}
-			err := s.retainTenant(context.Background(), uuid.New(), stats)
+			err := s.retainTenant(context.Background(), models.Tenant{ID: uuid.New()}, true, stats)
 			if err == nil {
 				t.Fatalf("expected error refusing unsafe window, got nil")
 			}
@@ -58,6 +58,26 @@ func TestRetentionEligible(t *testing.T) {
 	for _, c := range cases {
 		if got := retentionEligible(c.tenant); got != c.want {
 			t.Errorf("%s: retentionEligible = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAccessRetentionEligible(t *testing.T) {
+	other := uuid.New()
+	cases := []struct {
+		name          string
+		globalEnabled bool
+		tenant        models.Tenant
+		want          bool
+	}{
+		{"global on non-bootstrap", true, models.Tenant{ID: other}, true},
+		{"global off", false, models.Tenant{ID: other}, false},
+		{"global on independent of staleness off", true, models.Tenant{ID: other, StalenessMode: models.StalenessModeOff}, true},
+		{"global on bootstrap excluded", true, models.Tenant{ID: models.BootstrapTenantID}, false},
+	}
+	for _, c := range cases {
+		if got := accessRetentionEligible(c.globalEnabled, c.tenant); got != c.want {
+			t.Errorf("%s: accessRetentionEligible = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

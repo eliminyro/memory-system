@@ -39,7 +39,7 @@ func buildService() (*service.MemoryService, context.Context, error) {
 	keyRepo := repository.NewAPIKeyRepository(db)
 	authzStore := authz.NewPostgresStore(db)
 
-	svc := service.NewMemoryService(db, nil, nil, nil, tenantRepo, keyRepo, nil, nil, nil, nil, nil, authzStore)
+	svc := service.NewMemoryService(db, nil, nil, nil, tenantRepo, keyRepo, nil, nil, nil, nil, authzStore)
 	// No config.Load here, so stamp the built-in safe bundle onto CLI-created tenants.
 	svc.TenantDefaults = models.BaselineTenantDefaults()
 	ctx := auth.WithLocalAdmin(context.Background())

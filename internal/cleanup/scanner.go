@@ -28,25 +28,20 @@ type ScanStats struct {
 	Errors         int
 	DocsArchived   int
 	DocsDeleted    int
-	ReceiptsPruned int
 }
 
 // Scanner runs the near-duplicate scan and keeps cleanup_queue populated.
 type Scanner struct {
-	lint       *repository.LintRepository
-	tenants    *repository.TenantRepository
-	queue      *repository.CleanupQueueRepository
-	retention  *repository.RetentionRepository
-	thresholds *staleness.ThresholdStore
-	multiplier int
-	graceDays  int
-	notifier   *Notifier
-	logger     *slog.Logger
-	// recallReceipts/recallReceiptTTL prune expired recall_receipts rows
-	// (design D3/task 4.1); nil-safe (a service built without it skips the
-	// prune), TTL<=0 also skips.
-	recallReceipts   *repository.RecallReceiptRepository
-	recallReceiptTTL time.Duration
+	lint           *repository.LintRepository
+	tenants        *repository.TenantRepository
+	queue          *repository.CleanupQueueRepository
+	retention      *repository.RetentionRepository
+	instanceConfig *repository.InstanceConfigRepository
+	thresholds     *staleness.ThresholdStore
+	multiplier     int
+	graceDays      int
+	notifier       *Notifier
+	logger         *slog.Logger
 
 	// runMu serialises RunOnce so an overlapping ticker fire can't cause
 	// concurrent upserts (which, absent a partial unique index, duplicate rows).
@@ -59,26 +54,24 @@ func NewScanner(
 	tenants *repository.TenantRepository,
 	queue *repository.CleanupQueueRepository,
 	retentionRepo *repository.RetentionRepository,
+	instanceConfig *repository.InstanceConfigRepository,
 	thresholds *staleness.ThresholdStore,
 	multiplier int,
 	graceDays int,
 	notifier *Notifier,
 	logger *slog.Logger,
-	recallReceipts *repository.RecallReceiptRepository,
-	recallReceiptTTL time.Duration,
 ) *Scanner {
 	return &Scanner{
-		lint:             lint,
-		tenants:          tenants,
-		queue:            queue,
-		retention:        retentionRepo,
-		thresholds:       thresholds,
-		multiplier:       multiplier,
-		graceDays:        graceDays,
-		notifier:         notifier,
-		logger:           logger,
-		recallReceipts:   recallReceipts,
-		recallReceiptTTL: recallReceiptTTL,
+		lint:           lint,
+		tenants:        tenants,
+		queue:          queue,
+		retention:      retentionRepo,
+		instanceConfig: instanceConfig,
+		thresholds:     thresholds,
+		multiplier:     multiplier,
+		graceDays:      graceDays,
+		notifier:       notifier,
+		logger:         logger,
 	}
 }
 
@@ -95,6 +88,18 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 		return stats, fmt.Errorf("list tenants: %w", err)
 	}
 
+	// Read the ONE global access-retention toggle once per sweep (D9). On a read
+	// error, fail safe (no access eviction) rather than block staleness retention.
+	accessEnabled := false
+	if s.instanceConfig != nil {
+		cfg, err := s.instanceConfig.Get(ctx)
+		if err != nil {
+			s.logger.Warn("cleanup scan: instance config read failed; access retention disabled this sweep", "error", err)
+		} else {
+			accessEnabled = cfg.AccessRetentionEnabled
+		}
+	}
+
 	for _, tenant := range allTenants {
 		if tenant.CleanupScanEnabled {
 			stats.TenantsScanned++
@@ -103,21 +108,11 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 				stats.Errors++
 			}
 		}
-		if retentionEligible(tenant) {
-			if err := s.retainTenant(ctx, tenant.ID, &stats); err != nil {
+		if retentionEligible(tenant) || accessRetentionEligible(accessEnabled, tenant) {
+			if err := s.retainTenant(ctx, tenant, accessEnabled, &stats); err != nil {
 				s.logger.Warn("retention sweep: tenant failed", "tenant_id", tenant.ID, "error", err)
 				stats.Errors++
 			}
-		}
-	}
-
-	if s.recallReceipts != nil && s.recallReceiptTTL > 0 {
-		n, err := s.recallReceipts.PruneExpired(ctx, time.Now().Add(-s.recallReceiptTTL))
-		if err != nil {
-			s.logger.Warn("recall receipt prune failed", "error", err)
-			stats.Errors++
-		} else {
-			stats.ReceiptsPruned = int(n)
 		}
 	}
 
@@ -186,13 +181,19 @@ func (s *Scanner) Start(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-// retentionEligible reports whether retention runs for a tenant: staleness_mode
-// hard, and never the bootstrap pool (curated seed docs, never auto-retired).
+// retentionEligible reports whether age-based retention runs for a tenant:
+// staleness_mode hard, and never the bootstrap pool (curated seed, never retired).
 func retentionEligible(t models.Tenant) bool {
 	return t.StalenessMode == models.StalenessModeHard && t.ID != models.BootstrapTenantID
 }
 
-func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *ScanStats) error {
+// accessRetentionEligible reports whether access-recency eviction runs for a
+// tenant: the global toggle on, never the bootstrap pool. Independent of staleness.
+func accessRetentionEligible(globalEnabled bool, t models.Tenant) bool {
+	return globalEnabled && t.ID != models.BootstrapTenantID
+}
+
+func (s *Scanner) retainTenant(ctx context.Context, tenant models.Tenant, accessEnabled bool, stats *ScanStats) error {
 	// Defensive guard (audit #4): refuse a destructive sweep when window params
 	// collapse the cutoffs and would mass hard-delete live data. config.Load
 	// rejects sub-1 values at startup; this backstops direct Scanner construction.
@@ -201,41 +202,67 @@ func (s *Scanner) retainTenant(ctx context.Context, tenantID uuid.UUID, stats *S
 	}
 
 	now := time.Now()
-	// Partition per-doc_type cutoffs: curated doc_types archive-then-delete as
-	// before; episodic ones (journal, ...) skip archive entirely and roll off
-	// via direct-delete (DeleteEpisodicExpired) instead.
-	curatedCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
-	episodicCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
-	for docType := range models.ValidDocTypes {
-		days, err := s.thresholds.DaysFor(ctx, docType)
+
+	if retentionEligible(tenant) {
+		// Partition per-doc_type cutoffs: curated doc_types archive-then-delete;
+		// episodic ones (journal, ...) skip archive and roll off via direct-delete.
+		curatedCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+		episodicCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+		for docType := range models.ValidDocTypes {
+			days, err := s.thresholds.DaysFor(ctx, docType)
+			if err != nil {
+				return fmt.Errorf("threshold for %s: %w", docType, err)
+			}
+			cutoff := retention.ExpiryCutoff(now, days, s.multiplier)
+			if models.IsEpisodic(docType) {
+				episodicCutoffs[docType] = cutoff
+			} else {
+				curatedCutoffs[docType] = cutoff
+			}
+		}
+		archived, err := s.retention.ArchiveExpired(ctx, tenant.ID, curatedCutoffs)
 		if err != nil {
-			return fmt.Errorf("threshold for %s: %w", docType, err)
+			return err
 		}
-		cutoff := retention.ExpiryCutoff(now, days, s.multiplier)
-		if models.IsEpisodic(docType) {
-			episodicCutoffs[docType] = cutoff
-		} else {
-			curatedCutoffs[docType] = cutoff
+		stats.DocsArchived += int(archived)
+
+		episodicDeleted, err := s.retention.DeleteEpisodicExpired(ctx, tenant.ID, episodicCutoffs)
+		if err != nil {
+			return err
 		}
+		stats.DocsDeleted += int(episodicDeleted)
 	}
 
-	archived, err := s.retention.ArchiveExpired(ctx, tenantID, curatedCutoffs)
-	if err != nil {
-		return err
+	// Access-recency eviction (D3): gated by the ONE global toggle, complementary to
+	// (never replacing) the staleness path above. Per-doc_type windows reuse the
+	// same staleness_thresholds × multiplier cutoffs, keyed on access recency instead
+	// of liveness. Archive-only here; the shared DeleteArchived below hard-deletes it
+	// after grace, same as age docs.
+	if accessRetentionEligible(accessEnabled, tenant) {
+		accessCutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+		for docType := range models.ValidDocTypes {
+			if models.IsEpisodic(docType) {
+				continue
+			}
+			days, err := s.thresholds.DaysFor(ctx, docType)
+			if err != nil {
+				return fmt.Errorf("threshold for %s: %w", docType, err)
+			}
+			accessCutoffs[docType] = retention.ExpiryCutoff(now, days, s.multiplier)
+		}
+		accessArchived, err := s.retention.ArchiveAccessCold(ctx, tenant.ID, accessCutoffs)
+		if err != nil {
+			return err
+		}
+		stats.DocsArchived += int(accessArchived)
 	}
-	stats.DocsArchived += int(archived)
 
-	deleted, err := s.retention.DeleteArchived(ctx, tenantID, retention.DeleteCutoff(now, s.graceDays))
+	// Hard-delete every archived doc (age- or access-archived) once past grace.
+	deleted, err := s.retention.DeleteArchived(ctx, tenant.ID, retention.DeleteCutoff(now, s.graceDays))
 	if err != nil {
 		return err
 	}
 	stats.DocsDeleted += int(deleted)
-
-	episodicDeleted, err := s.retention.DeleteEpisodicExpired(ctx, tenantID, episodicCutoffs)
-	if err != nil {
-		return err
-	}
-	stats.DocsDeleted += int(episodicDeleted)
 	return nil
 }
 
@@ -253,6 +280,5 @@ func (s *Scanner) runAndLog(ctx context.Context) {
 		"errors", stats.Errors,
 		"docs_archived", stats.DocsArchived,
 		"docs_deleted", stats.DocsDeleted,
-		"receipts_pruned", stats.ReceiptsPruned,
 	)
 }

@@ -120,8 +120,8 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		&models.CleanupQueue{},
 		&models.DeletionEvent{},
 		&models.EmbeddingMetadata{},
+		&models.InstanceConfig{},
 		&models.ImportJob{},
-		&models.RecallReceipt{},
 		// authlet tables — Phase A of authlet integration
 		&authletstore.OAuthClient{},
 		&authletstore.OAuthCode{},
@@ -201,17 +201,15 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		`UPDATE documents SET doc_type = 'learning' WHERE doc_type = 'reference' AND category = 'learnings'`,
 		`UPDATE documents SET doc_type = 'preference' WHERE doc_type = 'reference' AND category = 'preferences'`,
 		`UPDATE documents SET doc_type = 'tool' WHERE doc_type = 'reference' AND category = 'tools'`,
-		// Defensive backfill: AutoMigrate's column default covers new rows, but a
-		// pre-existing row added the column via ALTER TABLE could still read NULL
-		// on some upgrade paths. Only touches NULLs, so re-runs are no-ops.
-		`UPDATE sections SET hit_count = 0, miss_count = 0 WHERE hit_count IS NULL OR miss_count IS NULL`,
-		// Supports the recall_receipts TTL prune (recall-reconsolidation-loop D3).
-		// PruneExpired filters on created_at alone (no tenant_id predicate), so a
-		// leading tenant_id column made the original index useless for the prune;
-		// drop it and index created_at alone. New name so a DB that already ran
-		// the old CREATE INDEX ... IF NOT EXISTS picks up the corrected index.
-		`DROP INDEX IF EXISTS idx_recall_receipts_tenant_created`,
-		`CREATE INDEX IF NOT EXISTS idx_recall_receipts_created ON recall_receipts (created_at)`,
+		// Access-recency retention (D6): AutoMigrate adds last_accessed_at/pinned;
+		// backfill=now() so opt-in can't instantly evict the back-catalog. NULL-only
+		// guard keeps re-runs idempotent.
+		`UPDATE documents SET last_accessed_at = now() WHERE last_accessed_at IS NULL`,
+		// Retire dead Phase A recall machinery (D7): AutoMigrate won't drop these,
+		// so drop explicitly; IF EXISTS keeps re-runs safe.
+		`DROP TABLE IF EXISTS recall_receipts`,
+		`ALTER TABLE sections DROP COLUMN IF EXISTS hit_count`,
+		`ALTER TABLE sections DROP COLUMN IF EXISTS miss_count`,
 	}
 
 	for _, m := range migrations {
@@ -243,6 +241,15 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		).Error; err != nil {
 			return fmt.Errorf("seed staleness threshold %s: %w", t.DocType, err)
 		}
+	}
+
+	// Seed the singleton instance_config row (global toggles, default off).
+	// Idempotent via ON CONFLICT DO NOTHING so an operator's later edits persist.
+	if err := tx.Exec(
+		`INSERT INTO instance_config (id, access_retention_enabled, updated_at) VALUES (?, false, now()) ON CONFLICT (id) DO NOTHING`,
+		models.InstanceConfigSingletonID,
+	).Error; err != nil {
+		return fmt.Errorf("seed instance config: %w", err)
 	}
 
 	// Personal tenants use the owner relation instead of admin (personal-owner-role).

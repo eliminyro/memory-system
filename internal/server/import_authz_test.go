@@ -21,7 +21,7 @@ import (
 // drive the relational import surface's authorization decision (design.md
 // §8) in isolation. Mirrors newACLNoDBSvc in internal/service/acl_test.go.
 func newImportAuthzSvc(store authz.Store) *service.MemoryService {
-	return service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	return service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 }
 
 // TestRelationalImportEnqueue_SysAdminAnyTenant proves a system admin may

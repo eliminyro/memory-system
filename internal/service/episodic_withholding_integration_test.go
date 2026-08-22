@@ -26,12 +26,12 @@ func TestEpisodicWithholding_JournalNeverGuarded(t *testing.T) {
 	body := "internal/service/memory.go is where it lives " + token
 
 	resJ, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "journal", nil,
-		"j-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+		"j-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, models.DocTypeJournal, resJ.Document.DocType)
 
 	resL, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", nil,
-		"l-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+		"l-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 
 	// Backdate both sections' verified_at well past any doc_type threshold.

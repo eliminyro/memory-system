@@ -31,7 +31,7 @@ func hasSentinel(s string) bool {
 func findSection(t *testing.T, f *authzFixture, ctx context.Context, query string, secID uuid.UUID, snippet bool) repository.SearchResult {
 	t.Helper()
 	for attempt := 0; attempt < 5; attempt++ {
-		results, _, err := f.svc.Search(ctx, query, nil, nil, 20, false, "", nil, snippet)
+		results, err := f.svc.Search(ctx, query, nil, nil, 20, false, "", nil, snippet)
 		require.NoError(t, err)
 		for _, r := range results {
 			if r.SectionID == secID {
@@ -52,7 +52,7 @@ func TestSearchSnippet_OmittedPreservesFullContent(t *testing.T) {
 	token := "snip" + uuid.NewString()[:8]
 	body := strings.Repeat("alpha beta gamma delta ", 40) + " " + token + " tail"
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
@@ -73,7 +73,7 @@ func TestSearchSnippet_LexicalHitIsCentered(t *testing.T) {
 	// Match sits deep in the body so a leading-text window would not contain it.
 	body := strings.Repeat("alpha beta gamma delta epsilon zeta ", 30) + " " + token + " " + strings.Repeat("omega ", 30)
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
@@ -101,7 +101,7 @@ func TestSearchSnippet_CenteredWindowSurvivesLongLeadingTokens(t *testing.T) {
 	lead := strings.Repeat("longleadingfillertokenaaaaaaaaaa ", 80) // ~2600 chars
 	body := lead + " " + token + " trailing text here"
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
@@ -122,7 +122,7 @@ func TestSearchSnippet_SemanticOnlyHitNotCentered(t *testing.T) {
 	token := "sem" + uuid.NewString()[:8] // absent from the body -> no lexical match
 	body := strings.Repeat("unrelated filler words here ", 40)
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "sem-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "sem-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	secID := res.Document.Sections[0].ID
 
@@ -157,10 +157,10 @@ func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 	// Mentions a code path -> guard-eligible once stale.
 	body := "internal/service/memory.go is where it lives " + token
 	resA, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", nil,
-		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
-		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 
 	secA := resA.Document.Sections[0].ID
@@ -172,7 +172,7 @@ func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 	var ra, rb repository.SearchResult
 	var okA, okB bool
 	for attempt := 0; attempt < 5; attempt++ {
-		results, _, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil, true)
+		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil, true)
 		require.NoError(t, err)
 		bySection := map[uuid.UUID]repository.SearchResult{}
 		for _, r := range results {
@@ -210,7 +210,7 @@ func TestSearchSnippet_GetDocumentStillFull(t *testing.T) {
 	token := "snip" + uuid.NewString()[:8]
 	body := strings.Repeat("alpha beta gamma delta epsilon ", 40) + " " + token + " tail"
 
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+	res, err := f.svc.StoreDocument(ctx, "learnings", nil, "snip-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	doc := res.Document
 	secID := doc.Sections[0].ID

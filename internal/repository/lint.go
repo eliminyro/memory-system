@@ -150,6 +150,51 @@ func (r *LintRepository) CheckStale(ctx context.Context, tenantID uuid.UUID, thr
 	return findings, nil
 }
 
+// CheckAccessCold is the read-only access-recency eviction dry-run (D5): the
+// ArchiveAccessCold predicate (COALESCE(last_accessed_at,created_at) < the
+// doc_type's cutoff, unpinned, non-episodic, unarchived, single tenant) minus the
+// UPDATE. Per-doc_type cutoffs so the preview uses the same per-category windows
+// as the sweep; one SELECT per doc_type in cutoffs.
+func (r *LintRepository) CheckAccessCold(ctx context.Context, tenantID uuid.UUID, cutoffs map[string]time.Time) ([]LintFinding, error) {
+	episodic := pq.StringArray(models.EpisodicDocTypes())
+	const sql = `
+		SELECT category, subcategory, slug,
+		       EXTRACT(DAY FROM NOW() - COALESCE(last_accessed_at, created_at))::int AS days_cold
+		FROM documents
+		WHERE tenant_id = ?
+		  AND doc_type = ?
+		  AND doc_type <> ALL(?)
+		  AND archived_at IS NULL
+		  AND NOT pinned
+		  AND COALESCE(last_accessed_at, created_at) < ?
+		ORDER BY COALESCE(last_accessed_at, created_at) ASC
+	`
+
+	type row struct {
+		Category    string  `gorm:"column:category"`
+		Subcategory *string `gorm:"column:subcategory"`
+		Slug        string  `gorm:"column:slug"`
+		DaysCold    int     `gorm:"column:days_cold"`
+	}
+
+	var findings []LintFinding
+	for docType, cutoff := range cutoffs {
+		var rows []row
+		if err := r.db.WithContext(ctx).Raw(sql, tenantID, docType, episodic, cutoff).Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("check access cold (%s): %w", docType, err)
+		}
+		for _, r := range rows {
+			findings = append(findings, LintFinding{
+				Check:        "access_cold",
+				Severity:     LintSeverityWarning,
+				DocumentPath: models.BuildPath(r.Category, r.Subcategory, r.Slug),
+				Message:      fmt.Sprintf("access-cold eviction candidate: unaccessed for %d days (would be archived once access_retention_enabled is on)", r.DaysCold),
+			})
+		}
+	}
+	return findings, nil
+}
+
 // CheckSparse finds documents with too few sections or insufficient content length.
 func (r *LintRepository) CheckSparse(ctx context.Context, tenantID uuid.UUID, thresholds LintThresholds) ([]LintFinding, error) {
 	tenants := readTenants(tenantID)

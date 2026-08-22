@@ -112,7 +112,7 @@ func TestDeleteDocumentByID_PrunesTuples(t *testing.T) {
 	require.NoError(t, err)
 
 	docCtx := auth.WithTenantID(ctx, tenant.ID)
-	res, err := svc.StoreDocument(docCtx, "learnings", nil, "l2-doc-"+uuid.NewString(), "# T\n\nbody", true, "seed", nil)
+	res, err := svc.StoreDocument(docCtx, "learnings", nil, "l2-doc-"+uuid.NewString(), "# T\n\nbody", true, "seed", nil, nil)
 	require.NoError(t, err)
 	docID := res.Document.ID
 

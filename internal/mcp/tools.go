@@ -75,11 +75,6 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 	}, s.MarkVerified)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name:        "report_recall_outcome",
-		Description: "Report whether a memory recalled by search_memory actually helped. Pass the recall_id from the search response envelope and outcome success or failure. Credits hit/miss counts on the served sections; safe to call once per recall_id (idempotent).",
-	}, s.ReportRecallOutcome)
-
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "get_cleanup_queue",
 		Description: "Return pending near-duplicate candidates detected by the nightly cleanup scan. Each entry names two documents that collide above threshold; the cleanup agent reads these, merges with merge_documents, and resolves with mark_cleanup_done.",
 	}, s.GetCleanupQueue)
@@ -96,7 +91,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_my_tenant_settings",
-		Description: "Read or update feature toggles on your own tenant: staleness_mode (off|advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool). Any field you omit stays unchanged; omit all three for a status read. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies) — these toggles arm destructive behavior (staleness_mode=hard arms the retention sweep that hard-deletes documents), so a plain member of a shared tenant is refused. Defaults are the safest — opt in to enforcement explicitly.",
+		Description: "Read or update feature toggles on your own tenant: staleness_mode (off|advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool). Any field you omit stays unchanged; omit all for a status read. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies) — these toggles arm destructive behavior (staleness_mode=hard arms the retention sweep that hard-deletes documents), so a plain member of a shared tenant is refused. Defaults are the safest — opt in to enforcement explicitly.",
 	}, s.UpdateMyTenantSettings)
 }
 
@@ -134,12 +129,6 @@ type MarkVerifiedInput struct {
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
-type ReportRecallOutcomeInput struct {
-	RecallID string  `json:"recall_id" jsonschema:"recall_id from a search_memory response envelope"`
-	Outcome  string  `json:"outcome" jsonschema:"success or failure — whether the recalled memory actually helped"`
-	TenantID *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
-}
-
 type GetCleanupQueueInput struct {
 	Limit           int     `json:"limit,omitempty" jsonschema:"Max entries to return (default 50)"`
 	IncludeResolved bool    `json:"include_resolved,omitempty" jsonschema:"Include already-resolved rows in the result (default false — only pending)"`
@@ -174,6 +163,7 @@ type StoreMemoryInput struct {
 	Content     string  `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
 	Force       bool    `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Prefer update_section on a returned candidate instead."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force=true. Brief explanation of why this is not a duplicate."`
+	Pin         *bool   `json:"pin,omitempty" jsonschema:"Mark the document a pin (never-evict): exempt from access-recency eviction. On re-store, omit to keep the current pin state, or set true/false to change it."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -210,7 +200,7 @@ type GetRelatedInput struct {
 }
 
 type LintMemoryInput struct {
-	Checks     []string                   `json:"checks,omitempty" jsonschema:"Filter to specific checks: stale, sparse, near_duplicate, empty_category"`
+	Checks     []string                   `json:"checks,omitempty" jsonschema:"Filter to specific checks: stale, sparse, near_duplicate, empty_category, access_cold (access-recency eviction dry-run)"`
 	Thresholds *repository.LintThresholds `json:"thresholds,omitempty" jsonschema:"Override default thresholds"`
 	TenantID   *string                    `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
@@ -241,11 +231,11 @@ func (s *Server) SearchMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	results, recallID, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride, input.Snippet)
+	results, err := s.memory.Search(ctx, input.Query, input.Category, input.Subcategory, input.Limit, input.ForceRead, input.Reason, tenantOverride, input.Snippet)
 	if err != nil {
 		return toolErr("search", err)
 	}
-	return jsonResult(service.NewSearchResponse(results, recallID)), nil, nil
+	return jsonResult(service.NewSearchResponse(results)), nil, nil
 }
 
 func (s *Server) GetDocument(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetDocumentInput) (*mcpsdk.CallToolResult, any, error) {
@@ -301,24 +291,6 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		return toolErr("mark verified", err)
 	}
 	return jsonResult(map[string]string{"status": "verified", "section_id": id.String()}), nil, nil
-}
-
-func (s *Server) ReportRecallOutcome(ctx context.Context, _ *mcpsdk.CallToolRequest, input ReportRecallOutcomeInput) (*mcpsdk.CallToolResult, any, error) {
-	if input.RecallID == "" {
-		return errorResult("recall_id is required"), nil, nil
-	}
-	id, err := uuid.Parse(input.RecallID)
-	if err != nil {
-		return errorResult("invalid recall_id: " + err.Error()), nil, nil
-	}
-	tenantOverride, err := parseTenantOverride(input.TenantID)
-	if err != nil {
-		return errorResult(err.Error()), nil, nil
-	}
-	if err := s.memory.ReportRecallOutcome(ctx, id, input.Outcome, tenantOverride); err != nil {
-		return toolErr("report recall outcome", err)
-	}
-	return jsonResult(map[string]string{"status": "recorded", "recall_id": id.String(), "outcome": input.Outcome}), nil, nil
 }
 
 func (s *Server) GetCleanupQueue(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetCleanupQueueInput) (*mcpsdk.CallToolResult, any, error) {
@@ -418,7 +390,7 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	result, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content, input.Force, input.Reason, tenantOverride)
+	result, err := s.memory.StoreDocument(ctx, input.Category, input.Subcategory, input.Slug, input.Content, input.Force, input.Reason, tenantOverride, input.Pin)
 	if err != nil {
 		return toolErr("store", err)
 	}

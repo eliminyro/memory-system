@@ -22,7 +22,7 @@ func TestListDocuments_Pagination(t *testing.T) {
 	const total = 7
 	for i := 0; i < total; i++ {
 		slug := fmt.Sprintf("p%02d-%s", i, uuid.NewString()[:8])
-		_, err := f.svc.StoreDocument(ctx, category, nil, slug, "# T\n\n## H\nbody", true, "seed", nil)
+		_, err := f.svc.StoreDocument(ctx, category, nil, slug, "# T\n\n## H\nbody", true, "seed", nil, nil)
 		require.NoError(t, err)
 	}
 

@@ -77,7 +77,7 @@ func TestOwnerReadsAndAdministersOwnTenant(t *testing.T) {
 	ownerCtx := ctxFor(personal.ID, ownerTU.ID.String())
 
 	// Owner stores + reads a doc in their own tenant, and manages the tenant.
-	res, err := svc.StoreDocument(ownerCtx, "learnings", nil, "od-"+uuid.NewString(), "# T\n\n## H\nbody", true, "seed", nil)
+	res, err := svc.StoreDocument(ownerCtx, "learnings", nil, "od-"+uuid.NewString(), "# T\n\n## H\nbody", true, "seed", nil, nil)
 	require.NoError(t, err)
 	_, err = svc.GetDocument(ownerCtx, res.Document.Category, nil, res.Document.Slug, false, "", nil)
 	require.NoError(t, err, "owner reads own-tenant doc")
@@ -89,7 +89,7 @@ func TestOwnerReadsAndAdministersOwnTenant(t *testing.T) {
 	otherTU, err := svc.GrantTenantUser(adminCtx, "x-"+uuid.NewString()+"@example.com", other.ID, models.TenantUserRoleOwner)
 	require.NoError(t, err)
 	otherCtx := ctxFor(other.ID, otherTU.ID.String())
-	ores, err := svc.StoreDocument(otherCtx, "learnings", nil, "xd-"+uuid.NewString(), "# T\n\n## H\nbody", true, "seed", nil)
+	ores, err := svc.StoreDocument(otherCtx, "learnings", nil, "xd-"+uuid.NewString(), "# T\n\n## H\nbody", true, "seed", nil, nil)
 	require.NoError(t, err)
 
 	// No leak: the first owner reaches nothing in the other tenant.
@@ -168,7 +168,7 @@ func TestOwnerManagesDocGuestButNotTenantGrant(t *testing.T) {
 	require.NoError(t, err)
 	ownerCtx := ctxFor(personal.ID, ownerTU.ID.String())
 
-	res, err := svc.StoreDocument(ownerCtx, "learnings", nil, "dg-"+uuid.NewString(), "# T\n\n## H\nbody", true, "seed", nil)
+	res, err := svc.StoreDocument(ownerCtx, "learnings", nil, "dg-"+uuid.NewString(), "# T\n\n## H\nbody", true, "seed", nil, nil)
 	require.NoError(t, err)
 	docID := res.Document.ID
 

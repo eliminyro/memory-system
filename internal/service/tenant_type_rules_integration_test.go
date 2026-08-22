@@ -94,7 +94,7 @@ func TestGrantTenantAccessTenantTypeRule(t *testing.T) {
 
 	// Document-level guest grant on a personal tenant's document stays allowed.
 	docCtx := auth.WithTenantID(ctx, personal.ID)
-	res, err := svc.StoreDocument(docCtx, "learnings", nil, "ttr-doc-"+uuid.NewString(), "# T\n\nbody", true, "seed", nil)
+	res, err := svc.StoreDocument(docCtx, "learnings", nil, "ttr-doc-"+uuid.NewString(), "# T\n\nbody", true, "seed", nil, nil)
 	require.NoError(t, err)
 	docID := res.Document.ID
 

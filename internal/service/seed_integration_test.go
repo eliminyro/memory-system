@@ -67,7 +67,7 @@ func TestLifecycleSeeding(t *testing.T) {
 		service.NewFakeEmbedder(fakeDim),
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 		store,
 	)
 
@@ -87,7 +87,7 @@ func TestLifecycleSeeding(t *testing.T) {
 
 	// StoreDocument -> document#tenant parent edge.
 	docCtx := auth.WithTenantID(adminCtx, tenant.ID)
-	res, err := svc.StoreDocument(docCtx, "learnings", nil, "seed-"+uuid.NewString(), "# Title\n\nbody", true, "test", nil)
+	res, err := svc.StoreDocument(docCtx, "learnings", nil, "seed-"+uuid.NewString(), "# Title\n\nbody", true, "test", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, res.Document)
 	requireTuple(t, store, authzseed.DocumentTenantEdge(res.Document.ID, tenant.ID))

@@ -91,7 +91,7 @@ func TestACLDocumentGrantLifecycle(t *testing.T) {
 	// Seed the document via an admin-scoped context (StoreDocument establishes
 	// tenant from context, independent of the manager relation being tested).
 	docCtx := auth.WithTenantID(sysAdminCtx, tenant.ID)
-	res, err := svc.StoreDocument(docCtx, "learnings", nil, "acl-doc-"+uuid.NewString(), "# T\n\nbody", true, "seed", nil)
+	res, err := svc.StoreDocument(docCtx, "learnings", nil, "acl-doc-"+uuid.NewString(), "# T\n\nbody", true, "seed", nil, nil)
 	require.NoError(t, err)
 	docID := res.Document.ID
 

@@ -44,7 +44,7 @@ func newBootstrapHandler(t *testing.T, token string) http.Handler {
 		db, nil, nil, nil,
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 		store,
 	)
 	svc.BootstrapToken = token

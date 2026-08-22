@@ -42,7 +42,6 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("PATCH /documents/{id}", h.patchDocument)
 	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
 	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
-	m.HandleFunc("POST /recall/{recall_id}/outcome", h.reportRecallOutcome)
 
 	// GET /tenants/writable backs the delegated-manager UI probe (design.md
 	// §7/§9): every tenant for a system admin, else the tenants the caller
@@ -259,33 +258,12 @@ func (h *apiHandler) getSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
-	results, recallID, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", tenantID, false)
+	results, err := h.memory.Search(r.Context(), query, category, subcategory, limit, false, "", tenantID, false)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, service.NewSearchResponse(results, recallID))
-}
-
-// reportRecallOutcome backs POST /recall/{recall_id}/outcome: the HTTP
-// counterpart of MCP report_recall_outcome. overrideID is nil — the tenant is
-// resolved from context, same as every other write handler in this file.
-func (h *apiHandler) reportRecallOutcome(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathUUID(w, r, "recall_id", "recall")
-	if !ok {
-		return
-	}
-	var body struct {
-		Outcome string `json:"outcome"`
-	}
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if err := h.memory.ReportRecallOutcome(r.Context(), id, body.Outcome, nil); err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded", "recall_id": id.String(), "outcome": body.Outcome})
+	writeJSON(w, http.StatusOK, service.NewSearchResponse(results))
 }
 
 func (h *apiHandler) getDocument(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +463,7 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx = auth.WithTenantID(ctx, tenantID)
-	res, err := h.memory.StoreDocument(ctx, category, subcategory, slug, content, false, "", nil)
+	res, err := h.memory.StoreDocument(ctx, category, subcategory, slug, content, false, "", nil, nil)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -30,7 +30,7 @@ func newTenantDefaultsSvc(t *testing.T, defaults models.TenantDefaults) (*servic
 		service.NewFakeEmbedder(fakeDim),
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 		store,
 	)
 	svc.TenantDefaults = defaults

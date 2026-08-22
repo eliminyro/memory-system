@@ -36,7 +36,7 @@ func TestStoreDocument_ReStoreAtArchivedPath(t *testing.T) {
 	category := "learnings"
 	slug := "h3-" + uuid.NewString()
 
-	first, err := svc.StoreDocument(ctx, category, nil, slug, "# Title\n\noriginal body", true, "seed", nil)
+	first, err := svc.StoreDocument(ctx, category, nil, slug, "# Title\n\noriginal body", true, "seed", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "ok", first.Status)
 	firstID := first.Document.ID
@@ -47,7 +47,7 @@ func TestStoreDocument_ReStoreAtArchivedPath(t *testing.T) {
 		Update("archived_at", time.Now()).Error)
 
 	// Re-store at the SAME path: must succeed (Create branch, no 23505).
-	second, err := svc.StoreDocument(ctx, category, nil, slug, "# Title\n\nfresh body", true, "re-store", nil)
+	second, err := svc.StoreDocument(ctx, category, nil, slug, "# Title\n\nfresh body", true, "re-store", nil, nil)
 	require.NoError(t, err, "re-store at an archived path must not 23505")
 	require.Equal(t, "ok", second.Status)
 	require.NotEqual(t, firstID, second.Document.ID, "re-store must create a new active doc, not reuse the archived row")

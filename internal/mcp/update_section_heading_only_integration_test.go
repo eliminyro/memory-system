@@ -33,7 +33,6 @@ func TestMCPUpdateSectionHeadingOnly(t *testing.T) {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
-		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 	engine := authz.NewEngine(store)
@@ -43,7 +42,7 @@ func TestMCPUpdateSectionHeadingOnly(t *testing.T) {
 	ctx := boundaryCtx(tenant, "user-"+uuid.NewString())
 
 	slug := "doc-" + uuid.NewString()
-	res, err := svc.StoreDocument(ctx, "learnings", nil, slug, "# Title\n\n## Old Heading\nbody text", true, "seed", nil)
+	res, err := svc.StoreDocument(ctx, "learnings", nil, slug, "# Title\n\n## Old Heading\nbody text", true, "seed", nil, nil)
 	if err != nil {
 		t.Fatalf("seed doc: %v", err)
 	}
