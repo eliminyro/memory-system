@@ -74,7 +74,6 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
-		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 
@@ -93,7 +92,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 	slug := "note-" + uuid.NewString()
 	title := "Api Title " + slug
 	content := "# " + title + "\n\n## Heading\nsome distinctive body text"
-	res, err := svc.StoreDocument(seedCtx, "learnings", nil, slug, content, true, "seed", nil)
+	res, err := svc.StoreDocument(seedCtx, "learnings", nil, slug, content, true, "seed", nil, nil)
 	if err != nil {
 		t.Fatalf("seed document: %v", err)
 	}
@@ -278,7 +277,7 @@ func TestAPIGetDocument_ReturnsSeededDoc(t *testing.T) {
 }
 
 // TestAPISearch_CallsService proves getSearch forwards the q param to the service
-// and returns the {recall_id, results} envelope.
+// and returns the {results} envelope.
 func TestAPISearch_CallsService(t *testing.T) {
 	f := newAPIFixture(t)
 
@@ -289,8 +288,7 @@ func TestAPISearch_CallsService(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		RecallID *uuid.UUID                `json:"recall_id"`
-		Results  []repository.SearchResult `json:"results"`
+		Results []repository.SearchResult `json:"results"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("body not a search envelope: %v (%s)", err, rec.Body.String())

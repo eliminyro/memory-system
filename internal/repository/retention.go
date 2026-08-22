@@ -73,6 +73,34 @@ func (r *RetentionRepository) ArchiveExpired(ctx context.Context, tenantID uuid.
 	return total, nil
 }
 
+// ArchiveAccessCold archives access-cold docs per doc_type window (D3): for each
+// doc_type in cutoffs, docs where COALESCE(last_accessed_at, created_at) predates
+// that doc_type's cutoff, unpinned, unarchived, non-episodic. Per-doc_type cutoffs
+// mirror DeleteEpisodicExpired's shape (each category gets its own disuse window).
+// Archive-only — DeleteArchived hard-deletes after grace.
+func (r *RetentionRepository) ArchiveAccessCold(ctx context.Context, tenantID uuid.UUID, cutoffs map[string]time.Time) (int64, error) {
+	episodic := pq.StringArray(models.EpisodicDocTypes())
+	const sql = `
+		UPDATE documents d
+		SET archived_at = now()
+		WHERE d.tenant_id = ?
+		  AND d.doc_type = ?
+		  AND d.doc_type <> ALL(?)
+		  AND d.archived_at IS NULL
+		  AND NOT d.pinned
+		  AND COALESCE(d.last_accessed_at, d.created_at) < ?
+	`
+	var total int64
+	for docType, cutoff := range cutoffs {
+		res := r.db.WithContext(ctx).Exec(sql, tenantID, docType, episodic, cutoff)
+		if res.Error != nil {
+			return total, fmt.Errorf("archive access cold (%s): %w", docType, res.Error)
+		}
+		total += res.RowsAffected
+	}
+	return total, nil
+}
+
 // DeleteArchived hard-deletes docs archived before `before` in one atomic
 // statement: writes a deletion_events audit row per victim, purges cleanup_queue
 // rows referencing a victim, prunes the victims' relation_tuples, then deletes

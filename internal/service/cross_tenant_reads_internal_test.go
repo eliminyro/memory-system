@@ -19,7 +19,7 @@ import (
 // enough to exercise the read-scope resolvers (readableTenants/readScope) in
 // isolation. Mirrors newACLUnitSvc.
 func ctReadSvc(store authz.Store) *MemoryService {
-	return NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	return NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 }
 
 func ctCtx(home uuid.UUID, subj string) context.Context {

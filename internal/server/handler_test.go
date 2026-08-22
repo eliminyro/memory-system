@@ -117,7 +117,7 @@ func TestWithGlobalBodyCap_ExemptsOnlyImportUpload(t *testing.T) {
 // exists, and the no-oauth page still serves at GET /ui post-bootstrap.
 func TestNewHandler_GatedAssetsNotServedUnderUI(t *testing.T) {
 	store := authz.NewMemoryStore()
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, store)
 	svc.BootstrapToken = "configured-secret"
 	h := NewHandler(Deps{Memory: svc})
 

@@ -46,7 +46,7 @@ func TestResetBootstrap(t *testing.T) {
 	tenant, err := svc.CreateTenant(adminCtx, "tenant-"+uuid.NewString(), "", models.TenantTypePersonal)
 	require.NoError(t, err)
 	docCtx := auth.WithTenantID(adminCtx, tenant.ID)
-	storeRes, err := svc.StoreDocument(docCtx, "learnings", nil, "keep-"+uuid.NewString(), "# Title\n\nbody", true, "test", nil)
+	storeRes, err := svc.StoreDocument(docCtx, "learnings", nil, "keep-"+uuid.NewString(), "# Title\n\nbody", true, "test", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, storeRes.Document)
 

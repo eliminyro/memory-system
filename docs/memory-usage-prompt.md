@@ -19,12 +19,6 @@ touches a known project, tool, or decision, search your memory first:
 Do not guess at facts the memory could confirm. If the answer likely lives in
 memory, look it up rather than inventing it.
 
-**Close the loop.** `search_memory`'s response carries a `recall_id`. After
-acting on a recalled result, call `report_recall_outcome` with that `recall_id`
-and `outcome: success` (it helped) or `failure` (it didn't). This is what lets
-future ranking learn which memories are actually useful — skipping it leaves
-the signal empty.
-
 Your reads span every tenant you can see — your own memory, the shared common
 pool, and any team or shared tenant you've been granted access to — and each
 result is labeled with the tenant that owns it. Treat a hit from a shared tenant
@@ -36,7 +30,8 @@ that will matter later — a project's state, a reusable technique, a stable
 preference, a reference link — persist it with `store_memory`. Write it as a
 self-contained fact with a clear title. Do NOT store one-off conversational
 detail, secrets, or anything already obvious from the source of truth (code,
-docs, version control).
+docs, version control). A record you must never lose to usage-based retention
+can be marked never-evict with `pin: true` at store time (or on a later re-store).
 
 **Update instead of duplicating.** Before storing, check whether a record
 already covers the topic (search first). If one does, refine it with
@@ -54,7 +49,10 @@ good records alive: on an instance with hard staleness and the retention sweep
 enabled (the default), verifying or updating a record on recall resets its
 staleness clock, so a document you keep using survives — while one that goes
 stale and is never re-verified is eventually archived and deleted. Treat
-verify-on-recall as the price of keeping a memory around.
+verify-on-recall as the price of keeping a memory around. Some instances also
+enforce **access-recency retention**: a document left unread for long enough is
+archived and deleted regardless of staleness, so recalling one you still rely on
+— not only verifying it — keeps it alive. Pinned records (see above) are exempt.
 
 **Be concise and structured.** Records are markdown. Favor short, factual
 entries with a descriptive title and, where useful, links between related

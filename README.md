@@ -61,6 +61,14 @@ direct grant on, while **writes stay scoped to a single tenant**.
 - **Retention sweep** — archives documents left unverified past a configurable multiple
   of their staleness threshold, then hard-deletes after a grace window (guarded against
   destructive misconfiguration).
+- **Access-recency retention** — an independent sweep gated by one global DB toggle
+  (`instance_config.access_retention_enabled`, a singleton row, default off; a web-UI
+  surface lands later) that archives-then-deletes documents left both unread and unwritten
+  past their per-category window (each doc_type's staleness threshold × the retention
+  multiplier — no separate window knob). Every search bumps the served documents'
+  last-accessed time, a `pin` on `store_memory` exempts a record forever, and
+  `lint_memory`'s `access_cold` check previews the eviction set without changing anything.
+  It is complementary to staleness retention, which is unchanged.
 - **Duplicate guard** — an optional similarity check refuses near-duplicate writes,
   returning a `similar_exists` result so agents update instead of cloning.
 - **Cleanup pipeline** — a nightly scanner queues near-duplicate candidates and can post

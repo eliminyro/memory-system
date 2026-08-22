@@ -60,7 +60,8 @@ Flags: `--data` (required), `--seed` (default 42), `--n` (slice size or `all`, d
 `--k` (CSV, default `5,10`), `--concurrency` (ingest workers, default 16), `--skip-ingest`
 (score against an already-ingested corpus, see below), `--mmr` (CSV of λ values, see below),
 `--out-json` (default `benchmarks/longmemeval/results.json`), `--out-md` (default
-`benchmarks/longmemeval/RESULTS.md`).
+`benchmarks/longmemeval/RESULTS.md`), `--scale-sweep` (CSV of per-subcategory
+distractor counts — corpus-scale sweep, see `RESULTS_SCALE.md`).
 
 The slice is a **seeded, deterministic** subset — same `--seed`+`--n` selects the same
 questions. Ingestion is idempotent (fixed bench tenant + upsert on deterministic paths), so

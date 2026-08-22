@@ -66,7 +66,7 @@ func (s *MemoryService) ImportDocuments(ctx context.Context, tenantID uuid.UUID,
 
 		// Bulk import bypasses the duplicate guard — the operator's intent is to
 		// ingest files as-authored, not to prompt on every near-duplicate.
-		if _, err := s.StoreDocument(ctx, category, subcategory, slug, string(content), true, "bulk import", nil); err != nil {
+		if _, err := s.StoreDocument(ctx, category, subcategory, slug, string(content), true, "bulk import", nil, nil); err != nil {
 			slog.Default().Warn("failed to import document", "path", path, "error", err)
 			result.Failed++
 			return nil

@@ -20,7 +20,7 @@ import (
 // newBootstrapUnitSvc. Success and already-bootstrapped paths need a real
 // transaction and are covered in bootstrap_integration_test.go.
 func newBootstrapUnitSvc(configuredToken string) *service.MemoryService {
-	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
+	svc := service.NewMemoryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, authz.NewMemoryStore())
 	svc.BootstrapToken = configuredToken
 	return svc
 }

@@ -179,8 +179,8 @@ func main() {
 	overrideRepo := repository.NewOverrideLogRepository(db)
 	cleanupRepo := repository.NewCleanupQueueRepository(db)
 	retentionRepo := repository.NewRetentionRepository(db)
+	instanceConfigRepo := repository.NewInstanceConfigRepository(db)
 	importJobRepo := repository.NewImportJobRepository(db)
-	recallReceiptRepo := repository.NewRecallReceiptRepository(db)
 
 	// Staleness threshold cache — loads from staleness_thresholds table.
 	thresholdStore := staleness.NewThresholdStore(db)
@@ -222,7 +222,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, recallReceiptRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithRecallReceipts(cfg.RecallReceipts), service.WithSnippetChars(cfg.SnippetChars))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, thresholdStore, overrideRepo, cleanupRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithSnippetChars(cfg.SnippetChars), service.WithRetentionMultiplier(cfg.RetentionMultiplier))
 	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
 	// Toggle defaults stamped onto every tenant created through the service.
@@ -267,10 +267,9 @@ func main() {
 	// is nil (silent) when Telegram creds are unset.
 	cleanupNotifier := cleanup.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
 	cleanupScanner := cleanup.NewScanner(
-		lintRepo, tenantRepo, cleanupRepo, retentionRepo, thresholdStore,
+		lintRepo, tenantRepo, cleanupRepo, retentionRepo, instanceConfigRepo, thresholdStore,
 		cfg.RetentionMultiplier, cfg.DeleteGraceDays,
 		cleanupNotifier, slog.Default(),
-		recallReceiptRepo, cfg.RecallReceiptTTL,
 	)
 	if cfg.CleanupEnabled {
 		cleanupScanner.Start(rootCtx, time.Duration(cfg.CleanupIntervalHours)*time.Hour)

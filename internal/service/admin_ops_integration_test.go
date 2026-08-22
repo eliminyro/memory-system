@@ -27,7 +27,7 @@ func newAdminTestSvc(db *gorm.DB, store authz.Store) *service.MemoryService {
 		service.NewFakeEmbedder(fakeDim),
 		repository.NewTenantRepository(db),
 		repository.NewAPIKeyRepository(db),
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil,
 		store,
 	)
 }

@@ -19,7 +19,9 @@ import (
 	"github.com/eliminyro/memory-system/internal/authzseed"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
+	"github.com/eliminyro/memory-system/internal/panicguard"
 	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/retention"
 	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
@@ -49,9 +51,6 @@ type MemoryService struct {
 	thresholds *staleness.ThresholdStore
 	overrides  *repository.OverrideLogRepository
 	cleanup    *repository.CleanupQueueRepository
-	// recallReceipts is nil-safe (offline CLI / tests may leave it unwired,
-	// silently disabling receipt recording — see recordRecallReceipt).
-	recallReceipts *repository.RecallReceiptRepository
 	// authz is the relationship-tuple store; lifecycle ops seed it out-of-band.
 	// Nil disables seeding.
 	authz authz.Store
@@ -89,19 +88,23 @@ type MemoryService struct {
 	// (no WithMMRLambda option) leaves HybridSearch's plain fused-and-sorted path
 	// unchanged, preserving existing behavior for every caller that doesn't set it.
 	mmrLambda *float64
-	// recallReceiptsEnabled gates receipt recording in Search (MEMORY_RECALL_RECEIPTS,
-	// default true). Set explicitly in NewMemoryService so a service built
-	// without WithRecallReceipts still defaults to enabled, not the bool zero value.
-	recallReceiptsEnabled bool
 	// snippetChars caps the match-centered window Search returns when snippet=true.
 	// Set explicitly in NewMemoryService so a service built without WithSnippetChars
 	// still gets the default, not the int zero value (which would blank snippets).
 	snippetChars int
+	// retentionMultiplier scales the per-doc_type staleness thresholds into the
+	// access-cold dry-run's windows, matching the sweep's ExpiryCutoff math. Set
+	// from config so the lint preview and the actual eviction agree.
+	retentionMultiplier int
 }
 
 // defaultSnippetChars mirrors config MEMORY_SNIPPET_CHARS default so a service
 // built without WithSnippetChars (offline CLI / tests) still windows sensibly.
 const defaultSnippetChars = 400
+
+// defaultRetentionMultiplier mirrors config RETENTION_MULTIPLIER so the
+// access-cold dry-run windows sensibly without WithRetentionMultiplier.
+const defaultRetentionMultiplier = 3
 
 // Option configures optional MemoryService behavior at construction time.
 type Option func(*MemoryService)
@@ -123,12 +126,11 @@ func WithSnippetChars(chars int) Option {
 	}
 }
 
-// WithRecallReceipts overrides the default (enabled) recall-receipt recording
-// gate (MEMORY_RECALL_RECEIPTS). Recording still requires a non-nil
-// recallReceipts repository; this only controls the config-level on/off switch.
-func WithRecallReceipts(enabled bool) Option {
+// WithRetentionMultiplier sets the multiplier the access-cold dry-run applies to
+// each doc_type's staleness threshold. Without it the default is used.
+func WithRetentionMultiplier(m int) Option {
 	return func(s *MemoryService) {
-		s.recallReceiptsEnabled = enabled
+		s.retentionMultiplier = m
 	}
 }
 
@@ -146,7 +148,6 @@ func NewMemoryService(
 	thresholds *staleness.ThresholdStore,
 	overrides *repository.OverrideLogRepository,
 	cleanup *repository.CleanupQueueRepository,
-	recallReceipts *repository.RecallReceiptRepository,
 	authzStore authz.Store,
 	opts ...Option,
 ) *MemoryService {
@@ -155,23 +156,20 @@ func NewMemoryService(
 		engine = authz.NewEngine(authzStore)
 	}
 	s := &MemoryService{
-		db:             db,
-		docs:           docs,
-		sections:       sections,
-		embedder:       embedder,
-		tenants:        tenants,
-		keys:           keys,
-		lint:           lint,
-		thresholds:     thresholds,
-		overrides:      overrides,
-		cleanup:        cleanup,
-		recallReceipts: recallReceipts,
-		authz:          authzStore,
-		authzEngine:    engine,
-		// Default true (design D7): recording is harmless and additive. A caller
-		// that wants it off passes WithRecallReceipts(false).
-		recallReceiptsEnabled: true,
-		snippetChars:          defaultSnippetChars,
+		db:                  db,
+		docs:                docs,
+		sections:            sections,
+		embedder:            embedder,
+		tenants:             tenants,
+		keys:                keys,
+		lint:                lint,
+		thresholds:          thresholds,
+		overrides:           overrides,
+		cleanup:             cleanup,
+		authz:               authzStore,
+		authzEngine:         engine,
+		snippetChars:        defaultSnippetChars,
+		retentionMultiplier: defaultRetentionMultiplier,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -494,23 +492,21 @@ const (
 )
 
 // Search performs hybrid semantic + keyword search, applying staleness filter.
-// When forceRead is true, Reason is required and the override is audited. The
-// second return value is a recall receipt id (uuid.Nil when results are empty,
-// recording is disabled, or the insert failed) — see recordRecallReceipt.
-func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID, snippet bool) ([]repository.SearchResult, uuid.UUID, error) {
+// When forceRead is true, Reason is required and the override is audited.
+func (s *MemoryService) Search(ctx context.Context, query string, category, subcategory *string, limit int, forceRead bool, reason string, overrideID *uuid.UUID, snippet bool) ([]repository.SearchResult, error) {
 	if forceRead && strings.TrimSpace(reason) == "" {
-		return nil, uuid.Nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
+		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
 	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
-		return nil, uuid.Nil, err
+		return nil, err
 	}
 	if len(scope) == 0 {
-		return []repository.SearchResult{}, uuid.Nil, nil // non-readable filter target
+		return []repository.SearchResult{}, nil // non-readable filter target
 	}
 	embedding, err := s.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, uuid.Nil, fmt.Errorf("embed query: %w", err)
+		return nil, fmt.Errorf("embed query: %w", err)
 	}
 	results, err := s.sections.HybridSearch(ctx, repository.SearchParams{
 		TenantIDs:   scope,
@@ -522,7 +518,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		MMRLambda:   s.mmrLambda,
 	})
 	if err != nil {
-		return nil, uuid.Nil, err
+		return nil, err
 	}
 	// Label each result by its owning tenant and resolve per-tenant staleness
 	// modes in one lookup, then apply staleness under each result's own mode.
@@ -530,7 +526,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if s.thresholds != nil {
 		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, modeByTenant, forceRead)
 		if err != nil {
-			return nil, uuid.Nil, err
+			return nil, err
 		}
 	}
 	if forceRead {
@@ -547,81 +543,51 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if snippet {
 		s.applySnippets(ctx, results, query, scope)
 	}
-	recallID := s.recordRecallReceipt(ctx, results, overrideID)
-	return results, recallID, nil
+	// Async, best-effort access-recency bump (D2): touch the served docs' parents
+	// off the request ctx (it cancels when the handler returns), never blocking or
+	// failing the search. TouchAccessed's day-granular guard caps it at 1 write/day.
+	if len(results) > 0 {
+		docIDs := distinctResultDocIDs(results)
+		bumpCtx := context.WithoutCancel(ctx)
+		go func() {
+			defer panicguard.Recover(nil, "access-recency bump")
+			if err := s.docs.TouchAccessed(bumpCtx, docIDs); err != nil {
+				slog.Default().Warn("access-recency bump failed", "error", err)
+			}
+		}()
+	}
+	return results, nil
 }
 
-// SearchResponse is the search envelope shared by the MCP and HTTP surfaces
-// (design D2): recall_id is JSON null when no receipt was issued, and results
-// is always a JSON array, never null.
+// distinctResultDocIDs collects the unique owning document IDs of search results,
+// preserving first-seen order, for the access-recency serve-bump.
+func distinctResultDocIDs(results []repository.SearchResult) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(results))
+	ids := make([]uuid.UUID, 0, len(results))
+	for _, r := range results {
+		if _, ok := seen[r.DocumentID]; ok {
+			continue
+		}
+		seen[r.DocumentID] = struct{}{}
+		ids = append(ids, r.DocumentID)
+	}
+	return ids
+}
+
+// SearchResponse is the search envelope shared by the MCP and HTTP surfaces:
+// results is always a JSON array, never null.
 type SearchResponse struct {
-	RecallID *uuid.UUID                `json:"recall_id"`
-	Results  []repository.SearchResult `json:"results"`
+	Results []repository.SearchResult `json:"results"`
 }
 
-// NewSearchResponse builds the envelope from Search's return values: uuid.Nil
-// becomes a nil RecallID (-> JSON null) and a nil Results slice becomes [].
-func NewSearchResponse(results []repository.SearchResult, recallID uuid.UUID) SearchResponse {
+// NewSearchResponse builds the envelope from Search's results: a nil slice
+// becomes [] so the wire shape is always a JSON array.
+func NewSearchResponse(results []repository.SearchResult) SearchResponse {
 	resp := SearchResponse{Results: results}
 	if resp.Results == nil {
 		resp.Results = []repository.SearchResult{}
 	}
-	if recallID != uuid.Nil {
-		id := recallID
-		resp.RecallID = &id
-	}
 	return resp
-}
-
-// recordRecallReceipt inserts a recall receipt naming the served sections,
-// gated by recallReceiptsEnabled (MEMORY_RECALL_RECEIPTS) and a non-empty
-// result set. The receipt's tenant is resolved via the SAME resolveTenant path
-// ReportRecallOutcome uses (home tenant when overrideID is nil, the
-// admin-verified override target otherwise) — NOT the read-scope aggregation
-// used to FIND the results — so a later report with the same overrideID always
-// resolves to this receipt (an admin searching tenant_id=X must be able to
-// report against X, not their own home tenant). resolveTenant rejects a
-// non-admin's overrideID outright; Search's readScope permits a narrower,
-// viewer-authorized override for non-admins, so that combination simply skips
-// the receipt (best-effort: recording never fails the search either way).
-func (s *MemoryService) recordRecallReceipt(ctx context.Context, results []repository.SearchResult, overrideID *uuid.UUID) uuid.UUID {
-	if !s.recallReceiptsEnabled || s.recallReceipts == nil || len(results) == 0 {
-		return uuid.Nil
-	}
-	tid, err := s.resolveTenant(ctx, overrideID)
-	if err != nil {
-		return uuid.Nil
-	}
-	sectionIDs := make([]uuid.UUID, len(results))
-	for i, r := range results {
-		sectionIDs[i] = r.SectionID
-	}
-	recallID, err := s.recallReceipts.Create(ctx, tid, sectionIDs)
-	if err != nil {
-		slog.Default().Warn("recall receipt insert failed", "error", err)
-		return uuid.Nil
-	}
-	return recallID
-}
-
-// ReportRecallOutcome credits hit_count (success) or miss_count (failure) on
-// every section named by recallID's receipt, exactly once. The receipt must
-// belong to the caller's tenant (or the admin-overridden target); a missing or
-// cross-tenant id is ErrNotFound so a caller can never learn a foreign
-// recall_id exists. A second report for an already-reported receipt is a no-op
-// (design D4).
-func (s *MemoryService) ReportRecallOutcome(ctx context.Context, recallID uuid.UUID, outcome string, overrideID *uuid.UUID) error {
-	if _, ok := models.ValidRecallOutcomes[outcome]; !ok {
-		return fmt.Errorf("%w: outcome must be success or failure", apperr.ErrInvalidInput)
-	}
-	if s.recallReceipts == nil {
-		return fmt.Errorf("%w: recall %s", apperr.ErrNotFound, recallID)
-	}
-	tid, err := s.resolveTenant(ctx, overrideID)
-	if err != nil {
-		return err
-	}
-	return s.recallReceipts.ReportOutcome(ctx, tid, recallID, outcome)
 }
 
 // GetDocument fetches a document with all sections by path, applying the
@@ -732,11 +698,15 @@ type StoreResult struct {
 // StoreDocument parses markdown into sections, embeds them (before any DB write,
 // to avoid partial state), runs the duplicate guard, and stores. When the guard
 // trips and force is false, no write happens and the result carries candidates.
+// pin distinguishes unset (nil, keep current on upsert / default false on
+// create) from an explicit true/false. It sets documents.pinned, which exempts
+// the doc from access-recency eviction (D4).
 func (s *MemoryService) StoreDocument(
 	ctx context.Context,
 	category string, subcategory *string, slug, content string,
 	force bool, reason string,
 	overrideID *uuid.UUID,
+	pin *bool,
 ) (*StoreResult, error) {
 	if force && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force=true", apperr.ErrInvalidInput)
@@ -807,14 +777,20 @@ func (s *MemoryService) StoreDocument(
 		}
 	}
 
-	// All DB mutations in a single transaction
+	// All DB mutations in a single transaction. A write is the strongest usage
+	// signal, so stamp last_accessed_at now on both create and upsert — otherwise
+	// Save would null it on re-store and access-retention could evict a doc that
+	// was just updated (the upsert branch below deliberately leaves it untouched).
+	now := time.Now()
 	doc := &models.Document{
-		TenantID:    tid,
-		Category:    category,
-		Subcategory: subcategory,
-		Slug:        slug,
-		Title:       title,
-		DocType:     docType,
+		TenantID:       tid,
+		Category:       category,
+		Subcategory:    subcategory,
+		Slug:           slug,
+		Title:          title,
+		DocType:        docType,
+		Pinned:         pin != nil && *pin, // create default false; explicit pin honored
+		LastAccessedAt: &now,
 	}
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -830,6 +806,12 @@ func (s *MemoryService) StoreDocument(
 			doc.ID = existing.ID
 			doc.CreatedAt = existing.CreatedAt
 			doc.DocType = existing.DocType
+			// Save rewrites all columns, so preserve the current pin unless the
+			// caller passed an explicit value (unset pin must not clear it).
+			doc.Pinned = existing.Pinned
+			if pin != nil {
+				doc.Pinned = *pin
+			}
 			if err := txSections.DeleteByDocumentID(ctx, existing.ID); err != nil {
 				return fmt.Errorf("delete old sections: %w", err)
 			}
@@ -2600,7 +2582,42 @@ func (s *MemoryService) LintMemory(ctx context.Context, checks []string, thresho
 		}
 		findings = append(findings, results...)
 	}
+
+	// access_cold is the eviction dry-run (D5): a read-only preview of the docs
+	// ArchiveAccessCold WOULD archive under the per-doc_type windows (each
+	// doc_type's staleness threshold × the retention multiplier), regardless of the
+	// global toggle. Builds the same cutoff map the sweep uses, so it runs outside
+	// the thresholds-shaped table above.
+	if _, ok := requested["access_cold"]; ok || len(checks) == 0 {
+		cutoffs, err := s.accessCutoffs(ctx, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		results, err := s.lint.CheckAccessCold(ctx, tid, cutoffs)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, results...)
+	}
 	return findings, nil
+}
+
+// accessCutoffs builds the per-doc_type access-cold cutoff map: each non-episodic
+// doc_type's staleness threshold × the retention multiplier, keyed by doc_type.
+// Episodic types are excluded (they roll off via direct-delete, never access-evicted).
+func (s *MemoryService) accessCutoffs(ctx context.Context, now time.Time) (map[string]time.Time, error) {
+	cutoffs := make(map[string]time.Time, len(models.ValidDocTypes))
+	for docType := range models.ValidDocTypes {
+		if models.IsEpisodic(docType) {
+			continue
+		}
+		days, err := s.thresholds.DaysFor(ctx, docType)
+		if err != nil {
+			return nil, fmt.Errorf("threshold for %s: %w", docType, err)
+		}
+		cutoffs[docType] = retention.ExpiryCutoff(now, days, s.retentionMultiplier)
+	}
+	return cutoffs, nil
 }
 
 // parsedSection holds a parsed markdown section.

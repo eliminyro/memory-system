@@ -43,6 +43,11 @@ type Document struct {
 	// ArchivedAt marks a document retired by the retention sweep. Non-NULL =
 	// excluded from all reads; hard-deleted after the delete grace period.
 	ArchivedAt *time.Time `gorm:"index:idx_documents_archived_at" json:"archived_at,omitempty"`
+	// LastAccessedAt is bumped when a search serves the doc's sections;
+	// COALESCE(last_accessed_at, created_at) drives access-recency eviction (D1).
+	LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`
+	// Pinned exempts the doc from access-based eviction regardless of age (D4).
+	Pinned bool `gorm:"not null;default:false" json:"pinned"`
 
 	// Display-only owning-tenant labels (not columns) — populated by the service
 	// for list responses so browse shows the tenant name/type, like search does.

@@ -25,7 +25,7 @@ func TestCrossTenantReads_NoLeak(t *testing.T) {
 	f := newAuthzFixture(t)
 	token := "leaktok" + uuid.NewString()[:8]
 	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
-		"leak-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil)
+		"leak-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", nil, nil)
 	require.NoError(t, err)
 	docBID := resB.Document.ID
 
@@ -41,7 +41,7 @@ func TestCrossTenantReads_NoLeak(t *testing.T) {
 	require.ErrorIs(t, err, apperr.ErrNotFound, "by-id fetch of another tenant's doc must be not-found")
 
 	// Leak by search: tenant B's doc must not appear in a non-member's results.
-	results, _, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", nil, false)
+	results, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", nil, false)
 	require.NoError(t, err)
 	for _, r := range results {
 		require.NotEqual(t, f.tenantB, r.TenantID, "another tenant's doc must not leak via search")
@@ -55,7 +55,7 @@ func TestCrossTenantReads_NoLeak(t *testing.T) {
 	}
 
 	// Read filter to a non-readable tenant is empty / not-found, never a leak.
-	filtered, _, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", &f.tenantB, false)
+	filtered, err := f.svc.Search(ctxA, token, nil, nil, 20, false, "", &f.tenantB, false)
 	require.NoError(t, err)
 	require.Empty(t, filtered, "filter to a non-readable tenant returns empty")
 	_, err = f.svc.GetDocumentByID(ctxA, docBID, false, "", &f.tenantB)
@@ -79,7 +79,7 @@ func TestCrossTenantReads_FreshTenantPrivateByConstruction(t *testing.T) {
 	// Seed a document inside T (admin overrides tenant_id to T).
 	token := "privtok" + uuid.NewString()[:8]
 	resT, err := f.svc.StoreDocument(adminCtx, "learnings", nil,
-		"priv-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", &newT.ID)
+		"priv-"+uuid.NewString(), "# T\n\n## H\n"+token+" body", true, "seed", &newT.ID, nil)
 	require.NoError(t, err)
 	docTID := resT.Document.ID
 
@@ -91,7 +91,7 @@ func TestCrossTenantReads_FreshTenantPrivateByConstruction(t *testing.T) {
 	require.ErrorIs(t, err, apperr.ErrNotFound, "stranger cannot fetch a fresh tenant's doc by id")
 
 	// Search / list never surface T's doc.
-	results, _, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", nil, false)
+	results, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", nil, false)
 	require.NoError(t, err)
 	for _, r := range results {
 		require.NotEqual(t, newT.ID, r.TenantID, "fresh tenant's doc must not leak via search")
@@ -103,7 +103,7 @@ func TestCrossTenantReads_FreshTenantPrivateByConstruction(t *testing.T) {
 	}
 
 	// A read filter naming T is empty / not-found — never T's doc, never a leak.
-	filtered, _, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", &newT.ID, false)
+	filtered, err := f.svc.Search(ctxS, token, nil, nil, 20, false, "", &newT.ID, false)
 	require.NoError(t, err)
 	require.Empty(t, filtered, "filter to a non-readable fresh tenant returns empty")
 	_, err = f.svc.GetDocumentByID(ctxS, docTID, false, "", &newT.ID)
@@ -135,7 +135,7 @@ func TestCrossTenantReads_LabeledByOwningTenant(t *testing.T) {
 	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
 
 	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
-		"lbl-"+uuid.NewString(), "# T\n\n## H\nbetaonly marker text", true, "seed", nil)
+		"lbl-"+uuid.NewString(), "# T\n\n## H\nbetaonly marker text", true, "seed", nil, nil)
 	require.NoError(t, err)
 
 	var tenB models.Tenant
@@ -144,7 +144,7 @@ func TestCrossTenantReads_LabeledByOwningTenant(t *testing.T) {
 	ctxA := ctxFor(f.tenantA, f.subjA)
 
 	// SearchResult labeling: the cross-tenant hit carries tenant B's label.
-	results, _, err := f.svc.Search(ctxA, "betaonly", nil, nil, 20, false, "", nil, false)
+	results, err := f.svc.Search(ctxA, "betaonly", nil, nil, 20, false, "", nil, false)
 	require.NoError(t, err)
 	var sawB bool
 	for _, r := range results {
@@ -182,10 +182,10 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	// Content mentions a code path -> guard-eligible once stale.
 	body := "internal/service/memory.go is where it lives " + token
 	resA, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", nil,
-		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
-		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil)
+		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
 	require.NoError(t, err)
 
 	// Backdate both sections' verified_at well past the reference threshold.
@@ -203,7 +203,7 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	var ra, rb repository.SearchResult
 	var okA, okB bool
 	for attempt := 0; attempt < 5; attempt++ {
-		results, _, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil, false)
+		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, 20, false, "", nil, false)
 		require.NoError(t, err)
 		bySection := map[uuid.UUID]repository.SearchResult{}
 		for _, r := range results {

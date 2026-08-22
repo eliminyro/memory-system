@@ -79,7 +79,6 @@ func TestMCPBoundaryAdminGating(t *testing.T) {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
-		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 	engine := authz.NewEngine(store)
@@ -101,7 +100,7 @@ func TestMCPBoundaryAdminGating(t *testing.T) {
 
 	// Seed a document in tenant B by having the admin override tenant_id to B.
 	slugB := "doc-" + uuid.NewString()
-	if _, err := svc.StoreDocument(adminCtx, "learnings", nil, slugB, "# Title\n\n## Heading\nbody", true, "seed", &tenantB); err != nil {
+	if _, err := svc.StoreDocument(adminCtx, "learnings", nil, slugB, "# Title\n\n## Heading\nbody", true, "seed", &tenantB, nil); err != nil {
 		t.Fatalf("seed doc in tenant B: %v", err)
 	}
 

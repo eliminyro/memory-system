@@ -874,7 +874,7 @@ async function runSearch(q) {
     const tf = memFilter ? `&tenant_id=${encodeURIComponent(memFilter.id)}` : "";
     const resp = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=20${tf}`);
     if (seq !== _renderSeq) return; // discard stale render (B7)
-    renderSearchResults(resp.results || []); // envelope: {recall_id, results}
+    renderSearchResults(resp.results || []); // envelope: {results}
   } catch (err) {
     if (seq !== _renderSeq) return; // discard stale render (B7)
     view.replaceChildren(el("p", { className: "state-msg state-err", textContent: `search failed: ${err.message}` }));

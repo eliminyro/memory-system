@@ -40,7 +40,6 @@ func newImportPGHandler(t *testing.T) (*apiHandler, authz.Store, *gorm.DB) {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
-		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 	h := &apiHandler{memory: svc, importJobs: &fakeImportJobs{}, maxUploadBytes: 1 << 20}

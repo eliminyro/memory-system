@@ -239,6 +239,37 @@ to verify-on-recall. The ready-to-paste
 guidance — drop it into your agent's system prompt so good documents stay alive
 instead of being swept.
 
+### Access-recency retention (global toggle)
+
+Separate from the per-tenant staleness sweep above, the instance has one
+**global** access-recency retention switch: `access_retention_enabled`, a single
+boolean stored in the `instance_config` table (a singleton row), default **off**.
+It is not a per-tenant setting and not an environment variable; a web-UI surface
+to flip it lands in a later change. When on, the nightly scanner archives-then-
+deletes (recoverable during the grace window), for **every non-bootstrap tenant**,
+any document whose `COALESCE(last_accessed_at, created_at)` is older than its
+**per-category window** and that is neither pinned nor episodic. Each doc_type's
+window is that doc_type's staleness threshold × `RETENTION_MULTIPLIER` — the same
+source age-based retention uses — so a short-threshold category (e.g. `journal`)
+goes cold quickly and a long one (e.g. `preference`) slowly; there is no separate
+access-window knob.
+
+The two retention paths are complementary and run side by side: staleness
+retention (unchanged) acts per tenant on documents left **unverified**, access-
+recency retention acts instance-wide on documents left **unread**. A document
+survives access-recency eviction if it was recently accessed *or* recently
+written — every search that serves a document bumps its last-accessed time, so
+one you keep recalling never goes cold. Newly migrated corpora are backfilled
+with a last-accessed timestamp at upgrade, so turning the toggle on never evicts
+the back-catalog on the first sweep.
+
+Records that must never be evicted can be **pinned** — pass `pin: true` to
+`store_memory` (or set it on a later re-store); pinned documents are exempt
+regardless of age. Before turning the toggle on, run `lint_memory` with the
+`access_cold` check to preview exactly which documents the sweep would evict
+(using the same per-category windows) — it runs the eviction query without the
+delete, so it changes nothing.
+
 ---
 
 ## Break-glass reset

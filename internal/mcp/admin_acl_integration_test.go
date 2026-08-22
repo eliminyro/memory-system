@@ -34,7 +34,6 @@ func newACLIntegrationServer(t *testing.T, db *gorm.DB, store authz.Store) *Serv
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
-		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 	return NewServer(svc, authz.NewEngine(store))

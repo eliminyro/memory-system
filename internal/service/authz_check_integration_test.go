@@ -64,7 +64,6 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 		staleness.NewThresholdStore(db),
 		repository.NewOverrideLogRepository(db),
 		repository.NewCleanupQueueRepository(db),
-		repository.NewRecallReceiptRepository(db),
 		store,
 	)
 
@@ -154,7 +153,7 @@ func (f *authzFixture) mkTenant(t *testing.T) uuid.UUID {
 func (f *authzFixture) storeDoc(t *testing.T, ctx context.Context, override *uuid.UUID) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	slug := "d" + uuid.NewString()
-	res, err := f.svc.StoreDocument(ctx, "learnings", nil, slug, "# Title\n\n## Heading\nsome body text", true, "seed", override)
+	res, err := f.svc.StoreDocument(ctx, "learnings", nil, slug, "# Title\n\n## Heading\nsome body text", true, "seed", override, nil)
 	require.NoError(t, err)
 	require.NotNil(t, res.Document)
 	require.NotEmpty(t, res.Document.Sections)

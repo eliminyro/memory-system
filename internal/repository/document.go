@@ -253,3 +253,22 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantIDs []uuid
 	}
 	return results, nil
 }
+
+// TouchAccessed day-granular bumps last_accessed_at=now() for the given docs,
+// skipping any already touched today so repeat same-day serves cost <=1 write
+// (D2). Empty input is a no-op. Plain []uuid.UUID + GORM IN ? matches the column.
+func (r *DocumentRepository) TouchAccessed(ctx context.Context, docIDs []uuid.UUID) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+	const sql = `
+		UPDATE documents
+		SET last_accessed_at = now()
+		WHERE id IN ?
+		  AND (last_accessed_at IS NULL OR last_accessed_at < date_trunc('day', now()))
+	`
+	if err := r.db.WithContext(ctx).Exec(sql, docIDs).Error; err != nil {
+		return fmt.Errorf("touch accessed: %w", err)
+	}
+	return nil
+}
