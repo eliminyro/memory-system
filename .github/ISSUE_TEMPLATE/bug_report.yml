@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a defect in memory-system
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please fill in the version and environment fields — they
+        make most bugs reproducible without a back-and-forth.
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: Paste the output of the unauthenticated `GET /~/version` (version, commit, date).
+      placeholder: '{"version":"1.0.0","commit":"abc1234","date":"2026-01-01T00:00:00Z"}'
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Embedding provider
+      description: Value of EMBEDDING_PROVIDER.
+      options:
+        - ollama
+        - gcp (Vertex AI)
+        - openai (OpenAI-compatible)
+        - aws (Bedrock)
+        - fake (tests)
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: Deploy method
+      options:
+        - docker-compose
+        - prebuilt image (ghcr.io/eliminyro/memory-system)
+        - built from source
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps that trigger the bug, plus what you expected and what happened instead.
+      placeholder: |
+        1. ...
+        2. ...
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server log lines around the failure (redact secrets and tokens).
+      render: shell
+    validations:
+      required: false

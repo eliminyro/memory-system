@@ -1,0 +1,29 @@
+# Bench image: the production server binary PLUS the longmemeval benchmark
+# harness, for running the retrieval benchmark in-cluster (kubectl exec into a
+# throwaway test instance). NOT a production artifact — the prod Dockerfile is
+# unchanged and ships no benchmark tooling; this exists only to produce the
+# ghcr.io/eliminyro/memory-system:longmemeval-bench tag.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG BUILD_COMMIT=unknown
+ARG BUILD_VERSION=bench
+ARG BUILD_DATE=
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+    -ldflags="-s -w -X github.com/eliminyro/memory-system/internal/version.Version=${BUILD_VERSION} -X github.com/eliminyro/memory-system/internal/version.Commit=${BUILD_COMMIT} -X github.com/eliminyro/memory-system/internal/version.Date=${BUILD_DATE}" \
+    -o /memory-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+    -ldflags="-s -w -X github.com/eliminyro/memory-system/internal/version.Version=${BUILD_VERSION} -X github.com/eliminyro/memory-system/internal/version.Commit=${BUILD_COMMIT} -X github.com/eliminyro/memory-system/internal/version.Date=${BUILD_DATE}" \
+    -o /longmemeval ./benchmarks/longmemeval
+
+# Same distroless base as prod. /tmp is world-writable (harness writes results
+# there for kubectl cp). The server is the entrypoint so the pod is a normal
+# test instance; the harness is exec'd separately.
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /memory-server /memory-server
+COPY --from=builder /longmemeval /longmemeval
+USER nonroot:nonroot
+ENTRYPOINT ["/memory-server"]
