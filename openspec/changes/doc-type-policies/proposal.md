@@ -30,6 +30,12 @@ and then have it deleted.
 - Policy is instance-wide: one row per doc_type for every tenant. The existing per-tenant toggles
   (`staleness_mode`, `duplicate_guard`, `cleanup_scan_enabled`) keep their meaning — they gate whether
   a mechanism runs, the policy decides which doc_types it covers once it does.
+- The category→doc_type mapping moves into a `category_doc_types(category, doc_type)` table, seeded
+  with the six categories `InferDocType` recognizes. Adding a category with its own maintenance
+  behavior becomes a mapping row plus a policy row — no code change. Classification *within* a
+  category (the `projects` slug rules) stays in `InferDocType` and takes precedence.
+- `lint_memory` reports categories present in documents with no mapping row, since an unmapped
+  category silently inherits `reference` and its 90-day clock.
 - Seeded rows reproduce today's behavior exactly for all 8 existing doc types. **This is a
   behavior-preserving refactor**; no observable change on upgrade.
 - Policy rows are validated on write, and the effective table is readable so a misconfiguration is
@@ -37,9 +43,12 @@ and then have it deleted.
 
 Explicitly unchanged:
 
-- **Category→doc_type inference stays in Go.** `InferDocType` is rule-based (`projects/state` →
-  `project_state`; slug containing audit/plan/design/backlog → `audit`), and moving it to config means
-  shipping a pattern language. Behavior is data; classification stays code.
+- **The `projects` slug rules stay in Go.** `projects/state` → `project_state` and slug containing
+  audit/plan/design/backlog → `audit` are rules, not a map; expressing them as data means shipping a
+  pattern language. The exact-match half of classification is what becomes data.
+- **Policy stays keyed on doc_type, not category.** Keying on category was considered and rejected:
+  `projects` is one category holding three doc_types at 14, 30 and 90 days, and collapsing it to one
+  row would flatten the largest category in the reference instance.
 - **Cross-tenant read scope stays compiled-in.** It is a trust boundary, not a maintenance
   preference, and it does not become a `behavior` key either. A future `cross_tenant_readable` flag is
   additively one column and one call site if it is ever wanted, and would be instance-admin-only.
@@ -51,6 +60,8 @@ Explicitly unchanged:
 - `doc-type-policy`: the `doc_type_policies` table, its flags and their effect on each curation
   mechanism, instance-wide resolution with the `reference` fallback, seeding, validation, and
   inspection.
+- `doc-type-mapping`: the `category_doc_types` table, its seeded rows, the precedence of in-code
+  classification rules over a mapping row, the unmapped-category fallback, and the lint finding.
 
 ### Modified Capabilities
 
@@ -60,7 +71,8 @@ behavior is captured as the seeded defaults in `design.md`, which is what the te
 
 ## Impact
 
-- `internal/models/staleness.go` — the three maps and four predicates go away; `DefaultStalenessThresholds` becomes the default policy row set.
+- `internal/models/staleness.go` — the three maps and four predicates go away; `DefaultStalenessThresholds` becomes the default policy row set; `InferDocType` keeps only the `projects` slug rules and reads the mapping table for the rest.
+- `internal/models/` — new `CategoryDocType` model; migration creating and seeding `category_doc_types`.
 - `internal/models/` — new `DocTypePolicy` model.
 - `internal/database/database.go:249` — migration widening the table, seed loop extended.
 - `internal/staleness/staleness.go` — `ThresholdStore` becomes a policy store; `DaysFor` and `Check` read from the policy row.

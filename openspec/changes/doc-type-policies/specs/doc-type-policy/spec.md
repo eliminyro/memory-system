@@ -23,10 +23,19 @@ is null or false for every other row.
 The table SHALL be the widened `staleness_thresholds` table rather than a second config surface, so
 the day threshold and the flags governing the same doc_type cannot drift apart.
 
-#### Scenario: Every valid doc_type has a policy
+The policy table SHALL be the registry of known doc_types. `ValidDocTypes` stops being the authority:
+a doc_type exists because it has a policy row, not because it is a compiled-in constant, which is what
+makes adding one a data change.
+
+#### Scenario: Every seeded doc_type has a policy
 
 - **WHEN** the server finishes migrating
-- **THEN** a policy row exists for every member of `ValidDocTypes`
+- **THEN** a policy row exists for each of the 8 doc_types that were compiled in before this change
+
+#### Scenario: A doc_type exists by virtue of its row
+
+- **WHEN** a policy row is added for a doc_type that is not a compiled-in constant
+- **THEN** it is a valid target for a mapping row and its policy applies, with no code change
 
 #### Scenario: Unknown doc_type falls back
 

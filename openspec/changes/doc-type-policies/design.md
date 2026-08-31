@@ -6,6 +6,10 @@ Doc_type behavior is spread across three compiled-in maps and two literal compar
   check, cleanup scan.
 - `neverPruneDocTypes` (`handoff`) — permanent.
 - `DefaultStalenessThresholds` — the seed for the one thing that *is* already a table.
+- `InferDocType` — a category switch, the only thing that mints a doc_type. `store_memory` does not
+  accept one, and `ValidDocTypes` is referenced nowhere but its own definition and a test, so it
+  documents the set rather than guarding it. `Document.Category` has no allowlist or CHECK
+  constraint, so categories are already open while doc_types are closed.
 - `internal/repository/document.go:158` and `internal/service/memory.go:1255` — `doc_type == handoff`
   drives handoff chaining.
 
@@ -81,14 +85,32 @@ without JSON operators — and a new mostly-false column per behavior forever.
 and type checks on the six switches that genuinely are universal, and makes the SQL predicates in
 `lint.go` and `section.go` read through JSON operators for no reason.
 
-**D4 — Classification stays in Go, behavior becomes data.**
+**D4 — Behavior is keyed on doc_type; the category→doc_type mapping becomes data; classification
+*within* a category stays in Go.**
 
-`InferDocType` is rule-based: `projects` + slug `state` → `project_state`, `projects` + slug
-containing audit/plan/design/backlog → `audit`, everything else by category. Expressing that in config
-means a pattern language, a matcher, precedence rules, and a validator — a config rule engine, to
-save editing one switch statement that changes once a year.
+Categories are what users define — the column is a free-form `varchar(50)` with no allowlist and no
+CHECK constraint, so a tenant can already write any category it likes. Doc_types are the opposite:
+closed by construction, because `store_memory` does not accept one and `InferDocType` is the only
+thing that mints them. Any category the switch does not know collapses to `reference` at 90 days,
+with `needs_verification` guarding anything that mentions a code path. A self-hoster with their own
+taxonomy has no way to say otherwise.
 
-The split is: *what kind of document is this* stays code; *how is this kind maintained* becomes data.
+So the mapping gets its own table, `category_doc_types(category, doc_type)`, seeded with the six
+categories the switch knows today. Adding `runbooks → runbook` plus a `runbook` policy row is then a
+data change. What stays in Go is classification *within* a category: `projects` + slug `state` →
+`project_state`, `projects` + slug containing audit/plan/design/backlog → `audit`. Those are rules,
+not a map, and they are the only ones.
+
+*Alternative considered, and briefly recommended:* key policy on `(tenant, category)` and drop the
+doc_type indirection, on the theory that policy should attach to what users control. It flattens
+`projects` — one category holding three doc_types at 14, 30 and 90 days, which is 102 of the 240
+documents in the reference instance. Doc_type is deliberately finer-grained than category; keying on
+category throws that away.
+
+*Alternative considered:* move all classification into config, slug markers included. Needs a pattern
+language, a matcher, precedence rules, and a validator — a config rule engine, to save editing one
+switch statement that changes once a year. The exact-match half of the mapping delivers the
+extensibility; the rule half does not.
 
 **D5 — Cross-tenant read scope stays compiled-in.**
 
@@ -139,6 +161,10 @@ from the policy rows instead.
 - **A wrong row silently disables a guard, with no compile-time check.** → Validation on write,
   effective-policy inspection through the admin surface, and a `lint_memory` finding for a doc_type
   whose policy disables every maintenance signal.
+- **An unmapped category silently gets `reference`/90d.** That is today's behavior, not a regression,
+  but the mapping table makes it fixable and therefore worth surfacing. → `lint_memory` reports
+  categories present in documents with no mapping row, so a typo'd or new category is visible instead
+  of quietly inheriting a 90-day clock.
 - **A schemaless column accepts typos.** `{"chain_previos": true}` stores fine, is read by nothing,
   and errors nowhere. → The registry rejects unregistered keys and wrong value shapes on write, and
   exposes the accepted keys so a row can be written without reading the source. This is the one place
@@ -169,6 +195,11 @@ are inert to older code, which reads only `doc_type` and `days`.
 
 ## Open Questions
 
+- Is the `category_doc_types` mapping instance-wide or per-tenant? Specced instance-wide: one
+  taxonomy, defined by the operator, which fits a self-hosted instance whose tenants share a
+  vocabulary. Adding `tenant_id` is additive (a nullable column plus a two-step resolution), so this
+  is reversible. Per-tenant would mean two tenants wanting different ages for the same category name
+  must map to separate doc_types — `runbook_fast` / `runbook_slow` — which is honest but clunky.
 - Does `prunable` earn a column now, given nothing implements retention or eviction (the cleanup
   scanner only enqueues pairs and prunes `mutation_history`; `ArchiveByID` has one caller,
   `link_documents ... supersedes`)? Seeding it documents the intent, but it is a flag nothing reads.

@@ -3,21 +3,17 @@
 ### Requirement: Prompts category and prompt doc_type
 
 The system SHALL accept `prompts` as a document category and SHALL classify documents in that
-category as doc_type `prompt`. `prompt` SHALL be a member of `ValidDocTypes` and SHALL have a seeded
-`doc_type_policies` row so policy lookup never falls through to the `reference` default.
+category as doc_type `prompt`, via a seeded `category_doc_types` row. `prompt` SHALL have a seeded
+`doc_type_policies` row so policy lookup never falls through to the `reference` default. Both are
+data: this change adds no doc_type constant and no `InferDocType` case.
 
 The canonical path shape SHALL be `prompts/<agent>/<slug>`, where `<agent>` identifies the consuming
 agent (e.g. `derpy`) and `<slug>` names one instruction document (e.g. `persona`, `no-slop`).
 
 #### Scenario: Storing a prompt document
 
-- **WHEN** `store_memory` is called with category `prompts`, subcategory `derpy`, slug `persona`, and no explicit doc_type
-- **THEN** the document is stored with doc_type `prompt`
-
-#### Scenario: Explicit doc_type is accepted
-
-- **WHEN** a caller passes doc_type `prompt` explicitly
-- **THEN** the write succeeds and validation does not reject the value as unknown
+- **WHEN** `store_memory` is called with category `prompts`, subcategory `derpy`, slug `persona`
+- **THEN** the document is stored with doc_type `prompt`, resolved through the mapping row
 
 #### Scenario: Policy lookup resolves
 

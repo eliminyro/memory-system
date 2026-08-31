@@ -3,10 +3,9 @@
 
 ## 1. Model and schema
 
-- [ ] 1.1 Add `DocTypePrompt = "prompt"` to the doc_type consts and to `ValidDocTypes` in `internal/models/document.go`
-- [ ] 1.2 Add a `case "prompts"` to `InferDocType` in `internal/models/staleness.go` returning `DocTypePrompt`
-- [ ] 1.3 Add `PromptScope *string` (`gorm:"size:500"`) to `models.Document` with a migration adding `documents.prompt_scope TEXT NULL`
-- [ ] 1.4 Unit test: `InferDocType("prompts", ...)` returns `DocTypePrompt`
+- [ ] 1.1 Seed the `prompts → prompt` row in `category_doc_types`. No `InferDocType` case and no `ValidDocTypes` entry — `doc-type-policies` made both a data change
+- [ ] 1.2 Add `PromptScope *string` (`gorm:"size:500"`) to `models.Document` with a migration adding `documents.prompt_scope TEXT NULL`
+- [ ] 1.3 Test: a document stored in category `prompts` gets doc_type `prompt` from the mapping row
 
 ## 2. Curation policy
 
