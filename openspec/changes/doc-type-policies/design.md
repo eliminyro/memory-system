@@ -17,9 +17,8 @@ comparisons.
 `staleness_thresholds` is already the shape this change wants: global, keyed by doc_type, seeded
 `ON CONFLICT DO NOTHING` with a comment saying the seed must not overwrite operator edits, and read
 through a cached `ThresholdStore` with a `DaysFor` fallback to `reference`. `internal/globalconfig`
-holds the instance singleton with a live snapshot, and `effectiveDuplicateThreshold`
-(`internal/service/memory.go:532`) is the existing COALESCE(tenant override, global, constant)
-pattern.
+holds the instance singleton with a live snapshot — the precedent for instance-wide settings that an
+operator edits and every tenant reads.
 
 ## Goals / Non-Goals
 
@@ -102,12 +101,24 @@ If it is ever wanted it is additively one column and one call site, and it would
 only — never per-tenant self-service, which is why `UpdateMyTenantSettings` already requires manager
 for the toggles that arm destructive behavior.
 
-**D6 — Global rows with optional per-tenant overrides, resolved like `effectiveDuplicateThreshold`.**
+**D6 — Instance-wide rows; no per-tenant overrides.**
 
-Same three-step fallback: tenant override, global row, `reference` row. The existing tenant toggles
-(`staleness_mode`, `duplicate_guard`, `cleanup_scan_enabled`) keep their current precedence — they
-gate whether a mechanism runs for the tenant at all, and the policy decides which doc_types it
-applies to once it does.
+One row per doc_type, applying to every tenant. Overrides would need their own table — the policy
+table's primary key is `doc_type`, so a per-tenant row has nowhere to go — plus a resolution layer and
+an inspection surface reporting which value came from where. Nothing needs that: the operator of a
+self-hosted instance edits the global row, and the per-tenant knobs that do exist
+(`staleness_mode`, `duplicate_guard`, `cleanup_scan_enabled` on `tenants`) already gate *whether* a
+mechanism runs. The policy only decides *which doc_types* it applies to once it does, so the two
+compose without overlapping.
+
+*Alternative considered:* `doc_type_policy_overrides(tenant_id, doc_type, ...)` with nullable columns,
+resolved COALESCE-style like `effectiveDuplicateThreshold`. Additive later if a shared tenant ever
+needs different maintenance from its host instance.
+
+*Alternative considered:* one table with `tenant_id UUID NULL` for the global row. Fewer tables, but
+NULLs are distinct in a unique constraint, so nothing stops two global rows for one doc_type without a
+partial unique index — and which row is authoritative becomes a runtime question instead of a schema
+one.
 
 **D7 — `ThresholdStore` becomes the policy store, keeping its cache.**
 
@@ -138,8 +149,6 @@ from the policy rows instead.
 - **Renaming a table in a public schema is a visible migration.** → Additive column widening plus a
   rename in one migration; older code reading `staleness_thresholds` breaks, which is why this ships
   as its own release rather than riding along with a feature.
-- **Per-tenant overrides multiply the state space.** → Overrides are optional and absent by default;
-  the inspection surface shows resolved values with their source so a support question is one call.
 - **`0` as a sentinel for "never" reads as a typo.** → Rejected negative values, and the column comment
   plus the tool description state the sentinel. Alternative was a second boolean that can contradict
   the number.
@@ -160,8 +169,6 @@ are inert to older code, which reads only `doc_type` and `days`.
 
 ## Open Questions
 
-- Should per-tenant overrides land in this change or wait until something needs them? The global table
-  alone covers the prompts case and every current special case; overrides are speculative.
 - Does `prunable` earn a column now, given nothing implements retention or eviction (the cleanup
   scanner only enqueues pairs and prunes `mutation_history`; `ArchiveByID` has one caller,
   `link_documents ... supersedes`)? Seeding it documents the intent, but it is a flag nothing reads.

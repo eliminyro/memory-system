@@ -16,8 +16,8 @@
 ## 3. Policy store
 
 - [ ] 3.1 Widen `staleness.ThresholdStore` into the policy store — cached value becomes the policy struct, keeping the existing `All()` refresh and `reference` fallback
-- [ ] 3.2 Resolution order: per-tenant override, global row, `reference` row (mirror `effectiveDuplicateThreshold` at `internal/service/memory.go:532`)
-- [ ] 3.3 Tests: override wins; absent override falls through to global; unknown doc_type falls back to `reference`
+- [ ] 3.2 Resolution: the doc_type's row, else the `reference` row. Instance-wide, no per-tenant layer
+- [ ] 3.3 Tests: unknown doc_type falls back to `reference`; a tenant toggle (`cleanup_scan_enabled = false`) still suppresses the mechanism regardless of the doc_type's flag
 
 ## 4. Replace the call sites
 
@@ -40,7 +40,7 @@
 
 ## 6. Surface and docs
 
-- [ ] 6.1 Admin read of effective policy per tenant, showing which values came from an override and which from the global row
+- [ ] 6.1 Admin read of the policy table, including doc_types falling back to the `reference` row
 - [ ] 6.2 `lint_memory` finding for a doc_type whose policy disables every maintenance signal
-- [ ] 6.3 Document the table, the `0` sentinel, the registry, and the global/override layering; state plainly that only implemented keys do anything
+- [ ] 6.3 Document the table, the `0` sentinel, and the registry; state plainly that only implemented keys do anything, and that policy is instance-wide
 - [ ] 6.4 `gofmt -w .` and `golangci-lint run` clean; full test suite green

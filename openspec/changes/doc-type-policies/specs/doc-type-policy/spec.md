@@ -136,21 +136,26 @@ this change introduces.
 - **WHEN** an operator inspects the policy surface
 - **THEN** the registered behavior keys and their accepted value shapes are returned, so a valid row can be written without reading the source
 
-### Requirement: Global policy with per-tenant override
+### Requirement: Policy is instance-wide
 
-Policy SHALL resolve as global row first, optional per-tenant override second, matching the existing
-`effectiveDuplicateThreshold` layering. A tenant with no override SHALL follow the global row, and
-existing tenant-level toggles SHALL keep their current precedence over the resolved policy.
+Policy rows SHALL be instance-wide: one row per doc_type, applying to every tenant. Per-tenant policy
+overrides are out of scope.
 
-#### Scenario: Tenant override wins
+The existing tenant-level toggles (`staleness_mode`, `duplicate_guard`, `cleanup_scan_enabled` on
+`tenants`) SHALL keep their current meaning and precedence. They gate whether a mechanism runs for a
+tenant at all; the policy decides which doc_types it applies to once it does. A tenant with
+`cleanup_scan_enabled = false` SHALL therefore get no cleanup scan regardless of any doc_type's
+`cleanup_scan` value.
 
-- **WHEN** a tenant overrides `staleness_days` for one doc_type
-- **THEN** that tenant's reads use the override and every other tenant uses the global row
+#### Scenario: One row serves every tenant
 
-#### Scenario: No override falls through
+- **WHEN** the `learning` row's `staleness_days` is changed
+- **THEN** every tenant's learning documents use the new threshold
 
-- **WHEN** a tenant has no override for a doc_type
-- **THEN** the global row applies
+#### Scenario: Tenant toggle still gates the mechanism
+
+- **WHEN** a tenant has `cleanup_scan_enabled = false` and a doc_type has `cleanup_scan = true`
+- **THEN** that tenant is not scanned, matching current behavior
 
 ### Requirement: Policy rows are validated and inspectable
 
@@ -159,8 +164,7 @@ policy writes and SHALL make the effective policy readable.
 
 Validation SHALL reject an unknown doc_type, a negative `staleness_days`, an unregistered `behavior`
 key, and any row that would leave a doc_type both non-prunable and invisible to every read path. The
-effective resolved policy
-for a tenant SHALL be readable through the admin surface, and `lint_memory` SHALL report doc_types
+policy table SHALL be readable through the admin surface, and `lint_memory` SHALL report doc_types
 whose policy disables every maintenance signal.
 
 #### Scenario: Invalid row rejected
@@ -168,10 +172,10 @@ whose policy disables every maintenance signal.
 - **WHEN** a policy write names an unknown doc_type or a negative day count
 - **THEN** the write is rejected with a validation error and no row changes
 
-#### Scenario: Effective policy is readable
+#### Scenario: Policy is readable
 
-- **WHEN** an operator inspects policy for a tenant that overrides some rows
-- **THEN** the resolved values are returned per doc_type, showing which came from the override and which from the global row
+- **WHEN** an operator inspects the policy surface
+- **THEN** every doc_type's resolved values are returned, including doc_types falling back to the `reference` row
 
 #### Scenario: Lint flags a fully-silenced doc_type
 

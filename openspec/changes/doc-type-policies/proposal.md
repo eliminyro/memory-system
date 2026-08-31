@@ -27,8 +27,9 @@ and then have it deleted.
 - The two hardcoded handoff checks (`internal/repository/document.go:158`,
   `internal/service/memory.go:1255`) read the `chain_previous` behavior key rather than comparing
   doc_type to a literal.
-- Policies resolve global row first, optional per-tenant override second — the layering
-  `effectiveDuplicateThreshold` already uses.
+- Policy is instance-wide: one row per doc_type for every tenant. The existing per-tenant toggles
+  (`staleness_mode`, `duplicate_guard`, `cleanup_scan_enabled`) keep their meaning — they gate whether
+  a mechanism runs, the policy decides which doc_types it covers once it does.
 - Seeded rows reproduce today's behavior exactly for all 8 existing doc types. **This is a
   behavior-preserving refactor**; no observable change on upgrade.
 - Policy rows are validated on write, and the effective table is readable so a misconfiguration is
@@ -48,7 +49,8 @@ Explicitly unchanged:
 ### New Capabilities
 
 - `doc-type-policy`: the `doc_type_policies` table, its flags and their effect on each curation
-  mechanism, global/per-tenant resolution, seeding, validation, and inspection.
+  mechanism, instance-wide resolution with the `reference` fallback, seeding, validation, and
+  inspection.
 
 ### Modified Capabilities
 
