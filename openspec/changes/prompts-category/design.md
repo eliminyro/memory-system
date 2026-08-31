@@ -4,14 +4,20 @@ Agent instruction files are synced by hand across machines today. memory-system 
 knowledge those instructions sit beside, so the instructions can live in the same tenant and be
 fetched at session start.
 
-Current state that constrains the design (verified against source on this branch):
+**This change depends on `doc-type-policies`**, which replaces the compiled-in curation maps with a
+`doc_type_policies` table. Everything this change would otherwise need to special-case — staleness,
+duplicate guard, cleanup scan, lint, prune, default search visibility — is one seeded row once that
+lands. Land it first.
+
+Current state that constrains the design (verified against source on this branch, before
+`doc-type-policies`):
 
 - `InferDocType` (`internal/models/staleness.go:20`) is a category switch. Doc_type drives the
   staleness threshold, which drives whether hard mode withholds section content.
-- The duplicate guard already has an exemption hook: `!models.IsEpisodic(docType)`
-  (`internal/service/memory.go:1123`).
+- The duplicate guard has an exemption hook: `!models.IsEpisodic(docType)`
+  (`internal/service/memory.go:1123`) — becomes a `duplicate_guard` policy read.
 - `internal/repository/lint.go` filters episodic types out of stale checks with
-  `doc_type <> ALL(?)` bound from `models.EpisodicDocTypes()`.
+  `doc_type <> ALL(?)` bound from `models.EpisodicDocTypes()` — becomes a policy-derived array.
 - The cleanup scanner (`internal/cleanup/scanner.go:118`) only enqueues near-duplicate pairs and
   prunes `mutation_history`. It does not archive documents. `ArchiveByID` has exactly one caller:
   `link_documents ... supersedes`. `Pinned` / `LastAccessedAt` exist as fields with no sweep reading
@@ -45,19 +51,16 @@ in place there.
 
 ## Decisions
 
-**D1 — A third exemption class, not a wider episodic set.**
+**D1 — The exemption is a seeded policy row, not code.**
 
-`episodicDocTypes` currently means "append-per-day, exempt from curation, `journal` prunable and
-`handoff` permanent". Prompts share the exemption but not the shape: they are edited in place, and
-adding `prompt` to the episodic map would also have to be added to `neverPruneDocTypes`, leaving
-"episodic" meaning nothing beyond "exempt". Introduce `IsInstruction(docType) bool` (or
-`exemptDocTypes` covering both classes) and switch the four call sites to the broader predicate:
-duplicate guard, lint stale filter, cleanup scan filter, staleness check. `EpisodicDocTypes()` keeps
-its current meaning for the SQL arrays that mean "journal or handoff".
+Superseded by the `doc-type-policies` change, which turns curation behavior into configuration. This
+change seeds one row (`staleness_days = 0`, every curation flag false, `search_default_visible` false,
+`behavior = {}`) and writes no exemption logic.
 
-*Alternative considered:* add `prompt` to `episodicDocTypes` plus `neverPruneDocTypes`. Two lines
-instead of a new predicate, but it makes `IsEpisodic` a lie and the next reader has to discover that
-"episodic" now includes something edited in place.
+*Alternative considered, and originally specced here:* an `IsInstruction(docType)` predicate as a third
+compiled-in class beside `episodicDocTypes` and `neverPruneDocTypes`. Rejected — it encodes one
+operator's taxonomy into a self-hostable server, and a fourth class would follow the third.
+`doc-type-policies` deletes the first two instead of adding to them.
 
 **D2 — Scope is one nullable text column on `documents`, not a binding table.**
 
@@ -89,11 +92,12 @@ retrieval query is tenant-scoped by construction, and the shared read paths
 (`get_document`, `list_documents`, `search_memory`, `get_related`) drop non-home tenants when the
 category is `prompts` or the doc_type is `prompt`.
 
-**D5 — Search exclusion is a default predicate, not a post-filter.**
+**D5 — Search exclusion comes from the policy flag.**
 
-Add `AND d.doc_type <> 'prompt'` to the search candidate query unless the caller named the category
-or doc_type explicitly. Excluding post-fusion would waste candidate slots on documents that are then
-dropped, shrinking the effective result set.
+`search_default_visible = false` on the `prompt` row, with the candidate-query predicate implemented
+by `doc-type-policies`. Nothing prompt-specific in the query. The reason that predicate belongs in the
+candidate query rather than post-fusion is recorded there: excluding after fusion wastes candidate
+slots on documents that are then dropped, shrinking the effective result set.
 
 **D6 — Reuse `ContentHash` for change detection.**
 
@@ -129,8 +133,9 @@ speak JSON-RPC over SSE and parse `data:` lines, which is what the hook engine d
 
 ## Migration Plan
 
+0. `doc-type-policies` ships first, in its own release.
 1. Migration adds `documents.prompt_scope TEXT NULL` and seeds the `prompt` row in
-   `staleness_thresholds`. Both are additive; no backfill, no existing row touched.
+   `doc_type_policies`. Both are additive; no backfill, no existing row touched.
 2. Deploy server. Existing callers are unaffected — `prompts` is a category nothing currently writes.
 3. Import the local instruction files into `prompts/<agent>/<slug>` (one-time, via the existing import
    path).
@@ -146,6 +151,7 @@ they can stay.
   that arrive soon enough to justify D2's binding table now?
 - Should the scope pattern language be path globs, project names, or both? The spec says both are
   matched against one client-supplied string; the matcher's precedence rules need pinning down before
-  the client relies on them.
+  the client relies on them. If the choice should be operator-configurable, it belongs in the `prompt`
+  policy row's `behavior` object (e.g. `{"scope_matching": "glob"}`) rather than in a new column.
 - Should `lint_memory` gain a prompt-specific check (an agent with no always-apply documents, a scope
   pattern matching nothing) to replace the staleness signal it loses?

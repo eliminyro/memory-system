@@ -14,12 +14,13 @@ persona doc means the agent silently loses its rules mid-session.
 ## What Changes
 
 - New `prompts` top-level category with its own `prompt` doc_type.
-- Prompt docs are exempt from all curation machinery: no staleness withholding, no lint stale-check,
-  no near-duplicate cleanup scan, no write-time duplicate guard, never pruned. They are not episodic
-  (edited in place, not appended per day), so this is a new exemption class rather than a widening of
-  the existing episodic set.
-- Prompt docs are excluded from `search_memory` results by default, with explicit opt-in through the
-  existing `category` / `doc_type` filters.
+- Prompt docs are exempt from all curation machinery — no staleness withholding, no lint stale-check,
+  no near-duplicate cleanup scan, no write-time duplicate guard, never pruned, absent from unfiltered
+  search. **This is a seeded `doc_type_policies` row, not code**: the `doc-type-policies` change turns
+  those behaviors into configuration, so this change adds a row rather than an exemption class. An
+  operator who wants different behavior for their instruction docs edits the row.
+- **Depends on `doc-type-policies`**, which must land first. Without it this change would add a fourth
+  compiled-in exemption class and then have it deleted.
 - Prompt reads resolve **own-tenant only** — never the common pool, never a granted tenant. A prompt
   doc is instructions the agent will execute, so cross-tenant resolution would let another tenant's
   document become your system prompt.
@@ -56,13 +57,15 @@ delta against. Their current behavior is captured as constraints in `design.md`.
 Server code:
 
 - `internal/models/document.go` — `DocTypePrompt` const, `ValidDocTypes` entry.
-- `internal/models/staleness.go` — `InferDocType` case for `prompts`; new exemption predicate
-  alongside `IsEpisodic` / `IsPrunableEpisodic`.
-- `internal/database/database.go` — `staleness_thresholds` seed row.
-- `internal/repository/section.go`, `internal/repository/lint.go`, `internal/cleanup/` — honor the
-  new exemption in search filtering, lint stale-check, and the near-duplicate scan.
-- `internal/service/memory.go` — duplicate-guard bypass, own-tenant-only read scope for prompts.
+- `internal/models/staleness.go` — `InferDocType` case for `prompts`; the `prompt` policy row in the
+  default set.
+- `internal/models/document.go` — `PromptScope` field, with the migration adding the column.
+- `internal/service/memory.go` — own-tenant-only read scope for prompts, `prompt_scope` on the write
+  path.
 - `internal/mcp/tools.go`, `internal/server/api.go` — the retrieval tool and endpoint.
+
+Curation behavior needs no code here: the seeded policy row drives it through the mechanisms
+`doc-type-policies` already converted.
 
 Clients: `claude-hook-engine` gains a second memory-system call at SessionStart. No breaking change
 to existing tools — `prompts` is a new category and existing callers never name it.

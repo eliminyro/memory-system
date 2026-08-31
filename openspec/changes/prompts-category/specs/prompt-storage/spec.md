@@ -4,7 +4,7 @@
 
 The system SHALL accept `prompts` as a document category and SHALL classify documents in that
 category as doc_type `prompt`. `prompt` SHALL be a member of `ValidDocTypes` and SHALL have a seeded
-`staleness_thresholds` row so threshold lookup never falls through to the reference default.
+`doc_type_policies` row so policy lookup never falls through to the `reference` default.
 
 The canonical path shape SHALL be `prompts/<agent>/<slug>`, where `<agent>` identifies the consuming
 agent (e.g. `derpy`) and `<slug>` names one instruction document (e.g. `persona`, `no-slop`).
@@ -19,27 +19,34 @@ agent (e.g. `derpy`) and `<slug>` names one instruction document (e.g. `persona`
 - **WHEN** a caller passes doc_type `prompt` explicitly
 - **THEN** the write succeeds and validation does not reject the value as unknown
 
-#### Scenario: Threshold lookup resolves
+#### Scenario: Policy lookup resolves
 
-- **WHEN** the staleness threshold for doc_type `prompt` is requested
+- **WHEN** the policy for doc_type `prompt` is requested
 - **THEN** the seeded `prompt` row is returned rather than the `reference` fallback
 
 ### Requirement: Prompt documents are exempt from curation machinery
 
 Prompt documents carry operating instructions that are edited in place and never rot on a clock, so
-the system SHALL exempt them from every curation mechanism:
+the system SHALL exempt them from every curation mechanism. The exemption SHALL be expressed as the
+seeded `doc_type_policies` row for `prompt` — no compiled-in exemption class, no new predicate:
 
-- Staleness evaluation SHALL never mark a prompt section `needs_verification`, and hard staleness mode
-  SHALL never withhold a prompt section's content.
-- `lint_memory` SHALL exclude prompt documents from its stale-document check.
-- The nightly cleanup scanner SHALL NOT enqueue near-duplicate pairs involving a prompt document.
-- The write-time duplicate guard SHALL NOT fire on a prompt document write.
-- Prompt documents SHALL be treated as never-evictable, equivalent to `pinned`, regardless of
-  `last_accessed_at`.
+| Field | Value | Effect |
+| --- | --- | --- |
+| `staleness_days` | `0` | Never marked `needs_verification`; never withheld under hard staleness mode |
+| `duplicate_guard` | `false` | Writes never blocked as near-duplicates |
+| `cleanup_scan` | `false` | Never enqueued as a near-duplicate pair |
+| `lint_stale_check` | `false` | Never reported stale by `lint_memory` |
+| `prunable` | `false` | Never removed by retention or eviction |
+| `search_default_visible` | `false` | Absent from unfiltered `search_memory` |
+| `behavior` | `{}` | No subset behavior; `chain_previous` does not apply |
 
-This exemption SHALL be a distinct class from the episodic set (`journal`, `handoff`): prompts are
-neither append-per-day nor prunable, and widening `episodicDocTypes` would give journals never-evict
-semantics they do not have.
+An operator who wants different behavior for their own instruction documents SHALL be able to get it
+by editing the row, without a code change.
+
+#### Scenario: Exemption comes from the policy row
+
+- **WHEN** the server finishes migrating with the `prompt` policy seeded
+- **THEN** the `prompt` row resolves to the values above, and no doc_type-specific exemption logic exists in code for it
 
 #### Scenario: Stale prompt content is still served
 
@@ -84,7 +91,8 @@ Writes are unaffected: they already land in the caller's own tenant.
 
 `search_memory` SHALL omit prompt documents from results unless the caller explicitly narrows to them
 via the existing `category` or `doc_type` filters. Instruction text overlaps knowledge text heavily
-and would otherwise displace real answers.
+and would otherwise displace real answers. This follows from `search_default_visible = false` on the
+`prompt` policy row rather than a doc_type check in the query.
 
 #### Scenario: Unfiltered search omits prompts
 

@@ -1,20 +1,18 @@
+> **Depends on `doc-type-policies`.** Do not start until it has landed — groups 1 and 2 assume the
+> `doc_type_policies` table exists and that every curation mechanism reads it.
+
 ## 1. Model and schema
 
 - [ ] 1.1 Add `DocTypePrompt = "prompt"` to the doc_type consts and to `ValidDocTypes` in `internal/models/document.go`
 - [ ] 1.2 Add a `case "prompts"` to `InferDocType` in `internal/models/staleness.go` returning `DocTypePrompt`
-- [ ] 1.3 Add the `IsInstruction` / broader exemption predicate per design D1, keeping `IsEpisodic` and `EpisodicDocTypes()` meaning exactly what they mean today; add a `DocTypePrompt` case to the `TestIsEpisodic` table so the two classes stay distinct
-- [ ] 1.4 Add `PromptScope *string` (`gorm:"size:500"`) to `models.Document` with a migration adding `documents.prompt_scope TEXT NULL`
-- [ ] 1.5 Seed the `prompt` row in `staleness_thresholds` in `internal/database/database.go` (value is inert — prompts are never staleness-checked — so pick a large number and say why in one line)
-- [ ] 1.6 Unit tests: `InferDocType("prompts", ...)`, the exemption predicate over every member of `ValidDocTypes`
+- [ ] 1.3 Add `PromptScope *string` (`gorm:"size:500"`) to `models.Document` with a migration adding `documents.prompt_scope TEXT NULL`
+- [ ] 1.4 Unit test: `InferDocType("prompts", ...)` returns `DocTypePrompt`
 
-## 2. Curation exemptions
+## 2. Curation policy
 
-- [ ] 2.1 Bypass the write-time duplicate guard for prompt doc_type at `internal/service/memory.go:1123`
-- [ ] 2.2 Exclude prompt documents from the lint stale-document check in `internal/repository/lint.go` (extend the `doc_type <> ALL(?)` binding to the exemption set)
-- [ ] 2.3 Exclude prompt documents from `FindNearDuplicatePairs` so the cleanup scanner enqueues no prompt pairs
-- [ ] 2.4 Skip staleness evaluation for prompt sections in `internal/staleness/staleness.go` so no prompt section is ever marked `needs_verification` or withheld under hard mode
-- [ ] 2.5 Treat prompt documents as never-evictable in whatever reads `Pinned` (nothing does today — assert it in a test so a future eviction sweep cannot silently pick them up)
-- [ ] 2.6 Tests: stale prompt served in full under `staleness_mode="hard"`; duplicate-guard bypass; scanner skips prompt pairs; lint omits prompts
+- [ ] 2.1 Add the `prompt` row to the default policy set: `staleness_days = 0`, `duplicate_guard`/`cleanup_scan`/`lint_stale_check`/`prunable`/`search_default_visible` all false, `behavior = {}`
+- [ ] 2.2 Tests asserting the row's effect end to end — stale prompt served in full under `staleness_mode="hard"`; near-duplicate prompt write not blocked; scanner enqueues no prompt pair; lint reports no prompt as stale; unfiltered search omits prompts while a filtered search returns them
+- [ ] 2.3 Test that editing the row changes the behavior, since that is the point of it being configuration (flip `search_default_visible` true, assert prompts appear in unfiltered search)
 
 ## 3. Tenant scoping
 
@@ -23,9 +21,8 @@
 
 ## 4. Search exclusion
 
-- [ ] 4.1 Add the default `doc_type <> 'prompt'` predicate to the search candidate query in `internal/repository/section.go`, suppressed when the caller named `category="prompts"` or `doc_type="prompt"`
+- [ ] 4.1 Verify the `search_default_visible` predicate from `doc-type-policies` covers prompts with no prompt-specific code; if it does not, that is a gap in the dependency, fix it there
 - [ ] 4.2 Note the exclusion and the opt-in filter in the `search_memory` tool description in `internal/mcp/tools.go`
-- [ ] 4.3 Tests: unfiltered search omits a prompt document that lexically matches; explicit category or doc_type filter returns it
 
 ## 5. Retrieval
 
