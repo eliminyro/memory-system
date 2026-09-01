@@ -24,11 +24,14 @@
 - [ ] 4.2 Leave the write-through refresh in place; confirm the reload is idempotent so a double reload changes nothing
 - [ ] 4.3 Tests: a write on one connection is observed by a second listener; the writing path still refreshes without waiting for the notification
 
-## 5. Health
+## 5. Health reporting and the readiness toggle
 
-- [ ] 5.1 `/~/ready` (`internal/server/handler.go:116`) reports listener state
-- [ ] 5.2 Log reconnection failures at a level that surfaces them
-- [ ] 5.3 Tests: ready reflects a failed listener and recovers when it reconnects
+- [ ] 5.1 `require_config_listener bool` on `models.InstanceConfig` (default false) with its JSON tag, plus the `InstanceConfigPatch` field
+- [ ] 5.2 Seed it from an env var in the one-time globals seed (`internal/database/database.go:259-283`), so it joins the existing `globals_seeded` path and an admin edit survives restarts
+- [ ] 5.3 Expose it on `globalconfig.Accessor`, and in `GET`/`PATCH /admin/config` so the web UI config surface picks it up like the other toggles
+- [ ] 5.4 `/~/ready` (`internal/server/handler.go:116`) reports not-ready on a dead listener only when the flag is true; `/~/health` is unaffected in either case
+- [ ] 5.5 Log reconnection failures at a level that surfaces them regardless of the flag
+- [ ] 5.6 Tests: default false keeps ready green with a dead listener and logs; true reports not-ready; health stays green either way; ready recovers on reconnect; env seeds once and an admin patch survives a restart
 
 ## 6. Close-out
 

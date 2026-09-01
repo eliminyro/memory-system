@@ -27,8 +27,11 @@ missing piece.
 - Write-through refresh is **kept**. The writing replica still updates in process immediately, so a
   dead listener never delays the replica that made the change. Reloads are idempotent, so receiving
   your own notification is harmless.
-- Listener health is surfaced on `/~/ready`. A listener that cannot reconnect means that replica is
-  serving stale configuration, and that must be visible rather than silent.
+- Listener health is surfaced on `/~/ready`, gated by a new `require_config_listener` toggle on
+  `instance_config` — env-seeded, editable through `/admin/config` and the web UI, defaulting to false.
+  A single replica gets every change write-through and has no peers to fall behind, so failing readiness
+  there would remove the only pod from service over a harmless fault; a multi-replica deployment turns
+  it on. `/~/health` is never affected, since failing liveness would restart a healthy process.
 
 Ordering and reconnection are specified, because both are easy to get subtly wrong:
 
@@ -59,9 +62,10 @@ against; it is captured in the spec as the behavior that is retained alongside t
 - `internal/database/database.go` — trigger and function DDL for `instance_config`, idempotent like the other structural DDL there.
 - `internal/globalconfig/globalconfig.go` — registers its loader with the listener; write-through path unchanged.
 - `cmd/server/main.go` — starts the listener before the initial config load and stops it on shutdown.
-- `internal/server/handler.go:116` — `/~/ready` reports listener state.
-- `doc-type-policies` — registers its policy store the same way, and its trigger ships with its migration.
+- `internal/server/handler.go:116` — `/~/ready` reports listener state when `require_config_listener` is on.
+- `internal/models/instance_config.go`, `internal/globalconfig/globalconfig.go`, `internal/server/admin_api.go` — the new toggle, its env seed, and its admin/UI surface.
+- `doc-type-policies` — registers its policy store the same way, and creates its trigger alongside its table.
 
-Data: two triggers and a notify function. No table or column changes.
+Data: two triggers, a notify function, and one new `instance_config` column (`require_config_listener`, default false). No document rows touched.
 
 Callers: none. Single-replica behavior is unchanged; multi-replica gains convergence.

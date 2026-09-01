@@ -108,25 +108,55 @@ second time changes nothing.
 - **WHEN** the writing replica reloads write-through and then again on its own notification
 - **THEN** the served values are unchanged
 
-### Requirement: A failed listener is visible
+### Requirement: A failed listener is visible, and whether it fails readiness is configurable
 
 A listener that cannot maintain its connection means that replica serves stale configuration
-indefinitely. The system SHALL report listener state on `/~/ready` and SHALL log a reconnection failure
-at a level that surfaces it.
+indefinitely. The system SHALL log a reconnection failure at a level that surfaces it, and SHALL report
+listener state on `/~/ready`.
 
-Stale configuration SHALL NOT be silent.
+Whether a dead listener makes `/~/ready` fail SHALL be controlled by
+`require_config_listener` on `instance_config` — seeded from an env var like the other runtime globals,
+editable through `/admin/config` and the web UI, **defaulting to false**.
 
-#### Scenario: Ready reflects a dead listener
+The default is off because a single replica receives every configuration change write-through: it has no
+peers whose edits it could be missing, so a dead listener is harmless there and failing readiness would
+take the only pod out of service over a fault that changed nothing. A multi-replica deployment enables
+it, because there a stale replica enforces different behavior from its peers.
 
-- **WHEN** the listener has failed and cannot reconnect
+`/~/health` SHALL NOT be affected. That endpoint is liveness, and failing it would make an orchestrator
+restart a process that is otherwise entirely healthy.
+
+Note the one asymmetry, which is acceptable: a replica whose listener is already dead will not receive
+the notification for a change to this flag. Enabling it does not reach an already-failed replica until
+that replica restarts.
+
+#### Scenario: Default does not fail readiness
+
+- **WHEN** the listener has failed, cannot reconnect, and `require_config_listener` is false
+- **THEN** `/~/ready` reports ready, and the failure is logged
+
+#### Scenario: Enabled, readiness fails
+
+- **WHEN** the listener has failed, cannot reconnect, and `require_config_listener` is true
 - **THEN** `/~/ready` reports the replica as not ready
 
-#### Scenario: Ready reflects a healthy listener
+#### Scenario: Health is never affected
 
-- **WHEN** the listener is connected and listening
-- **THEN** `/~/ready` reports normally
+- **WHEN** the listener has failed under either setting
+- **THEN** `/~/health` reports healthy
+
+#### Scenario: Recovery clears it
+
+- **WHEN** a failed listener reconnects
+- **THEN** `/~/ready` reports ready again, and every registered cache has been reloaded
+
+#### Scenario: Flag is env-seeded and admin-editable
+
+- **WHEN** the instance starts fresh with the env var set, and an admin later changes the value through `/admin/config`
+- **THEN** the env value seeds the row once and the admin's change survives subsequent restarts
 
 #### Scenario: Single replica is unaffected
 
 - **WHEN** the server runs as a single replica and the listener is healthy
 - **THEN** behavior is identical to today: write-through serves every change, and notifications cause redundant, harmless reloads
+

@@ -99,6 +99,26 @@ configuration-dependent behavior.
 *Alternative considered:* a slow poll as a backstop when the listener is down. That reintroduces the
 timer this design exists to remove, and hides the failure rather than reporting it.
 
+**D8 — Whether a dead listener fails readiness is a config flag, defaulting to off.**
+
+`require_config_listener` on `instance_config`, seeded from an env var like the other runtime globals and
+editable through `/admin/config` and the web UI.
+
+Off by default because the failure is only meaningful with peers. A single replica gets every change
+write-through, so it has nothing to miss; failing readiness there removes the only pod from its Service
+over a fault that changed no behavior. With several replicas a stale one enforces different rules from
+its peers, so it should be routed around. The operator knows the replica count; the server does not need
+to infer it.
+
+`/~/health` is deliberately untouched — it is liveness, and failing it would restart a process that is
+working fine. A restart would happen to fix a dead listener, which makes it a tempting mechanism and a
+bad one.
+
+*Known asymmetry, accepted:* a replica whose listener is already dead will not receive the notification
+for a change to this very flag, so enabling it does not reach an already-failed replica until restart.
+The flag only governs readiness reporting, never the listener itself, so there is no circularity beyond
+that.
+
 ## Risks / Trade-offs
 
 - **A pinned connection is a connection the pool cannot use.** → One, for the process lifetime.
@@ -132,9 +152,5 @@ exactly to today's.
 
 ## Open Questions
 
-- Should `/~/ready` fail outright on a dead listener, or report degraded while still serving? Failing
-  removes the replica from rotation, which is right for a configuration-dependent workload and wrong if
-  it takes down a single-replica deployment over a recoverable fault. Leaning toward: fail only when
-  more than one replica is configured, which the server does not currently know about itself.
 - Does the import worker's ticker become a listener registration, and does that change its recovery
   semantics? Out of scope here, worth answering before a third consumer appears.
