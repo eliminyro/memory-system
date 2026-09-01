@@ -36,6 +36,8 @@ seeded `doc_type_policies` row for `prompt` — no compiled-in exemption class, 
 | `prunable` | `false` | Never removed by retention or eviction |
 | `embed` | `false` | No embeddings written — prompts are assembled by scope, never retrieved by similarity |
 | `default_search` | `false` | Absent from unfiltered `search_memory`, on both the semantic and keyword arms |
+| `write_mode` | `replace` | A prompt document is edited whole, not accumulated |
+| `subcategory` | `required` | The agent the instructions belong to |
 | `chain_previous` | absent | Prompts do not chain |
 
 An operator who wants different behavior for their own instruction documents SHALL be able to get it

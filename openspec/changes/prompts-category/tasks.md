@@ -10,7 +10,7 @@
 
 ## 2. Curation policy
 
-- [ ] 2.1 Add the `prompt` rule set to the default policy seed: `staleness_days: 0`, `duplicate_guard`/`cleanup_scan`/`lint_stale_check`/`prunable`/`embed`/`default_search` all false, no `chain_previous`
+- [ ] 2.1 Add the `prompt` seed row: `staleness_days 0`, `duplicate_guard`/`cleanup_scan`/`lint_stale_check`/`prunable`/`embed`/`default_search` all false, `write_mode replace`, `subcategory required`, empty `rules`
 - [ ] 2.2 Tests asserting the row's effect end to end — stale prompt served in full under `staleness_mode="hard"`; near-duplicate prompt write not blocked; scanner enqueues no prompt pair; lint reports no prompt as stale; unfiltered search omits prompts while a filtered search returns them
 - [ ] 2.3 Test that editing the row changes the behavior, since that is the point of it being configuration (flip `embed` and `default_search` true, re-store a prompt, assert it is embedded and appears in unfiltered search)
 
