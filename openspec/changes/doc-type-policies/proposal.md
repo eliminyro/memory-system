@@ -1,89 +1,89 @@
 ## Why
 
-How a document is maintained — whether its staleness clock runs, whether the duplicate guard fires,
-whether the cleanup scanner considers it, whether it can be pruned, whether search shows it by
-default — is decided by three hardcoded maps in `internal/models/staleness.go` plus two hardcoded
-`doc_type == handoff` checks. Every new document kind means editing Go and a release, and the
-compiled-in set encodes one operator's taxonomy into a self-hostable server.
+How a document is maintained — whether its verification clock runs, whether the duplicate guard
+fires, whether the cleanup scanner considers it, whether it is searchable, whether it can be pruned —
+is decided by three hardcoded maps in `internal/models/staleness.go` plus two hardcoded
+`doc_type == handoff` checks. Every new kind of document, and every change to how an existing kind is
+treated, means editing Go and cutting a release.
 
-`staleness_thresholds` already proves the better shape: a global, operator-editable table keyed by
-doc_type, seeded `ON CONFLICT DO NOTHING` so tweaked rows survive upgrades. It just has one column.
-Widening it turns doc_type behavior into data, and every existing special case becomes a seeded row.
+`staleness_thresholds` already proves the better shape: a table keyed by doc_type, seeded
+`ON CONFLICT DO NOTHING` so tweaked rows survive upgrades, read through a cached store. It just
+expresses one thing — a day count — when the doc_type actually carries a whole bundle of behavior.
 
-This lands before `prompts-category`, which otherwise has to add a fourth hardcoded exemption class
-and then have it deleted.
+Deriving the doc_type from the category stays exactly as it is. That derivation is what keeps
+categories free-form while still giving a place to attach behavior; it is not the thing that needs
+changing. What needs changing is how the behavior attached to a type is defined.
 
 ## What Changes
 
-- `staleness_thresholds` widens into `doc_type_policies`: one row per doc_type carrying the curation
-  switches that are compiled-in today — `staleness_days`, `duplicate_guard`, `cleanup_scan`,
-  `lint_stale_check`, `prunable`, `search_default_visible`.
-- A `behavior` JSONB column carries doc_type-specific parameters, for behaviors that apply to some
-  doc_types rather than all of them. Writes are validated against a registry of known keys per
-  behavior, so an unrecognized key is rejected instead of silently doing nothing.
-- `episodicDocTypes`, `neverPruneDocTypes`, and their predicates (`IsEpisodic`,
-  `IsPrunableEpisodic`, `EpisodicDocTypes`, `PrunableEpisodicDocTypes`) are replaced by policy
-  lookups at their 6 call sites.
+- `staleness_thresholds` becomes `doc_type_policies(doc_type TEXT PRIMARY KEY, rules JSONB NOT NULL
+  DEFAULT '{}')`. One row per doc_type, and the row holds the type's whole behavior as a validated
+  rule set rather than a day count.
+- Registered rule keys: `staleness_days` (0 or absent = the clock never runs), `duplicate_guard`,
+  `cleanup_scan`, `lint_stale_check`, `embed`, `default_search`, `prunable`, and `chain_previous` for
+  the one behavior only handoff has today.
+- Writes are validated against a registry of implemented keys and their accepted value shapes. An
+  unregistered key or a wrong shape is rejected, never silently stored, and the registry is readable
+  so a valid row can be written without reading source.
+- `embed` and `default_search` are separate rules. The semantic arm of the search query already skips
+  sections with no embedding, but the keyword arm does not, so hiding a doc_type from default results
+  needs its own predicate on both arms. Keeping them separate is what lets `journal` stay searchable
+  on request while dropping out of unfiltered results.
+- `episodicDocTypes`, `neverPruneDocTypes`, and their four predicates (`IsEpisodic`,
+  `IsPrunableEpisodic`, `EpisodicDocTypes`, `PrunableEpisodicDocTypes`) are replaced by rule lookups
+  at their 6 call sites.
 - The two hardcoded handoff checks (`internal/repository/document.go:158`,
-  `internal/service/memory.go:1255`) read the `chain_previous` behavior key rather than comparing
-  doc_type to a literal.
-- Policy is instance-wide: one row per doc_type for every tenant. The existing per-tenant toggles
-  (`staleness_mode`, `duplicate_guard`, `cleanup_scan_enabled`) keep their meaning — they gate whether
-  a mechanism runs, the policy decides which doc_types it covers once it does.
-- The category→doc_type mapping moves into a `category_doc_types(category, doc_type)` table, seeded
-  with the six categories `InferDocType` recognizes. Adding a category with its own maintenance
-  behavior becomes a mapping row plus a policy row — no code change. Classification *within* a
-  category (the `projects` slug rules) stays in `InferDocType` and takes precedence.
-- `lint_memory` reports categories present in documents with no mapping row, since an unmapped
-  category silently inherits `reference` and its 90-day clock.
-- Seeded rows reproduce today's behavior exactly for all 8 existing doc types. **This is a
-  behavior-preserving refactor**; no observable change on upgrade.
-- Policy rows are validated on write, and the effective table is readable so a misconfiguration is
-  visible rather than silent.
+  `internal/service/memory.go:1255`) read the `chain_previous` rule instead of comparing doc_type to
+  a literal.
+- Seeded rows reproduce today's behavior exactly for all 8 doc_types, with **one deliberate
+  exception**: `journal` and `handoff` get `default_search: false`. Nothing excludes them from
+  unfiltered results today, so an unfiltered query can return a journal entry ahead of the knowledge
+  document that answers it. They keep `embed: true`, so asking for them by category or doc_type still
+  works with full semantic ranking. Everything else about the change is behavior-preserving.
 
 Explicitly unchanged:
 
-- **The `projects` slug rules stay in Go.** `projects/state` → `project_state` and slug containing
-  audit/plan/design/backlog → `audit` are rules, not a map; expressing them as data means shipping a
-  pattern language. The exact-match half of classification is what becomes data.
-- **Policy stays keyed on doc_type, not category.** Keying on category was considered and rejected:
-  `projects` is one category holding three doc_types at 14, 30 and 90 days, and collapsing it to one
-  row would flatten the largest category in the reference instance.
-- **Cross-tenant read scope stays compiled-in.** It is a trust boundary, not a maintenance
-  preference, and it does not become a `behavior` key either. A future `cross_tenant_readable` flag is
-  additively one column and one call site if it is ever wanted, and would be instance-admin-only.
+- **`InferDocType` and the whole category→doc_type derivation.** The Go switch stays, `projects` slug
+  rules included. Adding a doc_type still means a line there. A category the switch does not
+  recognize still lands on `reference` and its 90-day clock — accepted behavior, not a problem this
+  change solves.
+- **Policy stays keyed on doc_type, not category.** `projects` is one category holding three
+  doc_types at 14, 30 and 90 days; keying on category would flatten the largest category in the
+  reference instance.
+- **Journal and handoff stay embedded and findable.** They drop out of *unfiltered* results only;
+  a query naming their category or doc_type still ranks them semantically, and `resume()` walks handoff
+  chains untouched.
+- **Cross-tenant read scope.** A trust boundary, not a maintenance preference, and not a rule key.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `doc-type-policy`: the `doc_type_policies` table, its flags and their effect on each curation
-  mechanism, instance-wide resolution with the `reference` fallback, seeding, validation, and
+- `doc-type-policy`: the `doc_type_policies` table, its rule keys and their effect on each curation
+  mechanism, the registry and its validation, seeding, resolution with the `reference` fallback, and
   inspection.
-- `doc-type-mapping`: the `category_doc_types` table, its seeded rows, the precedence of in-code
-  classification rules over a mapping row, the unmapped-category fallback, and the lint finding.
 
 ### Modified Capabilities
 
 None. `openspec/specs/` holds no spec files yet, so the behaviors this refactors — staleness, lint,
-cleanup scan, duplicate guard, handoff chaining — have nothing to delta against. Their current
-behavior is captured as the seeded defaults in `design.md`, which is what the tests assert.
+cleanup scan, duplicate guard, search visibility, handoff chaining — have nothing to delta against.
+Their current behavior is captured as the seeded defaults in the spec, which is what the tests assert.
 
 ## Impact
 
-- `internal/models/staleness.go` — the three maps and four predicates go away; `DefaultStalenessThresholds` becomes the default policy row set; `InferDocType` keeps only the `projects` slug rules and reads the mapping table for the rest.
-- `internal/models/` — new `CategoryDocType` model; migration creating and seeding `category_doc_types`.
-- `internal/models/` — new `DocTypePolicy` model.
-- `internal/database/database.go:249` — migration widening the table, seed loop extended.
-- `internal/staleness/staleness.go` — `ThresholdStore` becomes a policy store; `DaysFor` and `Check` read from the policy row.
+- `internal/models/staleness.go` — the three maps and four predicates go away; `DefaultStalenessThresholds` becomes the default rule set. `InferDocType` is untouched.
+- `internal/models/` — new `DocTypePolicy` model carrying `rules`.
+- `internal/database/database.go:249` — migration adding `rules`, backfilling from the default set, dropping `days`, renaming the table; seed loop writes rule sets.
+- `internal/staleness/staleness.go` — `ThresholdStore` becomes the policy store; `DaysFor` and `Check` read `staleness_days` from the rule set.
 - `internal/service/memory.go:1123` — duplicate guard reads `duplicate_guard`.
 - `internal/service/memory.go:1255`, `internal/repository/document.go:158` — chaining reads `chain_previous`.
-- `internal/service/staleness_view.go` — two `IsEpisodic` calls become policy reads.
-- `internal/repository/lint.go` — three `EpisodicDocTypes()` bindings become policy-derived doc_type arrays.
-- `internal/repository/section.go` — search candidate query gains the `search_default_visible` predicate.
-- Admin surface — read and edit policy rows.
+- `internal/service/staleness_view.go` — two `IsEpisodic` calls become rule reads.
+- `internal/repository/lint.go` — three `EpisodicDocTypes()` bindings become rule-derived doc_type arrays.
+- `internal/repository/section.go` — both arms of the search candidate query gain the `default_search` predicate.
+- Embedding write path — skipped for a type whose `embed` is false.
+- Admin surface — read the policy table and the rule registry.
 
-Data: `staleness_thresholds` is widened in place with defaults that match current behavior. No
-document rows touched. Downgrade leaves extra columns older code ignores.
+Data: `staleness_thresholds` is migrated in place to `doc_type_policies` with rule sets that match
+current behavior. No document rows touched.
 
 Callers: none. No tool signature changes.

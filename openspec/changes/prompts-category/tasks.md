@@ -3,15 +3,16 @@
 
 ## 1. Model and schema
 
-- [ ] 1.1 Seed the `prompts → prompt` row in `category_doc_types`. No `InferDocType` case and no `ValidDocTypes` entry — `doc-type-policies` made both a data change
-- [ ] 1.2 Add `PromptScope *string` (`gorm:"size:500"`) to `models.Document` with a migration adding `documents.prompt_scope TEXT NULL`
-- [ ] 1.3 Test: a document stored in category `prompts` gets doc_type `prompt` from the mapping row
+- [ ] 1.1 Add `DocTypePrompt = "prompt"` to the doc_type consts and to `ValidDocTypes` in `internal/models/document.go`
+- [ ] 1.2 Add a `case "prompts"` to `InferDocType` in `internal/models/staleness.go` returning `DocTypePrompt` (classification stays in Go — see `doc-type-policies` D4)
+- [ ] 1.3 Add `PromptScope *string` (`gorm:"size:500"`) to `models.Document` with a migration adding `documents.prompt_scope TEXT NULL`
+- [ ] 1.4 Test: `InferDocType("prompts", ...)` returns `DocTypePrompt`
 
 ## 2. Curation policy
 
-- [ ] 2.1 Add the `prompt` row to the default policy set: `staleness_days = 0`, `duplicate_guard`/`cleanup_scan`/`lint_stale_check`/`prunable`/`search_default_visible` all false, `behavior = {}`
+- [ ] 2.1 Add the `prompt` rule set to the default policy seed: `staleness_days: 0`, `duplicate_guard`/`cleanup_scan`/`lint_stale_check`/`prunable`/`embed`/`default_search` all false, no `chain_previous`
 - [ ] 2.2 Tests asserting the row's effect end to end — stale prompt served in full under `staleness_mode="hard"`; near-duplicate prompt write not blocked; scanner enqueues no prompt pair; lint reports no prompt as stale; unfiltered search omits prompts while a filtered search returns them
-- [ ] 2.3 Test that editing the row changes the behavior, since that is the point of it being configuration (flip `search_default_visible` true, assert prompts appear in unfiltered search)
+- [ ] 2.3 Test that editing the row changes the behavior, since that is the point of it being configuration (flip `embed` and `default_search` true, re-store a prompt, assert it is embedded and appears in unfiltered search)
 
 ## 3. Tenant scoping
 
@@ -20,7 +21,7 @@
 
 ## 4. Search exclusion
 
-- [ ] 4.1 Verify the `search_default_visible` predicate from `doc-type-policies` covers prompts with no prompt-specific code; if it does not, that is a gap in the dependency, fix it there
+- [ ] 4.1 Verify the `embed` and `default_search` rules from `doc-type-policies` cover prompts with no prompt-specific code — no embeddings written, absent from both arms of an unfiltered query; if not, that is a gap in the dependency, fix it there
 - [ ] 4.2 Note the exclusion and the opt-in filter in the `search_memory` tool description in `internal/mcp/tools.go`
 
 ## 5. Retrieval

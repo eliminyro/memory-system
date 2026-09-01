@@ -54,8 +54,8 @@ in place there.
 **D1 — The exemption is a seeded policy row, not code.**
 
 Superseded by the `doc-type-policies` change, which turns curation behavior into configuration. This
-change seeds one row (`staleness_days = 0`, every curation flag false, `search_default_visible` false,
-`behavior = {}`) and writes no exemption logic.
+change seeds one rule set (`staleness_days: 0`, every curation rule false, `embed: false`,
+`default_search: false`) and writes no exemption logic.
 
 *Alternative considered, and originally specced here:* an `IsInstruction(docType)` predicate as a third
 compiled-in class beside `episodicDocTypes` and `neverPruneDocTypes`. Rejected — it encodes one
@@ -94,10 +94,12 @@ category is `prompts` or the doc_type is `prompt`.
 
 **D5 — Search exclusion comes from the policy flag.**
 
-`search_default_visible = false` on the `prompt` row, with the candidate-query predicate implemented
-by `doc-type-policies`. Nothing prompt-specific in the query. The reason that predicate belongs in the
-candidate query rather than post-fusion is recorded there: excluding after fusion wastes candidate
-slots on documents that are then dropped, shrinking the effective result set.
+`embed: false` plus `default_search: false` on the `prompt` row, both implemented by
+`doc-type-policies`. Nothing prompt-specific in the query. `embed: false` is not sufficient on its own —
+the semantic arm skips sections with no embedding, but the keyword arm matches `s.tsv` regardless, so
+`default_search` carries the exclusion. It belongs in the candidate query rather than post-fusion:
+excluding after fusion wastes candidate slots on documents that are then dropped, shrinking the
+effective result set.
 
 **D6 — Reuse `ContentHash` for change detection.**
 

@@ -30,13 +30,13 @@ operator edits and every tenant reads.
 
 - Doc_type maintenance behavior is data, editable by the operator without a release.
 - The 8 existing doc_types keep behaving exactly as they do now.
-- A new doc_type is a row, not a patch to four files.
+- A new behavior is a registered rule key, not a patch to four files.
 - A misconfigured row is visible rather than silent.
 
 **Non-Goals:**
 
 - Category→doc_type inference. `InferDocType` stays in Go (see D4).
-- Cross-tenant read scope. Stays compiled-in (see D5), and it is not a `behavior` key either.
+- Cross-tenant read scope. Stays compiled-in (see D5), and it is not a rule key either.
 - Per-document overrides. Policy is per doc_type; `Pinned` already exists for the one per-document
   case.
 - New behavior of any kind. This change adds no capability an operator did not already have in Go.
@@ -45,9 +45,9 @@ operator edits and every tenant reads.
 
 **D1 — Widen `staleness_thresholds` in place; do not add a second table.**
 
-Rename to `doc_type_policies` and add the flag columns. The day threshold and the flags govern the
-same doc_type, and splitting them across two tables invites exactly the drift this project already
-hit between `preferences/workflow` in memory and `workflow.md` on disk.
+Migrate to `doc_type_policies`, replacing `days` with `rules`. The day threshold and the rest of a
+type's behavior govern the same doc_type, and splitting them across two tables invites exactly the
+drift this project already hit between `preferences/workflow` in memory and `workflow.md` on disk.
 
 *Alternative considered:* a new `doc_type_policies` table alongside the existing one, leaving
 `staleness_thresholds` as the day source. Avoids a rename in a public schema, but then two rows
@@ -56,61 +56,72 @@ describe one doc_type.
 **D2 — `staleness_days = 0` means "never", replacing the episodic exemption.**
 
 Today `journal` (10) and `handoff` (3650) have thresholds that are never read, because `IsEpisodic`
-short-circuits first. Encoding "never" as `0` removes the dead numbers and lets one column express
-what previously took a column plus a map.
+short-circuits first. Encoding "never" as `0` (or an absent key) removes the dead numbers and lets one
+rule express what previously took a column plus a map.
 
-*Alternative considered:* a separate `staleness_check bool`. A boolean plus a day count can disagree,
-and `0` cannot.
+*Alternative considered:* a separate `staleness_check` rule alongside the day count. A boolean plus a
+number can disagree; `0` cannot.
 
-**D3 — Universal switches get columns; subset behaviors get a `behavior` JSONB.**
+**D3 — A type's whole behavior is one validated rule set, not typed columns.**
 
-A column is justified when every doc_type answers it meaningfully. `staleness_days`,
-`duplicate_guard`, `cleanup_scan`, `lint_stale_check`, `prunable`, and `search_default_visible` all do.
-Handoff chaining does not — it would be `false` in seven of eight rows, and the next subset behavior
-adds another mostly-false column.
+(Rule keys: `staleness_days`, `duplicate_guard`, `cleanup_scan`, `lint_stale_check`, `embed`,
+`default_search`, `prunable`, `chain_previous`. `embed` and `default_search` are deliberately separate —
+see the Risks section for why one key cannot cover both.)
 
-`behavior JSONB NOT NULL DEFAULT '{}'` holds those, validated against a registry of implemented keys.
-The second gain is parameterization: a key accepts `true` or an object, so chaining can grow from
-`{"chain_previous": true}` to `{"chain_previous": {"scope": "subcategory", "link_type":
-"continues_from"}}` with no migration.
+`doc_type_policies(doc_type TEXT PRIMARY KEY, rules JSONB NOT NULL DEFAULT '{}')`. A new behavior is a
+new registered key plus the Go that reads it — no migration, no column that is meaningless for seven
+of eight rows.
+
+**This reverses an earlier decision in this document**, which argued for typed columns on the grounds
+that SQL predicates in `lint.go` and `section.go` would otherwise have to read through JSON operators.
+That was wrong, verified in source: nothing in SQL reads `staleness_thresholds` except its own GORM
+SELECT and the seed INSERT (`internal/database/database.go:252`). Threshold values reach search as a Go
+`map[string]int` (`internal/repository/section.go:80`) and are applied in `fuseHybrid` post-fusion
+(`section.go:451`); `lint.go` binds a doc_type array computed in Go; the table is 8 rows and already
+cached by `staleness.ThresholdStore` with an `All()` refresh (`internal/service/memory.go:803`). No
+consumer needs a typed column, because no consumer reads the table from SQL.
+
+The guardrail is what makes a schemaless column safe: writes are validated against a registry of
+implemented keys and shapes, and an unregistered key is rejected rather than stored. Without that, a
+misspelled key stores fine, is read by nothing, and errors nowhere. The registry is also readable, so
+a valid row can be written without reading source.
 
 What this does *not* buy, and the docs should not imply it does: a user cannot invent behavior. Only
-keys the server implements do anything, which is exactly why unregistered keys are rejected rather
-than stored.
+keys the server implements do anything.
 
-*Alternative considered:* a boolean column per behavior. Honest schema, self-documenting, queryable
-without JSON operators — and a new mostly-false column per behavior forever.
+*Alternative considered:* a typed column per switch plus a `behavior` JSONB for the odd ones out.
+Self-documenting schema and queryable without JSON operators — neither of which anything here needs —
+in exchange for a migration per new behavior.
 
-*Alternative considered:* JSONB for everything, no typed columns. Uniform, but it throws away NOT NULL
-and type checks on the six switches that genuinely are universal, and makes the SQL predicates in
-`lint.go` and `section.go` read through JSON operators for no reason.
+*Alternative considered:* `staleness_days` as a typed column with the rest in JSONB, since it is the
+one value that exists as a column today. Rejected for the same reason: it is read through
+`ThresholdStore`, never from SQL, so the column buys nothing and splits one type's behavior across two
+representations.
 
-**D4 — Behavior is keyed on doc_type; the category→doc_type mapping becomes data; classification
-*within* a category stays in Go.**
+**D4 — Classification stays entirely in Go; only behavior becomes data.**
 
-Categories are what users define — the column is a free-form `varchar(50)` with no allowlist and no
-CHECK constraint, so a tenant can already write any category it likes. Doc_types are the opposite:
-closed by construction, because `store_memory` does not accept one and `InferDocType` is the only
-thing that mints them. Any category the switch does not know collapses to `reference` at 90 days,
-with `needs_verification` guarding anything that mentions a code path. A self-hoster with their own
-taxonomy has no way to say otherwise.
+`InferDocType` is untouched — the category switch and the `projects` slug rules both stay. Deriving the
+doc_type from the category is what keeps categories free-form while still giving a place to attach
+behavior, and it changes rarely enough that a Go line is the right cost.
 
-So the mapping gets its own table, `category_doc_types(category, doc_type)`, seeded with the six
-categories the switch knows today. Adding `runbooks → runbook` plus a `runbook` policy row is then a
-data change. What stays in Go is classification *within* a category: `projects` + slug `state` →
-`project_state`, `projects` + slug containing audit/plan/design/backlog → `audit`. Those are rules,
-not a map, and they are the only ones.
+The consequence, accepted rather than solved: a category the switch does not recognize lands on
+`reference` and its 90-day clock, and adding a genuinely new doc_type means editing the switch. The
+verified facts in the Context section still describe the shape of that — categories are open, doc_types
+are closed, `store_memory` does not accept one — but they are the design, not a defect.
 
-*Alternative considered, and briefly recommended:* key policy on `(tenant, category)` and drop the
-doc_type indirection, on the theory that policy should attach to what users control. It flattens
-`projects` — one category holding three doc_types at 14, 30 and 90 days, which is 102 of the 240
-documents in the reference instance. Doc_type is deliberately finer-grained than category; keying on
-category throws that away.
+The split is: *what kind of document is this* stays code; *how is this kind maintained* becomes data.
 
-*Alternative considered:* move all classification into config, slug markers included. Needs a pattern
-language, a matcher, precedence rules, and a validator — a config rule engine, to save editing one
-switch statement that changes once a year. The exact-match half of the mapping delivers the
-extensibility; the rule half does not.
+*Alternative considered, and briefly specced:* a `category_doc_types(category, doc_type)` mapping
+table, so adding a category with its own behavior needed no code. Rejected — it is complexity that
+breeds rigidity for a derivation that changes once in a long while, and it adds a second table that
+must agree with both `InferDocType`'s slug rules and the policy table.
+
+*Alternative considered:* key policy on `(tenant, category)` and drop the doc_type indirection, on the
+theory that policy should attach to what users control. It flattens `projects` — one category holding
+three doc_types at 14, 30 and 90 days, which is 102 of the ~240 documents in the reference instance.
+
+*Alternative considered:* let the writer declare the doc_type on `store_memory`, making the derivation
+optional. Rejected by the user: derivation from the category is the intended design, not a workaround.
 
 **D5 — Cross-tenant read scope stays compiled-in.**
 
@@ -153,55 +164,72 @@ introducing a parallel accessor.
 `IsEpisodic`, `IsPrunableEpisodic`, `EpisodicDocTypes`, `PrunableEpisodicDocTypes` go away rather than
 becoming policy-backed shims. Keeping them would preserve "episodic" as a concept the schema no
 longer has, and the term is already doing double duty for "append-per-day" and "exempt from
-curation". Where SQL needs a doc_type array (`doc_type <> ALL(?)` in `lint.go`), the array is derived
-from the policy rows instead.
+curation". Where SQL needs a doc_type array (`doc_type <> ALL(?)` in `lint.go`), the array is computed
+in Go from the cached rule sets instead.
 
 ## Risks / Trade-offs
 
 - **A wrong row silently disables a guard, with no compile-time check.** → Validation on write,
   effective-policy inspection through the admin surface, and a `lint_memory` finding for a doc_type
   whose policy disables every maintenance signal.
-- **An unmapped category silently gets `reference`/90d.** That is today's behavior, not a regression,
-  but the mapping table makes it fixable and therefore worth surfacing. → `lint_memory` reports
-  categories present in documents with no mapping row, so a typo'd or new category is visible instead
-  of quietly inheriting a 90-day clock.
+- **An unrecognized category still gets `reference`/90d, silently.** Unchanged from today, and now a
+  deliberate non-goal rather than a gap (D4). → Nothing to mitigate in this change; it is the accepted
+  cost of keeping derivation in Go. Revisit only if a self-hoster asks for their own doc_type without
+  touching code.
 - **A schemaless column accepts typos.** `{"chain_previos": true}` stores fine, is read by nothing,
   and errors nowhere. → The registry rejects unregistered keys and wrong value shapes on write, and
   exposes the accepted keys so a row can be written without reading the source. This is the one place
   where the flexibility would otherwise become a footgun.
 - **Behavior-preserving refactors are where regressions hide.** → The seeded default table in the spec
-  is the test oracle: assert each of the 8 doc_types resolves to the flag set that reproduces current
-  behavior, and keep the existing episodic tests, retargeted at the policy.
-- **Renaming a table in a public schema is a visible migration.** → Additive column widening plus a
-  rename in one migration; older code reading `staleness_thresholds` breaks, which is why this ships
-  as its own release rather than riding along with a feature.
-- **`0` as a sentinel for "never" reads as a typo.** → Rejected negative values, and the column comment
-  plus the tool description state the sentinel. Alternative was a second boolean that can contradict
-  the number.
+  is the test oracle: assert each of the 8 doc_types resolves to the rule set that reproduces current
+  behavior, and keep the existing episodic tests, retargeted at the rules.
+- **Renaming a table and dropping a column in a public schema is a visible migration.** → One
+  migration adds `rules`, backfills, drops `days`, renames; older code reading
+  `staleness_thresholds.days` breaks, which is why this ships as its own release rather than riding
+  along with a feature.
+- **`0` as a sentinel for "never" reads as a typo.** → Negative values are rejected, and the registry
+  description states the sentinel. Alternative was a second boolean that can contradict the number.
+- **`embed: false` means the data has no embeddings, so flipping it true later does not retroactively
+  embed anything.** → State it in the registry description; a re-store or re-embed pass is required.
+- **`embed: false` alone does not hide a document from search.** The semantic arm requires
+  `s.embedding IS NOT NULL`, but the keyword arm matches `s.tsv` with no such condition, so an
+  unembedded document still surfaces lexically. → `default_search` is a separate rule and adds a
+  predicate to *both* arms; validation rejects `default_search: true` with `embed: false`.
+- **Dropping `journal` and `handoff` out of default search is a real behavior change, inside a change
+  otherwise sold as behavior-preserving.** → Called out explicitly in the proposal and given its own
+  spec scenario, so the test oracle asserts seven-eighths reproduction plus one intended difference
+  rather than blanket equivalence.
 - **Deleting the predicates touches 8 call sites in one change.** → All eight are in the four files
   named in the proposal, and every one has an existing test.
 
 ## Migration Plan
 
-1. One migration: add the flag columns to `staleness_thresholds`, backfill them from the seed table in
-   the spec, then rename to `doc_type_policies`. Existing `days` values for the 6 non-episodic types
-   are preserved; `journal` and `handoff` are set to `0`.
-2. Extend the seed loop so a fresh install writes full rows, still `ON CONFLICT DO NOTHING`.
+0. `document-listing` ships first. It adds `slug_prefix` / `order_by` / `order` / `limit` to
+   `list_documents`, which is what makes `journal`'s `default_search: false` safe — without it,
+   hiding journals from unfiltered search leaves only exact-slug fetch or list-everything.
+1. One migration: add `rules` to `staleness_thresholds`, backfill each row from the seed table in the
+   spec (carrying the existing `days` value into `staleness_days` for the 6 non-episodic types, `0`
+   for `journal` and `handoff`), drop `days`, then rename to `doc_type_policies`.
+2. Extend the seed loop so a fresh install writes full rule sets, still `ON CONFLICT DO NOTHING`.
 3. Replace the 8 call sites; delete the maps and predicates.
 4. Ship as its own release before `prompts-category`.
 
-Rollback: the rename is the breaking step. Roll back by renaming the table back — the extra columns
-are inert to older code, which reads only `doc_type` and `days`.
+Rollback: the rename and the dropped `days` column are the breaking steps. Rolling back means
+renaming the table and restoring `days` from `rules->>'staleness_days'`, so take a snapshot before
+migrating.
 
 ## Open Questions
 
-- Is the `category_doc_types` mapping instance-wide or per-tenant? Specced instance-wide: one
-  taxonomy, defined by the operator, which fits a self-hosted instance whose tenants share a
-  vocabulary. Adding `tenant_id` is additive (a nullable column plus a two-step resolution), so this
-  is reversible. Per-tenant would mean two tenants wanting different ages for the same category name
-  must map to separate doc_types — `runbook_fast` / `runbook_slow` — which is honest but clunky.
-- Does `prunable` earn a column now, given nothing implements retention or eviction (the cleanup
-  scanner only enqueues pairs and prunes `mutation_history`; `ArchiveByID` has one caller,
-  `link_documents ... supersedes`)? Seeding it documents the intent, but it is a flag nothing reads.
+- **Per-tenant verification ages.** They do not exist today: `staleness_thresholds` is keyed on
+  doc_type alone, so ages are per-type and instance-wide (`learnings` 180d, `projects` 14/30/90d,
+  `preferences` 365d, `tools` 90d). Proceeding with that spread unchanged. Per-tenant ages would be a
+  separate change adding a tenant dimension to the key, and would have to layer over the per-type
+  spread rather than replace it.
+- Does `prunable` earn a rule key, given nothing implements retention or eviction (the cleanup scanner
+  only enqueues pairs and prunes `mutation_history`; `ArchiveByID` has one caller,
+  `link_documents ... supersedes`)? Seeding it documents the intent, but it is a rule nothing reads.
 - Should the admin surface expose policy editing, or is operator-edits-the-table via SQL enough for
   the first cut?
+- **Per-document expiry** (`documents.expires_at`, nullable, filtered on read) for transient
+  knowledge. Raised alongside this design, but it is per-document rather than per-type, so it is out of
+  scope here. Confirm whether it belongs in this change or its own.

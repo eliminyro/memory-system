@@ -3,9 +3,10 @@
 ### Requirement: Prompts category and prompt doc_type
 
 The system SHALL accept `prompts` as a document category and SHALL classify documents in that
-category as doc_type `prompt`, via a seeded `category_doc_types` row. `prompt` SHALL have a seeded
-`doc_type_policies` row so policy lookup never falls through to the `reference` default. Both are
-data: this change adds no doc_type constant and no `InferDocType` case.
+category as doc_type `prompt`. `prompt` SHALL be a member of `ValidDocTypes`, SHALL be returned by
+`InferDocType` for the `prompts` category, and SHALL have a seeded `doc_type_policies` row so policy
+lookup never falls through to the `reference` default. Classification is code and behavior is data —
+the constant and the switch case are part of this change; the exemptions are not.
 
 The canonical path shape SHALL be `prompts/<agent>/<slug>`, where `<agent>` identifies the consuming
 agent (e.g. `derpy`) and `<slug>` names one instruction document (e.g. `persona`, `no-slop`).
@@ -13,7 +14,7 @@ agent (e.g. `derpy`) and `<slug>` names one instruction document (e.g. `persona`
 #### Scenario: Storing a prompt document
 
 - **WHEN** `store_memory` is called with category `prompts`, subcategory `derpy`, slug `persona`
-- **THEN** the document is stored with doc_type `prompt`, resolved through the mapping row
+- **THEN** the document is stored with doc_type `prompt`
 
 #### Scenario: Policy lookup resolves
 
@@ -33,8 +34,9 @@ seeded `doc_type_policies` row for `prompt` — no compiled-in exemption class, 
 | `cleanup_scan` | `false` | Never enqueued as a near-duplicate pair |
 | `lint_stale_check` | `false` | Never reported stale by `lint_memory` |
 | `prunable` | `false` | Never removed by retention or eviction |
-| `search_default_visible` | `false` | Absent from unfiltered `search_memory` |
-| `behavior` | `{}` | No subset behavior; `chain_previous` does not apply |
+| `embed` | `false` | No embeddings written — prompts are assembled by scope, never retrieved by similarity |
+| `default_search` | `false` | Absent from unfiltered `search_memory`, on both the semantic and keyword arms |
+| `chain_previous` | absent | Prompts do not chain |
 
 An operator who wants different behavior for their own instruction documents SHALL be able to get it
 by editing the row, without a code change.
@@ -87,8 +89,9 @@ Writes are unaffected: they already land in the caller's own tenant.
 
 `search_memory` SHALL omit prompt documents from results unless the caller explicitly narrows to them
 via the existing `category` or `doc_type` filters. Instruction text overlaps knowledge text heavily
-and would otherwise displace real answers. This follows from `search_default_visible = false` on the
-`prompt` policy row rather than a doc_type check in the query.
+and would otherwise displace real answers. This follows from `embed: false` plus `default_search: false`
+on the `prompt` policy row rather than a doc_type check in the query. `embed: false` alone would not be
+enough — the keyword arm of the candidate query matches `s.tsv` without requiring an embedding.
 
 #### Scenario: Unfiltered search omits prompts
 
@@ -98,7 +101,7 @@ and would otherwise displace real answers. This follows from `search_default_vis
 #### Scenario: Explicit filter includes prompts
 
 - **WHEN** `search_memory` is called with `category="prompts"` or `doc_type="prompt"`
-- **THEN** matching prompt documents are returned normally
+- **THEN** matching prompt documents are returned on the keyword path, with no semantic contribution since they carry no embeddings
 
 ### Requirement: Prompt scope targeting
 
