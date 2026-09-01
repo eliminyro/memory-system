@@ -2,9 +2,10 @@
 
 ### Requirement: Doc_type policy table
 
-The system SHALL store one policy row per doc_type in `doc_type_policies`, the migrated
-`staleness_thresholds` table, replacing the compiled-in `episodicDocTypes` and `neverPruneDocTypes`
-maps.
+The system SHALL store one policy row per doc_type in `doc_type_policies`, replacing the compiled-in
+`episodicDocTypes` and `neverPruneDocTypes` maps and the `staleness_thresholds` table. Because v1.0.0
+is re-cut rather than superseded, the table is created in its final shape — there is no prior released
+schema to migrate.
 
 Scalar rules SHALL be nullable typed columns, where NULL means "inherit from the `reference` row".
 NULL must stay distinguishable from a set value, because `staleness_days = 0` means "never check" and
@@ -34,7 +35,7 @@ doc_types exist: `InferDocType` is still the only thing that mints one.
 
 #### Scenario: Every valid doc_type has a policy
 
-- **WHEN** the server finishes migrating
+- **WHEN** the server finishes initializing its schema
 - **THEN** a policy row exists for every member of `ValidDocTypes`
 
 #### Scenario: NULL inherits, zero does not
@@ -327,6 +328,73 @@ write, inside the existing transaction, so no partial state is ever stored.
 
 - **WHEN** a store fails `slug_format` validation
 - **THEN** no document, section, embedding, or history row is created
+
+### Requirement: put_section — add or replace one section by path
+
+Section-level writes are addressed by section UUID today (`update_section`, `delete_section`), and
+there is no operation that adds a section at all. An agent holds a path and a heading, not a UUID, so
+every targeted edit costs a prior read and every addition costs a whole-document rewrite. That is why
+the journal convention exists.
+
+The system SHALL provide `put_section(category, subcategory, slug, heading, content)`: upsert one
+section, addressed by path. A heading not present is added; a heading already present has its content
+replaced; a document that does not exist is created.
+
+It SHALL route through the same write path as `store_memory` with merge semantics, not a parallel
+implementation, so `subcategory` and `slug_format` validation, the `embed` decision, `chain_previous`,
+history and audit all apply identically. A second write entry point that skipped the rules would defeat
+the change it belongs to.
+
+Two interactions with `write_mode`:
+
+- A doc_type whose `write_mode` is `replace` SHALL still accept `put_section`. `write_mode` governs what
+  happens when a whole document is stored; a section-level write is a different operation, and
+  `update_section` already edits one section of a `replace`-mode document today.
+- A doc_type whose `write_mode` is `append_only` SHALL reject a `put_section` naming an existing
+  heading, matching the immutability that setting declares.
+
+The duplicate guard SHALL NOT run for `put_section`. It compares whole-document centroids, which is
+meaningless for a partial write — the same reasoning that makes `duplicate_guard: true` incompatible
+with a non-`replace` `write_mode`.
+
+`store_memory` and `update_section` are both retained. `store_memory` remains the primitive for
+authoring a whole document and is what the import path uses; `update_section` is the only way to change
+a heading, and its UUID form is correct when a caller already holds IDs from a read.
+
+#### Scenario: Adding a section without a read
+
+- **WHEN** `put_section` is called with a heading not present in the target document
+- **THEN** the section is added, the document's other sections are untouched, and no prior read was required
+
+#### Scenario: Replacing a section by heading
+
+- **WHEN** `put_section` is called with a heading already present
+- **THEN** that section's content is replaced and no duplicate section is created
+
+#### Scenario: Creating the document
+
+- **WHEN** `put_section` names a path with no existing document
+- **THEN** the document is created holding that one section
+
+#### Scenario: Rules are not bypassed
+
+- **WHEN** `put_section` targets `journal/sept-1`, or a handoff with no subcategory
+- **THEN** it is rejected by the same `slug_format` and `subcategory` validation that `store_memory` applies
+
+#### Scenario: Replace-mode types still accept it
+
+- **WHEN** `put_section` targets a `learning` document, whose `write_mode` is `replace`
+- **THEN** the section is upserted and the document's other sections survive
+
+#### Scenario: Append-only rejects an existing heading
+
+- **WHEN** `put_section` names an existing heading on a doc_type whose `write_mode` is `append_only`
+- **THEN** the write is rejected
+
+#### Scenario: No duplicate guard on a partial write
+
+- **WHEN** `put_section` writes to a doc_type whose `duplicate_guard` is true
+- **THEN** the guard does not run and the write is not blocked as a near-duplicate
 
 ### Requirement: Policy is instance-wide
 

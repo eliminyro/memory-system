@@ -70,3 +70,13 @@
 - [ ] 9.2 `lint_memory` finding for a doc_type whose rules disable every maintenance signal
 - [ ] 9.3 Document the table, the NULL-inherits convention, the `0` sentinel, the `embed`/`default_search` split and its non-retroactivity, `write_mode` semantics, that policy is instance-wide and admin-only, and that raw SQL editing is unsupported
 - [ ] 9.4 `gofmt -w .` and `golangci-lint run` clean; full test suite green
+
+## 10. put_section
+
+- [ ] 10.1 `PutSectionInput` (`category`, `subcategory`, `slug`, `heading`, `content`, `tenant_id`) and the `put_section` MCP tool
+- [ ] 10.2 Implement it as a thin call into the shared merge path with a one-section payload — NOT a parallel write implementation, so identity validation, the `embed` decision, `chain_previous`, history and audit all apply
+- [ ] 10.3 Creates the document when the path has none; upserts by heading when it exists
+- [ ] 10.4 Accept it for `replace`-mode doc_types (a section write is not a document store); reject an existing heading for `append_only`; skip the duplicate guard entirely, since it compares whole-document centroids
+- [ ] 10.5 REST equivalent under `/api/`, sharing the same service method
+- [ ] 10.6 Tool description states when to reach for `put_section` versus `store_memory`, so a caller stops rewriting documents to add one section
+- [ ] 10.7 Tests: adds without a prior read; replaces by heading with no duplicate; creates a missing document; rejected by `slug_format` and `subcategory` validation exactly as `store_memory` is; works on a `replace`-mode type without truncating; `append_only` collision rejected; no duplicate-guard block

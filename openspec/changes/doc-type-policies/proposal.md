@@ -35,6 +35,11 @@ free-form while giving behavior somewhere to attach; it is not what needs changi
   plain append.
 - **`slug_format`** validates identity on write. `journal/sept-1` is rejected at the door instead of
   becoming a junk document.
+- **New `put_section` tool** — upsert one section addressed by path and heading. Section writes are
+  UUID-addressed today (`update_section`, `delete_section`) and there is no add-section operation at
+  all, so an agent holding a path and a heading pays a read for every edit and a whole-document rewrite
+  for every addition. `put_section` routes through the same merge path rather than being a second write
+  implementation, so it cannot bypass the rules.
 - **`subcategory`** (`optional` | `required` | `forbidden`) — handoffs need a project, journals must
   not have one.
 - **`embed` and `default_search` are separate rules.** The semantic arm of the search query skips
@@ -93,6 +98,7 @@ tests assert.
 - `internal/repository/section.go` — both arms of the search candidate query gain the `default_search` predicate.
 - Embedding write path — skipped when `embed` is false.
 - `internal/mcp/admin_tools.go`, `internal/server/admin_api.go` — read and write policy rows.
+- `internal/mcp/tools.go`, `internal/server/api.go` — the `put_section` tool and its REST equivalent, both thin callers of the shared merge path.
 
 Data: `doc_type_policies` is created in its final shape; `staleness_thresholds` does not ship. No
 document rows touched. The maintainer's own instance is migrated out of band by a Kubernetes job —
