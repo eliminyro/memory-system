@@ -83,7 +83,7 @@ tests assert.
 
 - `internal/models/staleness.go` — three maps and four predicates go away; the default rule set replaces `DefaultStalenessThresholds`. `InferDocType` untouched.
 - `internal/models/` — new `DocTypePolicy` model with nullable typed fields plus `Rules`.
-- `internal/database/database.go:249` — migration adding the columns and `rules`, backfilling `days` into `staleness_days`, dropping `days`, renaming the table; thin named CHECK constraints; seed loop writes full rows.
+- `internal/database/database.go:249` — creates `doc_type_policies` with the typed columns and `rules`, thin named CHECK constraints, and the `pg_notify` trigger; seed loop writes full rows. No widening or rename: v1.0.0 is re-cut, so there is no prior released schema.
 - `internal/staleness/staleness.go:68` — the TTL cache is replaced by a boot-loaded, admin-invalidated policy store.
 - `internal/service/memory.go:1123` — duplicate guard reads `duplicate_guard`.
 - `internal/service/memory.go:1181-1192` — section handling branches on `write_mode`.
@@ -94,6 +94,9 @@ tests assert.
 - Embedding write path — skipped when `embed` is false.
 - `internal/mcp/admin_tools.go`, `internal/server/admin_api.go` — read and write policy rows.
 
-Data: `staleness_thresholds` migrates in place to `doc_type_policies`. No document rows touched.
+Data: `doc_type_policies` is created in its final shape; `staleness_thresholds` does not ship. No
+document rows touched. The maintainer's own instance is migrated out of band by a Kubernetes job —
+scope in the design's Migration Plan, and it is nearly empty because no `journal` documents exist yet
+and no threshold was hand-tuned.
 
 Callers: no tool signature changes. Behavior changes only for the three seeded exceptions above.

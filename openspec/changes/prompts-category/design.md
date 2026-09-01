@@ -135,17 +135,19 @@ speak JSON-RPC over SSE and parse `data:` lines, which is what the hook engine d
 
 ## Migration Plan
 
-0. `doc-type-policies` ships first, in its own release.
-1. Migration adds `documents.prompt_scope TEXT NULL` and seeds the `prompt` row in
-   `doc_type_policies`. Both are additive; no backfill, no existing row touched.
-2. Deploy server. Existing callers are unaffected — `prompts` is a category nothing currently writes.
-3. Import the local instruction files into `prompts/<agent>/<slug>` (one-time, via the existing import
-   path).
-4. Client work lands separately in `claude-hook-engine`. Until it does, the files on disk stay the
-   source of truth and nothing regresses.
+Ships inside the re-cut v1.0.0 alongside `doc-type-policies`, `document-listing`, and
+`config-invalidation`, so there is no released schema to migrate from and no ordering constraint
+between the four beyond implementation convenience.
 
-Rollback: revert the server deploy. The added column and threshold row are inert to older code, so
-they can stay.
+1. Initial schema carries `documents.prompt_scope` and the seeded `prompt` policy row.
+2. The retrieval API and own-tenant-only scoping land with it.
+3. Client work lands separately in `claude-hook-engine`. Until it does, the files on disk stay the
+   source of truth and nothing regresses.
+4. One-time import of the local instruction files into `prompts/<agent>/<slug>` after deploy — manual,
+   not part of the release.
+
+Nothing in the maintainer's instance is affected: no `prompts` category exists yet, so every rule this
+change introduces applies to documents that have not been written.
 
 ## Open Questions
 

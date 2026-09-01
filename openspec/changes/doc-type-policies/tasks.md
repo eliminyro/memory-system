@@ -2,10 +2,11 @@
 
 - [ ] 1.1 `DocTypePolicy` model in `internal/models/` — `doc_type` PK, nullable typed columns (`staleness_days *int`, `duplicate_guard`/`cleanup_scan`/`lint_stale_check`/`embed`/`default_search`/`prunable` `*bool`, `write_mode`/`slug_format`/`subcategory` as `*string` with Go enum types), plus `Rules` JSONB. Nullable throughout so NULL-means-inherit stays distinguishable from `staleness_days: 0`
 - [ ] 1.2 Replace `DefaultStalenessThresholds` with the seed rows from the spec: `reference` carries an explicit value for every column; the other seven set only what differs
-- [ ] 1.3 Migration in `internal/database/database.go`: add the typed columns and `rules`, backfill `days` → `staleness_days` (`0` for `journal`/`handoff`), drop `days`, rename the table to `doc_type_policies`
+- [ ] 1.3 Create `doc_type_policies` in `internal/database/database.go` with the typed columns and `rules`. No widening, backfill, or rename — v1.0.0 is re-cut, so there is no prior released schema (design Migration Plan)
 - [ ] 1.4 Named CHECK constraints — `chk_staleness_days_range`, `chk_write_mode_enum`, `chk_slug_format_enum`, `chk_subcategory_enum`, `chk_default_search_needs_embed`, `chk_rules_is_object`. Thin on purpose; Go validates first (design D4)
 - [ ] 1.5 Extend the seed loop to write full rows, keeping `ON CONFLICT DO NOTHING` so admin edits survive
-- [ ] 1.6 Tests: every member of `ValidDocTypes` has a seeded row; a doc_type with no row falls back to `reference`; NULL inherits while `0` means never; the migration carries existing `days` values through unchanged
+- [ ] 1.6 Tests: every member of `ValidDocTypes` has a seeded row; a doc_type with no row falls back to `reference`; NULL inherits while `0` means never
+- [ ] 1.7 Out-of-repo: a Kubernetes job for the maintainer's own instance — verify no threshold was hand-tuned away from the defaults, then drop the orphaned `staleness_thresholds` table once `doc_type_policies` has seeded
 
 ## 2. Policy store — boot load, admin invalidation, no timer
 

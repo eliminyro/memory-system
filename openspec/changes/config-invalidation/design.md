@@ -122,7 +122,10 @@ timer this design exists to remove, and hides the failure rather than reporting 
    shutdown.
 3. `globalconfig` registers its loader. Write-through unchanged.
 4. `/~/ready` reports listener state.
-5. `doc-type-policies` lands afterwards and registers its store; its trigger ships with its migration.
+5. `doc-type-policies` registers its store and creates its own trigger with its table.
+
+All four changes ship inside the re-cut v1.0.0, so there is no released intermediate state and no
+release ordering to observe — only implementation ordering.
 
 Rollback: drop the trigger and stop starting the listener. Write-through remains, so behavior returns
 exactly to today's.

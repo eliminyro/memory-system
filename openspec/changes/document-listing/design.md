@@ -102,11 +102,12 @@ offset into an unbounded result set means nothing.
 
 ## Migration Plan
 
-No migration. Every parameter is optional, every default reproduces current behavior, and the change
-can ship in any release.
+No migration. Every parameter is optional and every default reproduces current behavior.
 
-Sequencing: land this before `doc-type-policies`, which hides `journal` from default search. Doing it
-in that order means journals lose the meaning path only once the date path exists.
+Ships inside the re-cut v1.0.0 with the other three changes, so there is no release ordering to
+observe. It should still be *implemented* before `doc-type-policies` hides `journal` from default
+search, so journals never lose the meaning path before the date path exists — but since both land in
+the same release, no intermediate state is ever published.
 
 ## Open Questions
 

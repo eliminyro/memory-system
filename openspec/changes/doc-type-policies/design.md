@@ -176,21 +176,26 @@ needs a doc_type array (`doc_type <> ALL(?)` in `lint.go`), it is computed in Go
 
 ## Migration Plan
 
-0. `config-invalidation` ships first (or alongside `document-listing` — they are independent). The
-   policy store registers with its listener, and the `doc_type_policies` trigger ships with the
-   migration in step 2.
-1. `document-listing` ships next. It adds `slug_prefix` / `order_by` / `order` / `limit` to
-   `list_documents`, which is what makes `journal`'s `default_search: false` safe — without it, hiding
-   journals from unfiltered search leaves only exact-slug fetch or list-everything.
-2. One migration: add the typed columns and `rules` to `staleness_thresholds`, backfill `days` into
-   `staleness_days` (and `0` for `journal` / `handoff`), drop `days`, add the named `CHECK`s, rename the
-   table to `doc_type_policies`.
-3. Extend the seed loop to write full rows, still `ON CONFLICT DO NOTHING`.
-4. Replace the call sites, add the write-path rules, delete the maps and predicates.
-5. Ship as its own release — the rename and the dropped column are breaking — before `prompts-category`.
+**memory-system is being re-cut as v1.0.0 with these changes rather than bumped to v2**, so there is no
+released schema to migrate from. `doc_type_policies` is created in its final shape by the initial
+schema; there is no widening of `staleness_thresholds`, no backfill of `days`, no rename, and no
+rollback procedure to publish.
 
-Rollback: the rename and dropped `days` are the breaking steps. Rolling back means renaming the table
-and restoring `days` from `staleness_days`, so snapshot before migrating.
+1. Initial schema creates `doc_type_policies` with the typed columns, `rules`, the named `CHECK`s, and
+   the `pg_notify` trigger. The seed loop writes full rows, `ON CONFLICT DO NOTHING`.
+2. Register the policy store with the `config-invalidation` listener.
+3. Replace the call sites, add the write-path rules, delete the maps and predicates.
+4. Order relative to the other three changes is free — the release ships them together.
+
+**The one instance that does need migrating is the maintainer's own**, handled out of band by a
+Kubernetes job rather than by in-app migration code. Its scope is small and worth confirming rather
+than assuming:
+
+- No `journal` documents exist yet, so `slug_format: date`, `write_mode: merge_sections`, and the
+  default-search change apply to documents that have not been written. No existing row can conflict.
+- Stored thresholds match `DefaultStalenessThresholds` exactly, so no hand-tuned value needs carrying
+  over. The job should verify this rather than trust it.
+- After `doc_type_policies` seeds itself on boot, the orphaned `staleness_thresholds` table is dropped.
 
 ## Open Questions
 

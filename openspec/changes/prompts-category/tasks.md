@@ -1,5 +1,6 @@
-> **Depends on `doc-type-policies`.** Do not start until it has landed — groups 1 and 2 assume the
-> `doc_type_policies` table exists and that every curation mechanism reads it.
+> **Builds on `doc-type-policies`.** Groups 1 and 2 assume the `doc_type_policies` table exists and
+> that every curation mechanism reads it. Both ship inside the re-cut v1.0.0, so this is an
+> implementation ordering note, not a release dependency.
 
 ## 1. Model and schema
 
