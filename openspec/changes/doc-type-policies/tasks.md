@@ -13,7 +13,8 @@
 - [ ] 2.2 At boot: load all rows, resolve NULLs against `reference`, validate the merged set, hold the effective struct per doc_type in memory
 - [ ] 2.3 Boot validation failure stops the server, naming the doc_type and the offending field
 - [ ] 2.4 `Recompute()` on the store, called by the admin write path so an edit takes effect in process
-- [ ] 2.5 Tests: invalid row prevents startup with a message naming the doc_type; an admin write is visible to the next request; no query is issued against the policy table between writes
+- [ ] 2.5 Register the store with the `config-invalidation` listener, and add the `doc_type_policies` trigger to this change's migration, so other replicas converge
+- [ ] 2.6 Tests: invalid row prevents startup with a message naming the doc_type; an admin write is visible to the next request; no query is issued against the policy table between writes
 
 ## 3. Validation
 

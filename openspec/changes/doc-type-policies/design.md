@@ -96,10 +96,15 @@ Loading at boot restores fail-fast — a bad row stops the server naming the doc
 of degrading silently at minute five of production. Recomputing on admin write keeps edits live. The two
 were previously thought to be in tension; they only are if the trigger is a timer rather than an event.
 
-*Known limit:* a second replica's admin write will not invalidate this replica's in-memory set.
-`LISTEN`/`NOTIFY` on the table is the fix, deferred until multi-replica is real —
-`internal/service/import_worker.go`'s peer-replica logic shows it is contemplated, so this is a real
-deferral rather than a non-issue.
+This is the pattern `internal/globalconfig/globalconfig.go:3` already uses — "Load at boot; refresh
+after every write (write-through)" with an atomic snapshot swap — so it is the established shape here
+rather than a new invention.
+
+Multi-replica convergence comes from the **`config-invalidation`** change, which this one depends on: a
+trigger on `doc_type_policies` emits `pg_notify` on commit, and a shared listener reloads the store on
+every other replica. Write-through is kept for the writing replica, so a listener failure never delays
+the replica being administered. Without that dependency, two replicas could enforce different rules —
+one rejecting a slug the other accepts — which is worse than lag, because nothing converges.
 
 **D4 — Admin-only writes, which is why the CHECKs can stay thin.**
 
@@ -159,8 +164,8 @@ needs a doc_type array (`doc_type <> ALL(?)` in `lint.go`), it is computed in Go
 - **The loose JSONB half accepts typos silently.** An experimental key nothing implements does nothing
   and errors nowhere. → `lint_memory` reports `rules` keys the server does not implement, so a typo is a
   finding rather than a mystery. Rejecting them would reintroduce the migration cost D1 exists to avoid.
-- **Removing the TTL means an admin edit on one replica does not reach another.** → Named in D3, with
-  `LISTEN`/`NOTIFY` as the known fix. Single-replica today.
+- **Removing the TTL means an admin edit on one replica does not reach another.** → Handled by the
+  `config-invalidation` dependency, not deferred: trigger-emitted `pg_notify` plus a shared listener.
 - **`embed: false` is not retroactive.** Flipping it true later leaves existing documents unembedded. →
   Stated in the spec; a re-store is required.
 - **Deleting the predicates touches 8 call sites at once.** → All eight are in the four files named in
@@ -171,7 +176,10 @@ needs a doc_type array (`doc_type <> ALL(?)` in `lint.go`), it is computed in Go
 
 ## Migration Plan
 
-1. `document-listing` ships first. It adds `slug_prefix` / `order_by` / `order` / `limit` to
+0. `config-invalidation` ships first (or alongside `document-listing` — they are independent). The
+   policy store registers with its listener, and the `doc_type_policies` trigger ships with the
+   migration in step 2.
+1. `document-listing` ships next. It adds `slug_prefix` / `order_by` / `order` / `limit` to
    `list_documents`, which is what makes `journal`'s `default_search: false` safe — without it, hiding
    journals from unfiltered search leaves only exact-slug fetch or list-everything.
 2. One migration: add the typed columns and `rules` to `staleness_thresholds`, backfill `days` into
@@ -197,4 +205,3 @@ and restoring `days` from `staleness_days`, so snapshot before migrating.
 - **Does `prunable` earn a column** when nothing implements retention or eviction? The cleanup scanner
   only enqueues near-duplicate pairs and prunes `mutation_history`; `ArchiveByID` has one caller,
   `link_documents ... supersedes`. Seeding it documents intent, but it is a rule nothing reads.
-- **`LISTEN`/`NOTIFY` for multi-replica invalidation** — deferred, see D3.
