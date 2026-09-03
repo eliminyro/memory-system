@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>memory — bootstrap</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <main class="setup-main">
+    <div class="setup-card">
+      <h1>Bootstrap this instance</h1>
+      <p class="meta">No admin exists yet. Paste the bootstrap token printed to the
+      server logs at startup (<code>docker logs</code>) to provision the initial
+      tenant and admin API key.</p>
+
+      <form id="bootstrap-form" class="setup-form">
+        <label class="setup-label" for="bootstrap-token">Bootstrap token</label>
+        <input id="bootstrap-token" class="admin-input" type="password" autocomplete="off" required>
+
+        <!-- Founding-tenant name: always visible (the personal tenant is created
+        in every bootstrap flow, OAuth or not), sent as tenant_name. -->
+        <label class="setup-label" for="bootstrap-tenant-name">Founding tenant name <span class="meta">(optional)</span></label>
+        <input id="bootstrap-tenant-name" class="admin-input" type="text" autocomplete="off">
+        <p class="meta">Names your own personal tenant — your private shelf, kept
+        separate from the shared common pool. Optional: leave it blank and the
+        server derives a default name.</p>
+
+        <!-- OAuth status block: always visible; copy filled by bootstrap.js. -->
+        <p id="bootstrap-status" class="meta"></p>
+
+        <!-- Mode tabs (CSP-safe: buttons wired via addEventListener). -->
+        <div id="bootstrap-tabs" role="tablist" aria-label="Bootstrap mode">
+          <button id="tab-tokens" class="tab" type="button" role="tab">MCP tokens</button>
+          <button id="tab-oauth" class="tab" type="button" role="tab">OAuth</button>
+        </div>
+
+        <!-- MCP tokens panel -->
+        <div id="panel-tokens" role="tabpanel" aria-labelledby="tab-tokens" hidden>
+          <p class="meta">Provision an admin API key — a Bearer token for MCP and
+          the HTTP API. OAuth is required for the /ui web console and ACL
+          management.</p>
+          <label class="setup-label">
+            <input id="bootstrap-enable-oauth" type="checkbox"> Also enable OAuth for /ui
+          </label>
+          <p id="bootstrap-enable-oauth-note" class="meta" hidden>OAuth isn't
+          configured — set it via environment for now (in-app setup is coming).</p>
+          <!-- The single admin-email field is moved here when the toggle is on. -->
+          <div id="tokens-email-slot"></div>
+        </div>
+
+        <!-- OAuth panel -->
+        <div id="panel-oauth" role="tabpanel" aria-labelledby="tab-oauth" hidden>
+          <!-- Informational copy shown only when OAuth is not configured. -->
+          <p id="bootstrap-oauth-info" class="meta" hidden></p>
+          <!-- Home slot for the single admin-email field (shown when configured). -->
+          <div id="oauth-email-slot">
+            <div id="bootstrap-email-field">
+              <label class="setup-label" for="bootstrap-admin-email">Founding admin email <span class="meta">(optional)</span></label>
+              <input id="bootstrap-admin-email" class="admin-input" type="email" autocomplete="off">
+              <p class="meta">The email that will sign in to /ui as the founding
+              administrator — full control over tenants, users, and ACLs from the
+              web console. Optional: leave it blank to skip /ui login for now and
+              administer with the admin API key; you can grant a /ui admin later
+              with the <code>grant_user</code> MCP admin tool.</p>
+            </div>
+          </div>
+        </div>
+
+        <button id="bootstrap-submit" class="sec-btn sec-btn-primary" type="submit">Bootstrap</button>
+      </form>
+
+      <div id="bootstrap-result"></div>
+    </div>
+  </main>
+  <script type="module" src="/bootstrap/bootstrap.js"></script>
+</body>
+</html>

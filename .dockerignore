@@ -1,0 +1,37 @@
+# VCS
+.git
+.gitignore
+
+# Build artifacts (the image builds these from source in-stage)
+/memory-mcp
+/server
+/import
+/longmemeval
+*.exe
+dist/
+
+# Test / coverage output
+*.out
+coverage*
+
+# Local env & data
+.env
+.env.*
+*.db
+memory.db
+
+# OS cruft
+.DS_Store
+
+# Planning / docs / release scratch — not needed to build
+openspec/
+/NOTES.md
+/CHANGELOG_SECTION.md
+*.md
+
+# Benchmarks and their data
+/benchmarks/longmemeval/data
+
+# Legacy
+**/superpowers
+/admin

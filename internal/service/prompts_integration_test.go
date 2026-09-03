@@ -1,0 +1,125 @@
+//go:build integration
+
+package service_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/eliminyro/memory-system/internal/authzseed"
+	apperr "github.com/eliminyro/memory-system/internal/errors"
+	"github.com/eliminyro/memory-system/internal/models"
+	"github.com/eliminyro/memory-system/internal/service"
+)
+
+func promptContent(body string) string { return "# T\n\n## H\n" + body }
+
+// TestPrompts_CurationAndSearch: prompt writes are never duplicate-blocked, and
+// prompts are absent from unfiltered search but returned when filtered.
+func TestPrompts_CurationAndSearch(t *testing.T) {
+	f := newAuthzFixture(t)
+	ctx := ctxFor(f.tenantA, f.subjA)
+	tok := "zebraprompt"
+
+	_, err := f.svc.StoreDocument(ctx, "prompts", strp("derpy"), "persona", promptContent(tok+" one"), false, "", nil, nil)
+	require.NoError(t, err)
+	// Near-identical second prompt: not blocked (prompt duplicate_guard is false).
+	res, err := f.svc.StoreDocument(ctx, "prompts", strp("derpy"), "no-slop", promptContent(tok+" one"), false, "", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "ok", res.Status)
+
+	unfiltered, err := f.svc.Search(ctx, tok, nil, nil, nil, 20, false, "", nil, false)
+	require.NoError(t, err)
+	for _, r := range unfiltered {
+		require.NotEqual(t, models.DocTypePrompt, r.DocType, "prompt absent from unfiltered search")
+	}
+	cat := "prompts"
+	filtered, err := f.svc.Search(ctx, tok, &cat, nil, nil, 20, false, "", nil, false)
+	require.NoError(t, err)
+	var seen bool
+	for _, r := range filtered {
+		if r.DocType == models.DocTypePrompt {
+			seen = true
+		}
+	}
+	require.True(t, seen, "a category-filtered search returns prompts")
+}
+
+// TestPrompts_OwnTenantOnly: a granted tenant's prompt is invisible on every read
+// path while its non-prompt documents remain readable.
+func TestPrompts_OwnTenantOnly(t *testing.T) {
+	f := newAuthzFixture(t)
+	// subjA can read tenant B (member grant), the cross-tenant read path.
+	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
+
+	bCtx := ctxFor(f.tenantB, f.subjB)
+	_, err := f.svc.StoreDocument(bCtx, "prompts", strp("derpy"), "secret", promptContent("b-only prompt marker"), false, "", nil, nil)
+	require.NoError(t, err)
+	_, err = f.svc.StoreDocument(bCtx, "learnings", nil, "shared-"+randToken(), promptContent("b learning marker"), false, "", nil, nil)
+	require.NoError(t, err)
+
+	aCtx := ctxFor(f.tenantA, f.subjA)
+	// get_document of B's prompt path from A: not found (prompts are own-tenant-only).
+	_, err = f.svc.GetDocument(aCtx, "prompts", strp("derpy"), "secret", false, "", nil)
+	require.ErrorIs(t, err, apperr.ErrNotFound)
+
+	// list_documents from A never shows B's prompt.
+	docs, err := f.svc.ListDocuments(aCtx, nil, nil, nil, service.ListOptions{})
+	require.NoError(t, err)
+	for _, d := range docs {
+		require.False(t, d.DocType == models.DocTypePrompt && d.TenantID == f.tenantB, "B's prompt leaked to A")
+	}
+
+	// But B's non-prompt learning is still visible to A via the grant.
+	res, err := f.svc.Search(aCtx, "b learning marker", nil, nil, nil, 20, false, "", nil, false)
+	require.NoError(t, err)
+	var sawLearning bool
+	for _, r := range res {
+		if r.TenantID == f.tenantB {
+			sawLearning = true
+		}
+	}
+	require.True(t, sawLearning, "a granted tenant's non-prompt document stays readable")
+}
+
+// TestScope_Write covers set, preserve-on-omit, update, clear, and that a scope is
+// now accepted on any doc_type (the prompt-only restriction is gone).
+func TestScope_Write(t *testing.T) {
+	f := newAuthzFixture(t)
+	ctx := ctxFor(f.tenantA, f.subjA)
+
+	// Set on a prompt.
+	_, err := f.svc.StoreDocumentScoped(ctx, "prompts", strp("derpy"), "s1", promptContent("x"), false, "", nil, nil, strp("hilo"))
+	require.NoError(t, err)
+	require.Equal(t, "hilo", *scopeOf(t, f, ctx, "prompts", strp("derpy"), "s1"))
+
+	// Omitted on re-store: preserved.
+	_, err = f.svc.StoreDocument(ctx, "prompts", strp("derpy"), "s1", promptContent("y"), false, "", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "hilo", *scopeOf(t, f, ctx, "prompts", strp("derpy"), "s1"))
+
+	// Update.
+	_, err = f.svc.StoreDocumentScoped(ctx, "prompts", strp("derpy"), "s1", promptContent("z"), false, "", nil, nil, strp("a1"))
+	require.NoError(t, err)
+	require.Equal(t, "a1", *scopeOf(t, f, ctx, "prompts", strp("derpy"), "s1"))
+
+	// Clear (empty string).
+	_, err = f.svc.StoreDocumentScoped(ctx, "prompts", strp("derpy"), "s1", promptContent("w"), false, "", nil, nil, strp(""))
+	require.NoError(t, err)
+	sc := scopeOf(t, f, ctx, "prompts", strp("derpy"), "s1")
+	require.True(t, sc == nil || *sc == "")
+
+	// A scope on a NON-prompt document is now accepted (was rejected).
+	_, err = f.svc.StoreDocumentScoped(ctx, "learnings", nil, "l1", promptContent("x"), false, "", nil, nil, strp("hilo"))
+	require.NoError(t, err)
+	require.Equal(t, "hilo", *scopeOf(t, f, ctx, "learnings", nil, "l1"))
+}
+
+func scopeOf(t *testing.T, f *authzFixture, ctx context.Context, category string, subcategory *string, slug string) *string {
+	t.Helper()
+	view, err := f.svc.GetDocument(ctx, category, subcategory, slug, false, "", nil)
+	require.NoError(t, err)
+	return view.Scope
+}

@@ -1,0 +1,57 @@
+services:
+  memory-mcp:
+    image: ghcr.io/eliminyro/memory-system:latest
+    # build: .   # uncomment to build from source
+    ports:
+      - "8090:8080"
+    environment:
+      DATABASE_URL: postgres://memory:memory@postgres:5432/memory?sslmode=disable
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: nomic-embed-text
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: memory
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: memory
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "memory"]
+      interval: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # One-shot: pull the embedding model so the first store_memory can't race it.
+  ollama-init:
+    image: ollama/ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "nomic-embed-text"]
+    restart: "no"
+
+volumes:
+  pgdata:
+  ollama_models:

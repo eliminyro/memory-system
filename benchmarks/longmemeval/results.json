@@ -1,0 +1,1134 @@
+{
+  "run": {
+    "dataset": "/data/longmemeval_s_cleaned.json",
+    "seed": 42,
+    "n": 150,
+    "embedder_provider": "gcp",
+    "embedder_model": "text-embedding-005",
+    "embedder_dims": 768,
+    "commit": "v1.0.0",
+    "timestamp": "2026-08-28T18:23:25Z",
+    "k_values": [
+      5,
+      10
+    ]
+  },
+  "modes": {
+    "hybrid": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9866666666666667
+        },
+        "FullRecallAtK": {
+          "10": 0.8933333333333333,
+          "5": 0.8866666666666667
+        },
+        "MeanMRRAtK": {
+          "10": 0.9555555555555556,
+          "5": 0.9544444444444445
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.9473684210526315,
+            "5": 0.9473684210526315
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8604651162790697,
+            "5": 0.8604651162790697
+          },
+          "MeanMRRAtK": {
+            "10": 0.9651162790697675,
+            "5": 0.9651162790697675
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.95
+          },
+          "FullRecallAtK": {
+            "10": 0.8,
+            "5": 0.775
+          },
+          "MeanMRRAtK": {
+            "10": 0.8708333333333333,
+            "5": 0.8666666666666666
+          }
+        }
+      }
+    },
+    "hybrid_mmr@0.30": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9933333333333333
+        },
+        "FullRecallAtK": {
+          "10": 0.9133333333333333,
+          "5": 0.88
+        },
+        "MeanMRRAtK": {
+          "10": 0.9507777777777778,
+          "5": 0.9507777777777778
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 0.8947368421052632
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8837209302325582,
+            "5": 0.8372093023255814
+          },
+          "MeanMRRAtK": {
+            "10": 0.9612403100775193,
+            "5": 0.9612403100775193
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.975
+          },
+          "FullRecallAtK": {
+            "10": 0.825,
+            "5": 0.8
+          },
+          "MeanMRRAtK": {
+            "10": 0.8570833333333334,
+            "5": 0.8570833333333334
+          }
+        }
+      }
+    },
+    "hybrid_mmr@0.40": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9933333333333333
+        },
+        "FullRecallAtK": {
+          "10": 0.92,
+          "5": 0.9066666666666666
+        },
+        "MeanMRRAtK": {
+          "10": 0.9535555555555555,
+          "5": 0.9535555555555555
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 0.9473684210526315
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.9069767441860465,
+            "5": 0.9069767441860465
+          },
+          "MeanMRRAtK": {
+            "10": 0.9612403100775193,
+            "5": 0.9612403100775193
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.975
+          },
+          "FullRecallAtK": {
+            "10": 0.825,
+            "5": 0.8
+          },
+          "MeanMRRAtK": {
+            "10": 0.8674999999999999,
+            "5": 0.8674999999999999
+          }
+        }
+      }
+    },
+    "hybrid_mmr@0.50": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9933333333333333
+        },
+        "FullRecallAtK": {
+          "10": 0.92,
+          "5": 0.9133333333333333
+        },
+        "MeanMRRAtK": {
+          "10": 0.9557777777777778,
+          "5": 0.9557777777777778
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.9069767441860465,
+            "5": 0.9069767441860465
+          },
+          "MeanMRRAtK": {
+            "10": 0.9651162790697675,
+            "5": 0.9651162790697675
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.975
+          },
+          "FullRecallAtK": {
+            "10": 0.825,
+            "5": 0.8
+          },
+          "MeanMRRAtK": {
+            "10": 0.8716666666666667,
+            "5": 0.8716666666666667
+          }
+        }
+      }
+    },
+    "hybrid_mmr@0.60": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9866666666666667
+        },
+        "FullRecallAtK": {
+          "10": 0.9133333333333333,
+          "5": 0.9066666666666666
+        },
+        "MeanMRRAtK": {
+          "10": 0.9555555555555556,
+          "5": 0.9544444444444445
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8837209302325582,
+            "5": 0.8837209302325582
+          },
+          "MeanMRRAtK": {
+            "10": 0.9651162790697675,
+            "5": 0.9651162790697675
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.95
+          },
+          "FullRecallAtK": {
+            "10": 0.825,
+            "5": 0.8
+          },
+          "MeanMRRAtK": {
+            "10": 0.8708333333333333,
+            "5": 0.8666666666666666
+          }
+        }
+      }
+    },
+    "hybrid_mmr@0.70": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9866666666666667
+        },
+        "FullRecallAtK": {
+          "10": 0.9066666666666666,
+          "5": 0.9
+        },
+        "MeanMRRAtK": {
+          "10": 0.9555555555555556,
+          "5": 0.9544444444444445
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8604651162790697,
+            "5": 0.8604651162790697
+          },
+          "MeanMRRAtK": {
+            "10": 0.9651162790697675,
+            "5": 0.9651162790697675
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.95
+          },
+          "FullRecallAtK": {
+            "10": 0.825,
+            "5": 0.8
+          },
+          "MeanMRRAtK": {
+            "10": 0.8708333333333333,
+            "5": 0.8666666666666666
+          }
+        }
+      }
+    },
+    "hybrid_mmr@0.90": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9866666666666667
+        },
+        "FullRecallAtK": {
+          "10": 0.8933333333333333,
+          "5": 0.8866666666666667
+        },
+        "MeanMRRAtK": {
+          "10": 0.9555555555555556,
+          "5": 0.9544444444444445
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.9473684210526315,
+            "5": 0.9473684210526315
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8604651162790697,
+            "5": 0.8604651162790697
+          },
+          "MeanMRRAtK": {
+            "10": 0.9651162790697675,
+            "5": 0.9651162790697675
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.95
+          },
+          "FullRecallAtK": {
+            "10": 0.8,
+            "5": 0.775
+          },
+          "MeanMRRAtK": {
+            "10": 0.8708333333333333,
+            "5": 0.8666666666666666
+          }
+        }
+      }
+    },
+    "lexical_only": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.08666666666666667,
+          "5": 0.08666666666666667
+        },
+        "FullRecallAtK": {
+          "10": 0.03333333333333333,
+          "5": 0.03333333333333333
+        },
+        "MeanMRRAtK": {
+          "10": 0.08666666666666667,
+          "5": 0.08666666666666667
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "FullRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "MeanMRRAtK": {
+            "10": 0,
+            "5": 0
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 0.2631578947368421,
+            "5": 0.2631578947368421
+          },
+          "FullRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "MeanMRRAtK": {
+            "10": 0.2631578947368421,
+            "5": 0.2631578947368421
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 0.046511627906976744,
+            "5": 0.046511627906976744
+          },
+          "FullRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "MeanMRRAtK": {
+            "10": 0.046511627906976744,
+            "5": 0.046511627906976744
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "FullRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "MeanMRRAtK": {
+            "10": 0,
+            "5": 0
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "FullRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "MeanMRRAtK": {
+            "10": 0,
+            "5": 0
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 0.3333333333333333,
+            "5": 0.3333333333333333
+          },
+          "FullRecallAtK": {
+            "10": 0.3333333333333333,
+            "5": 0.3333333333333333
+          },
+          "MeanMRRAtK": {
+            "10": 0.3333333333333333,
+            "5": 0.3333333333333333
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.025,
+            "5": 0.025
+          },
+          "FullRecallAtK": {
+            "10": 0,
+            "5": 0
+          },
+          "MeanMRRAtK": {
+            "10": 0.025,
+            "5": 0.025
+          }
+        }
+      }
+    },
+    "vector_only": {
+      "Overall": {
+        "NumQuestions": 150,
+        "PartialRecallAtK": {
+          "10": 0.9933333333333333,
+          "5": 0.9866666666666667
+        },
+        "FullRecallAtK": {
+          "10": 0.8933333333333333,
+          "5": 0.8866666666666667
+        },
+        "MeanMRRAtK": {
+          "10": 0.9555555555555556,
+          "5": 0.9544444444444445
+        }
+      },
+      "ByType": {
+        "abstention": {
+          "NumQuestions": 9,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8888888888888888,
+            "5": 0.8888888888888888
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "knowledge-update": {
+          "NumQuestions": 19,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.9473684210526315,
+            "5": 0.9473684210526315
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "multi-session": {
+          "NumQuestions": 43,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 0.8604651162790697,
+            "5": 0.8604651162790697
+          },
+          "MeanMRRAtK": {
+            "10": 0.9651162790697675,
+            "5": 0.9651162790697675
+          }
+        },
+        "single-session-assistant": {
+          "NumQuestions": 17,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-preference": {
+          "NumQuestions": 7,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "single-session-user": {
+          "NumQuestions": 15,
+          "PartialRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "FullRecallAtK": {
+            "10": 1,
+            "5": 1
+          },
+          "MeanMRRAtK": {
+            "10": 1,
+            "5": 1
+          }
+        },
+        "temporal-reasoning": {
+          "NumQuestions": 40,
+          "PartialRecallAtK": {
+            "10": 0.975,
+            "5": 0.95
+          },
+          "FullRecallAtK": {
+            "10": 0.8,
+            "5": 0.775
+          },
+          "MeanMRRAtK": {
+            "10": 0.8708333333333333,
+            "5": 0.8666666666666666
+          }
+        }
+      }
+    }
+  }
+}
