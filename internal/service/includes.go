@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -35,19 +35,52 @@ type IncludeRef struct {
 	Status        string    `json:"status"`
 }
 
-// scopeMatches reports whether any space-separated pattern in scope matches the
-// read-time value, via exact match or a filepath glob (exact-then-glob precedence).
-func scopeMatches(scope, value string) bool {
-	value = strings.TrimSpace(value)
-	for _, pat := range strings.Fields(scope) {
-		if pat == value {
-			return true
-		}
-		if ok, err := filepath.Match(pat, value); err == nil && ok {
-			return true
+// scopeMatches reports whether the read-time scope selects an include: any
+// whitespace-separated token in values matches any pattern in patterns via a
+// hierarchical "/"-glob (globMatch) — "**" crosses segments, "*" within one.
+func scopeMatches(patterns, values string) bool {
+	for _, val := range strings.Fields(values) {
+		for _, pat := range strings.Fields(patterns) {
+			if pat == val || globMatch(pat, val) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// globMatch matches one "/"-delimited pattern against one token: "**" consumes
+// zero or more segments, each other segment is path.Match'd ("*"/"?" within a
+// segment, never across "/"). Standard two-pointer star glob.
+func globMatch(pattern, name string) bool {
+	pat := strings.Split(pattern, "/")
+	seg := strings.Split(name, "/")
+	px, sx, starPx, starSx := 0, 0, -1, -1
+	for sx < len(seg) {
+		switch {
+		case px < len(pat) && pat[px] == "**":
+			starPx, starSx = px, sx
+			px++
+		case px < len(pat) && segOK(pat[px], seg[sx]):
+			px, sx = px+1, sx+1
+		case starPx >= 0:
+			starSx++
+			px, sx = starPx+1, starSx
+		default:
+			return false
+		}
+	}
+	for px < len(pat) && pat[px] == "**" {
+		px++
+	}
+	return px == len(pat)
+}
+
+// segOK matches one pattern segment; a malformed pattern (path.Match error) is
+// treated as no match, never a panic.
+func segOK(patSeg, nameSeg string) bool {
+	ok, err := path.Match(patSeg, nameSeg)
+	return err == nil && ok
 }
 
 // includeResolver walks a document's outgoing includes edges through the read

@@ -321,10 +321,15 @@ Skipped includes are recorded in the manifest with a reason (`skipped_scope`,
 Cycles terminate; the walk is depth- and size-bounded.
 
 **Conditional includes via `scope`.** A document's `scope` (empty = always applies;
-otherwise a space-separated glob list) gates whether an include resolves: pass a
-`scope` argument on the expand read, and an included document whose scope is
-non-empty resolves only when it matches (exact or glob). One root document thus
-assembles different results for different contexts, with no per-edge condition.
+otherwise a whitespace-separated list of `/`-delimited glob patterns) gates whether
+an include resolves. The `scope` argument on the expand read is itself a
+whitespace-separated set of tokens; an included document whose scope is non-empty
+resolves when any read token matches any of its patterns. Matching is a hierarchical
+glob over an opaque `/`-delimited namespace: `**` crosses segments, `*` matches
+within one, and a bare token matches exactly — no filesystem meaning is imposed, so
+a token can name a project, team, environment, or anything the caller supplies. One
+root document thus assembles different results for different contexts, with no
+per-edge condition.
 
 ## Agent prompts
 
