@@ -11,6 +11,13 @@ descriptions of the merged pull requests — see the pull request template for t
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-05
+
+### Added
+
+- Opt-in expired-document retention sweep: hard-deletes documents past their `doc_type`'s `expiration_age_days` plus a grace window that are also access-cold, unpinned, and prunable — with a `deletion_events` audit trail and a `lint_memory` dry-run to preview candidates. Off by default (`retention_sweep_enabled`).
+- Per-tenant opt-in usage metrics: an append-only access/verify/cleanup event log with configurable retention, live stale/expired gauges, an admin dashboard, and a Prometheus-shaped aggregation backend.
+
 ## [1.0.0] - 2026-08-30
 
 Initial public release.
