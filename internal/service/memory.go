@@ -693,39 +693,6 @@ func (s *MemoryService) readScope(ctx context.Context, overrideID *uuid.UUID) ([
 	return nil, nil // not readable -> empty scope -> empty result, no leak
 }
 
-// promptTargeted reports whether a read explicitly names prompts.
-func promptTargeted(category, docType *string) bool {
-	return (category != nil && *category == "prompts") || (docType != nil && *docType == models.DocTypePrompt)
-}
-
-// readScopeForPrompts narrows a read to the home tenant when it targets prompts —
-// prompt documents are own-tenant-only and never resolve from the common pool or a
-// grant (design D4); every other read keeps the normal aggregate scope.
-func (s *MemoryService) readScopeForPrompts(ctx context.Context, category, docType *string, overrideID *uuid.UUID) ([]uuid.UUID, error) {
-	if promptTargeted(category, docType) {
-		home := auth.TenantIDFromContext(ctx)
-		if home == uuid.Nil {
-			return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
-		}
-		return []uuid.UUID{home}, nil
-	}
-	return s.readScope(ctx, overrideID)
-}
-
-// dropForeignPrompts removes prompt documents not owned by home — the safety net
-// behind readScopeForPrompts on unfiltered/by-id paths, so a prompt never leaks
-// from the common pool or a granted tenant (design D4).
-func dropForeignPrompts(docs []models.Document, home uuid.UUID) []models.Document {
-	out := docs[:0]
-	for _, d := range docs {
-		if d.DocType == models.DocTypePrompt && d.TenantID != home {
-			continue
-		}
-		out = append(out, d)
-	}
-	return out
-}
-
 // auditCrossTenantRead writes a best-effort override_log row when a caller resolves
 // a read scope to a tenant outside their own membership/grant set (an admin using
 // the tenant_id override). Cheap: skipped when no sink or the target is in-scope.
@@ -834,9 +801,9 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
-	// A prompt-targeted search is home-only (D4); otherwise default_search=false
-	// keeps prompts out of an unfiltered query on both arms.
-	scope, err := s.readScopeForPrompts(ctx, category, docType, overrideID)
+	// Prompts follow the normal readable scope; default_search=false keeps them out
+	// of an unfiltered query, so only a prompt-targeted search surfaces them.
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -1042,7 +1009,7 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	if forceRead && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force_read=true", apperr.ErrInvalidInput)
 	}
-	scope, err := s.readScopeForPrompts(ctx, &category, nil, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -1052,11 +1019,6 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	doc, err := s.docs.GetByPath(ctx, scope, auth.TenantIDFromContext(ctx), category, subcategory, slug)
 	if err != nil {
 		return nil, err
-	}
-	// A prompt is own-tenant-only (D4); parity with GetDocumentByID for the case a
-	// prompt shares a non-prompts path in a granted tenant.
-	if doc.DocType == models.DocTypePrompt && doc.TenantID != auth.TenantIDFromContext(ctx) {
-		return nil, fmt.Errorf("%w: document %s/%s", apperr.ErrNotFound, category, slug)
 	}
 	// Staleness + labeling use the doc's OWNING tenant, not the caller's home —
 	// one tenant fetch drives both the mode and the display label.
@@ -1098,11 +1060,6 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	doc, err := s.docs.GetByID(ctx, scope, id)
 	if err != nil {
 		return nil, err
-	}
-	// A prompt is own-tenant-only (D4): a by-id fetch of another tenant's prompt
-	// is not-found, never a leak.
-	if doc.DocType == models.DocTypePrompt && doc.TenantID != auth.TenantIDFromContext(ctx) {
-		return nil, fmt.Errorf("%w: document %s", apperr.ErrNotFound, id)
 	}
 	// Staleness + labeling use the doc's OWNING tenant, not the caller's home —
 	// one tenant fetch drives both the mode and the display label.
@@ -1859,8 +1816,7 @@ func (s *MemoryService) DeleteSection(ctx context.Context, sectionID uuid.UUID, 
 // aggregates, a set overrideID narrows to one readable tenant (empty result if
 // not readable — never a leak).
 func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory *string, overrideID *uuid.UUID, opts ListOptions) ([]models.Document, error) {
-	// category=prompts is home-only; an unfiltered list drops foreign prompts below (D4).
-	scope, err := s.readScopeForPrompts(ctx, category, nil, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -1871,7 +1827,6 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 	if err != nil {
 		return nil, err
 	}
-	docs = dropForeignPrompts(docs, auth.TenantIDFromContext(ctx))
 	s.labelDocumentTenants(ctx, docs)
 	return docs, nil
 }

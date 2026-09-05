@@ -315,11 +315,10 @@ outcome. Absent or false `expand`, a read is unchanged. It is doc-type-neutral:
 prompts, handoffs, project state, anything.
 
 Resolution is safe by construction — every include is read through the caller's own
-read path, so an include the caller could not read directly (a foreign-tenant
-prompt, say) is never surfaced. Skipped includes are recorded in the manifest with
-a reason (`skipped_scope`, `skipped_unreadable`, `skipped_cycle`, `skipped_depth`,
-`skipped_missing`) and contribute no content. Cycles terminate; the walk is depth-
-and size-bounded.
+read path, so an include the caller could not read directly is never surfaced.
+Skipped includes are recorded in the manifest with a reason (`skipped_scope`,
+`skipped_cycle`, `skipped_depth`, `skipped_missing`) and contribute no content.
+Cycles terminate; the walk is depth- and size-bounded.
 
 **Conditional includes via `scope`.** A document's `scope` (empty = always applies;
 otherwise a space-separated glob list) gates whether an include resolves: pass a
