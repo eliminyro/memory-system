@@ -149,3 +149,32 @@ func scopeOf(t *testing.T, f *authzFixture, ctx context.Context, category string
 	require.NoError(t, err)
 	return view.Scope
 }
+
+// TestPrompts_DeepSubcategory: a deep-path prompt stores, classifies as prompt,
+// reads back by its exact path, and is found by a subcategory_prefix subtree list.
+func TestPrompts_DeepSubcategory(t *testing.T) {
+	f := newAuthzFixture(t)
+	ctx := ctxFor(f.tenantA, f.subjA)
+
+	_, err := f.svc.StoreDocument(ctx, "prompts", strp("a11s/platform"), "root", promptContent("deep marker"), false, "", nil, nil)
+	require.NoError(t, err)
+	_, err = f.svc.StoreDocument(ctx, "prompts", strp("a11s/gaming"), "root", promptContent("deep marker 2"), false, "", nil, nil)
+	require.NoError(t, err)
+
+	// Reads back by the exact deep path and classifies as a prompt.
+	view, err := f.svc.GetDocument(ctx, "prompts", strp("a11s/platform"), "root", false, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, models.DocTypePrompt, view.DocType)
+	require.Equal(t, "a11s/platform", *view.Subcategory)
+
+	// subcategory_prefix lists the whole a11s subtree.
+	docs, err := f.svc.ListDocuments(ctx, strp("prompts"), nil, nil, service.ListOptions{SubcategoryPrefix: "a11s"})
+	require.NoError(t, err)
+	var subs []string
+	for _, d := range docs {
+		if d.DocType == models.DocTypePrompt {
+			subs = append(subs, *d.Subcategory)
+		}
+	}
+	require.ElementsMatch(t, []string{"a11s/platform", "a11s/gaming"}, subs)
+}

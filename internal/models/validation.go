@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Path-segment length caps, aligned with the documents table column sizes
@@ -40,11 +41,23 @@ func ValidateDocumentPath(category, slug string, subcategory *string) error {
 		return fmt.Errorf("slug %q is not a valid path segment", slug)
 	}
 	if subcategory != nil {
-		if len(*subcategory) > MaxSubcategoryLen {
-			return fmt.Errorf("subcategory must be <= %d characters", MaxSubcategoryLen)
+		if err := ValidateSubcategoryPath(*subcategory); err != nil {
+			return err
 		}
-		if !validPathSegment.MatchString(*subcategory) {
-			return fmt.Errorf("subcategory %q is not a valid path segment", *subcategory)
+	}
+	return nil
+}
+
+// ValidateSubcategoryPath validates a "/"-delimited subcategory: within the length
+// cap, with every segment satisfying validPathSegment — so an empty segment from a
+// leading, trailing, or doubled "/" is rejected.
+func ValidateSubcategoryPath(subcategory string) error {
+	if len(subcategory) > MaxSubcategoryLen {
+		return fmt.Errorf("subcategory must be <= %d characters", MaxSubcategoryLen)
+	}
+	for _, seg := range strings.Split(subcategory, "/") {
+		if !validPathSegment.MatchString(seg) {
+			return fmt.Errorf("subcategory %q has an invalid segment %q", subcategory, seg)
 		}
 	}
 	return nil

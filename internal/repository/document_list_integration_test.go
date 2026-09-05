@@ -75,16 +75,16 @@ func TestList_SlugPrefix(t *testing.T) {
 	seedListDoc(t, db, ten, "pfx", "100%-a", "t", now, now)
 	seedListDoc(t, db, ten, "pfx", "100x-b", "t", now, now)
 
-	month, err := repo.List(context.Background(), scope, &cat, nil, "2026-08", "slug", "asc", 0, 0)
+	month, err := repo.List(context.Background(), scope, &cat, nil, "2026-08", "", "slug", "asc", 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, []string{"2026-08-01", "2026-08-15"}, slugs(month))
 
-	year, err := repo.List(context.Background(), scope, &cat, nil, "2026", "slug", "asc", 0, 0)
+	year, err := repo.List(context.Background(), scope, &cat, nil, "2026", "", "slug", "asc", 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, []string{"2026-08-01", "2026-08-15", "2026-09-01"}, slugs(year))
 
 	pfx := "pfx"
-	lit, err := repo.List(context.Background(), scope, &pfx, nil, `100\%`, "slug", "asc", 0, 0)
+	lit, err := repo.List(context.Background(), scope, &pfx, nil, `100\%`, "", "slug", "asc", 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, []string{"100%-a"}, slugs(lit), "the % is literal, not a wildcard")
 }
@@ -117,7 +117,7 @@ func TestList_OrderFieldsBothDirections(t *testing.T) {
 		{"updated_at", "desc", []string{"a", "b", "c"}},
 	}
 	for _, c := range cases {
-		got, err := repo.List(context.Background(), scope, &cat, nil, "", c.orderBy, c.order, 0, 0)
+		got, err := repo.List(context.Background(), scope, &cat, nil, "", "", c.orderBy, c.order, 0, 0)
 		require.NoError(t, err)
 		require.Equal(t, c.want, slugs(got), "%s %s", c.orderBy, c.order)
 	}
@@ -137,7 +137,7 @@ func TestList_PagingOverNonUniqueSortKeyIsTotal(t *testing.T) {
 
 	seen := map[uuid.UUID]int{}
 	for off := 0; off < n+2; off += 2 {
-		page, err := repo.List(context.Background(), scope, &cat, nil, "", "updated_at", "asc", 2, off)
+		page, err := repo.List(context.Background(), scope, &cat, nil, "", "", "updated_at", "asc", 2, off)
 		require.NoError(t, err)
 		for _, d := range page {
 			seen[d.ID]++
@@ -147,4 +147,32 @@ func TestList_PagingOverNonUniqueSortKeyIsTotal(t *testing.T) {
 	for id, c := range seen {
 		require.Equal(t, 1, c, "row %s appeared %d times — the id tiebreaker must make paging total", id, c)
 	}
+}
+
+// TestList_SubcategoryPrefix: a subcategory prefix returns the node and its
+// descendants but not a sibling that merely shares a textual prefix.
+func TestList_SubcategoryPrefix(t *testing.T) {
+	db := openListPG(t)
+	repo := repository.NewDocumentRepository(db)
+	ten := listTenant(t, db)
+	scope := []uuid.UUID{ten}
+	cat := "prompts"
+	mk := func(sub string) {
+		s := sub
+		doc := &models.Document{ID: uuid.New(), TenantID: ten, Category: cat, Subcategory: &s, Slug: "root", Title: "t", DocType: "reference"}
+		require.NoError(t, db.Create(doc).Error)
+	}
+	mk("a11s")          // the node itself
+	mk("a11s/platform") // descendant
+	mk("a11s/gaming")   // descendant
+	mk("a11something")  // sibling sharing a textual prefix — must NOT match
+
+	got, err := repo.List(context.Background(), scope, &cat, nil, "", "a11s", "slug", "asc", 0, 0)
+	require.NoError(t, err)
+	subs := make([]string, len(got))
+	for i, d := range got {
+		require.NotNil(t, d.Subcategory)
+		subs[i] = *d.Subcategory
+	}
+	require.ElementsMatch(t, []string{"a11s", "a11s/gaming", "a11s/platform"}, subs, "node + descendants, not the sibling")
 }

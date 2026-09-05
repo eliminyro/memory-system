@@ -11,24 +11,40 @@ import (
 func p[T any](v T) *T { return &v }
 
 func TestValidateListOptions_Defaults(t *testing.T) {
-	o, err := service.ValidateListOptions(nil, nil, nil, nil, nil)
+	o, err := service.ValidateListOptions(nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, service.ListOptions{Order: "asc"}, o)
 }
 
 func TestValidateListOptions_EscapesSlugPrefix(t *testing.T) {
-	o, err := service.ValidateListOptions(p(`100%_x`), nil, nil, nil, nil)
+	o, err := service.ValidateListOptions(p(`100%_x`), nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, `100\%\_x`, o.SlugPrefix)
 
-	o, err = service.ValidateListOptions(p(`a\b`), nil, nil, nil, nil)
+	o, err = service.ValidateListOptions(p(`a\b`), nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, `a\\b`, o.SlugPrefix)
 }
 
+func TestValidateListOptions_SubcategoryPrefix(t *testing.T) {
+	// A valid multi-segment prefix with no LIKE metacharacters passes through.
+	o, err := service.ValidateListOptions(nil, p("a11s/platform"), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "a11s/platform", o.SubcategoryPrefix)
+
+	// An underscore is a legal segment char but a LIKE metacharacter, so it is escaped.
+	o, err = service.ValidateListOptions(nil, p("a11s_x"), nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, `a11s\_x`, o.SubcategoryPrefix)
+
+	// A malformed prefix (empty segment) is rejected.
+	_, err = service.ValidateListOptions(nil, p("a11s//x"), nil, nil, nil, nil)
+	require.Error(t, err)
+}
+
 func TestValidateListOptions_AllowedOrderBy(t *testing.T) {
 	for _, f := range []string{"slug", "created_at", "updated_at", "title"} {
-		o, err := service.ValidateListOptions(nil, p(f), p("desc"), nil, nil)
+		o, err := service.ValidateListOptions(nil, nil, p(f), p("desc"), nil, nil)
 		require.NoError(t, err, f)
 		require.Equal(t, f, o.OrderBy)
 		require.Equal(t, "desc", o.Order)
@@ -50,7 +66,7 @@ func TestValidateListOptions_Rejections(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			o, err := service.ValidateListOptions(c.slug, c.orderBy, c.order, c.limit, c.offset)
+			o, err := service.ValidateListOptions(c.slug, nil, c.orderBy, c.order, c.limit, c.offset)
 			require.Error(t, err)
 			require.Equal(t, service.ListOptions{}, o, "no partial options escape a rejected call")
 		})
@@ -58,7 +74,7 @@ func TestValidateListOptions_Rejections(t *testing.T) {
 }
 
 func TestValidateListOptions_OffsetWithLimitOK(t *testing.T) {
-	o, err := service.ValidateListOptions(nil, nil, nil, p(10), p(5))
+	o, err := service.ValidateListOptions(nil, nil, nil, nil, p(10), p(5))
 	require.NoError(t, err)
 	require.Equal(t, 10, o.Limit)
 	require.Equal(t, 5, o.Offset)

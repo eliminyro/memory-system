@@ -135,10 +135,10 @@ var ListOrderColumns = map[string]string{
 	"title":      "title",
 }
 
-// List returns documents across the tenant-id set, filtered by category /
-// subcategory / pre-escaped slugPrefix ("" = none) and ordered per orderBy ("" =
-// legacy composite) / order. limit <= 0 returns all; every order ends in id (D6).
-func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, category, subcategory *string, slugPrefix, orderBy, order string, limit, offset int) ([]models.Document, error) {
+// List returns documents across the tenant-id set, filtered by category,
+// subcategory (exact) or subcategoryPrefix (subtree), and pre-escaped slugPrefix,
+// ordered per orderBy/order (limit <= 0 = all; every order ends in id, D6).
+func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, category, subcategory *string, slugPrefix, subcategoryPrefix, orderBy, order string, limit, offset int) ([]models.Document, error) {
 	var docs []models.Document
 	q := r.db.WithContext(ctx).Where("tenant_id IN ?", tenantIDs).Where("archived_at IS NULL")
 	if category != nil {
@@ -149,6 +149,9 @@ func (r *DocumentRepository) List(ctx context.Context, tenantIDs []uuid.UUID, ca
 	}
 	if slugPrefix != "" {
 		q = q.Where("slug LIKE ?", slugPrefix+"%")
+	}
+	if subcategoryPrefix != "" {
+		q = q.Where("subcategory LIKE ? OR subcategory LIKE ?", subcategoryPrefix, subcategoryPrefix+"/%")
 	}
 	q = q.Order(listOrderClause(orderBy, order))
 	if limit > 0 {

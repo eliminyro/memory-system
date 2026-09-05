@@ -235,14 +235,15 @@ type DeleteSectionInput struct {
 }
 
 type ListDocumentsInput struct {
-	Category    *string `json:"category,omitempty" jsonschema:"Filter by category"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory"`
-	SlugPrefix  *string `json:"slug_prefix,omitempty" jsonschema:"Return only documents whose slug begins with this — the cheap path for date-identified docs (journal/YYYY-MM-DD): '2026-08' for a month, '2026' for a year."`
-	OrderBy     *string `json:"order_by,omitempty" jsonschema:"Sort field: slug (default), created_at, updated_at, or title."`
-	Order       *string `json:"order,omitempty" jsonschema:"Sort direction: asc (default) or desc."`
-	Limit       *int    `json:"limit,omitempty" jsonschema:"Max documents to return; omit for all. Paging is for large categories — prefer slug_prefix to narrow."`
-	Offset      *int    `json:"offset,omitempty" jsonschema:"Rows to skip; requires limit."`
-	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+	Category          *string `json:"category,omitempty" jsonschema:"Filter by category"`
+	Subcategory       *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory"`
+	SlugPrefix        *string `json:"slug_prefix,omitempty" jsonschema:"Return only documents whose slug begins with this — the cheap path for date-identified docs (journal/YYYY-MM-DD): '2026-08' for a month, '2026' for a year."`
+	SubcategoryPrefix *string `json:"subcategory_prefix,omitempty" jsonschema:"Browse a subtree: return docs whose subcategory equals this or begins with it plus '/'. Segment-anchored — 'a11s' matches 'a11s' and 'a11s/platform' but not 'a11something'. Use instead of an exact subcategory to list a branch."`
+	OrderBy           *string `json:"order_by,omitempty" jsonschema:"Sort field: slug (default), created_at, updated_at, or title."`
+	Order             *string `json:"order,omitempty" jsonschema:"Sort direction: asc (default) or desc."`
+	Limit             *int    `json:"limit,omitempty" jsonschema:"Max documents to return; omit for all. Paging is for large categories — prefer slug_prefix to narrow."`
+	Offset            *int    `json:"offset,omitempty" jsonschema:"Rows to skip; requires limit."`
+	TenantID          *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type PutSectionInput struct {
@@ -596,7 +597,7 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return errorResult(err.Error()), nil, nil
 	}
 	// Omitted limit stays unbounded (design D2/D4) — only the HTTP browse path paginates.
-	opts, err := service.ValidateListOptions(input.SlugPrefix, input.OrderBy, input.Order, input.Limit, input.Offset)
+	opts, err := service.ValidateListOptions(input.SlugPrefix, input.SubcategoryPrefix, input.OrderBy, input.Order, input.Limit, input.Offset)
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}

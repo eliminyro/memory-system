@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// FuzzParsePath drives ParsePath with arbitrary path strings, asserting it never
-// panics and never emits a slug containing a path separator (the M1 invariant:
-// unmappable/deep paths return empty rather than a slash-bearing slug that the
-// write-path validator would later reject). Run: go test -fuzz=FuzzParsePath.
+// FuzzParsePath drives ParsePath with arbitrary paths, asserting it never panics
+// and that category and slug are always single segments (no "/"). A deep path
+// yields a multi-segment subcategory, validated downstream. Run: go test -fuzz=FuzzParsePath.
 func FuzzParsePath(f *testing.F) {
 	for _, s := range []string{
 		"", "/", "///", "foo", "a/b", "learnings/go/gorm",
@@ -20,15 +19,14 @@ func FuzzParsePath(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, path string) {
 		cat, sub, slug := ParsePath(path)
-		// No panic is the primary property. Invariant: a returned slug must not
-		// contain "/" — every accepted shape (1/2/3-segment) yields a leaf slug,
-		// and the 4+-segment case returns empty. A slash here would mean a
-		// mangled path slipped past the write-path contract (M1 regression).
+		// No panic is primary. Category and slug are always single segments (first
+		// and last), so neither contains "/". The subcategory MAY be multi-segment;
+		// a malformed one is caught later by ValidateDocumentPath, not here.
+		if strings.Contains(cat, "/") {
+			t.Fatalf("ParsePath(%q) produced a category with a separator: %q", path, cat)
+		}
 		if strings.Contains(slug, "/") {
 			t.Fatalf("ParsePath(%q) produced a slug with a separator: cat=%q sub=%v slug=%q", path, cat, sub, slug)
-		}
-		if sub != nil && strings.Contains(*sub, "/") {
-			t.Fatalf("ParsePath(%q) produced a subcategory with a separator: %q", path, *sub)
 		}
 	})
 }

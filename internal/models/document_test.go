@@ -2,9 +2,9 @@ package models
 
 import "testing"
 
-// TestParsePath pins the category/subcategory/slug contract, including the M1
-// fix: 4+-segment paths are unmappable and return empty ("", nil, "") so the
-// caller skips them instead of storing a slash-bearing slug.
+// TestParsePath pins the category/subcategory/slug contract: the first segment is
+// the category, the last the slug, and any middle segments join into a
+// multi-segment subcategory.
 func TestParsePath(t *testing.T) {
 	strptr := func(s string) *string { return &s }
 
@@ -15,7 +15,8 @@ func TestParsePath(t *testing.T) {
 		wantSub *string
 		wantSlg string
 	}{
-		{"four-plus segments unmappable -> empty", "learnings/go/frameworks/gorm", "", nil, ""},
+		{"four segments -> deep subcategory", "learnings/go/frameworks/gorm", "learnings", strptr("go/frameworks"), "gorm"},
+		{"five segments -> deeper subcategory", "prompts/a11s/platform/infra/root", "prompts", strptr("a11s/platform/infra"), "root"},
 		{"single segment -> misc category", "foo", "misc", nil, "foo"},
 		{"two segments -> category/slug", "a/b", "a", nil, "b"},
 		{"three segments -> category/subcategory/slug", "a/b/c", "a", strptr("b"), "c"},

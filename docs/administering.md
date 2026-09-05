@@ -464,12 +464,18 @@ curl -X POST https://mem.example.org/api/admin/import \
 ```
 
 **Each file's path inside the zip decides where it lands** —
-`category/slug.md` or `category/subcategory/slug.md` (subcategory optional).
-Put those category folders at the top level of the zip: don't wrap them in a
-parent folder, or that folder is read as the category and every entry lands
-under the catch-all `misc` category (`wrapper/category/subcategory/slug.md` no
-longer parses as `category/subcategory/slug`). Zip the contents of your export
-directory, not a parent directory containing it.
+`category/slug.md` or `category/sub.../slug.md` (subcategory optional, and it may
+itself be a `/`-nested path like `a11s/platform`). The first segment is the
+category, the last is the slug, everything between is the subcategory. Put those
+category folders at the top level of the zip: don't wrap them in a parent folder,
+or that folder is read as the category and the rest folds into the subcategory
+(`wrapper/category/subcategory/slug.md` parses with `wrapper` as the category and
+`category/subcategory` as the subcategory — not what you meant). Zip the contents
+of your export directory, not a parent directory containing it.
+
+To browse a nested branch, `list_documents` accepts `subcategory_prefix`: it
+returns the node and its descendants (`a11s` matches `a11s` and `a11s/platform`,
+but not a sibling `a11something`).
 
 Import is **asynchronous**: the request returns immediately with a job id,
 and an in-process worker (concurrency set by `IMPORT_WORKER_CONCURRENCY`)
