@@ -86,10 +86,8 @@ func BuildPath(category string, subcategory *string, slug string) string {
 }
 
 // ParsePath splits a hierarchical path into category, subcategory, and slug.
-// Handles 3-part / 2-part / 1-part; single-part defaults to category "misc".
-// 4+ segments are unmappable to the category/subcategory/slug contract and
-// return empty ("", nil, "") so the caller skips them rather than storing a
-// mangled slash-bearing slug.
+// Single-part defaults to category "misc"; 4+ segments map the first to category,
+// the last to slug, and the middle (joined by "/") to a multi-segment subcategory.
 func ParsePath(path string) (category string, subcategory *string, slug string) {
 	path = strings.Trim(path, "/")
 	if path == "" {
@@ -104,7 +102,8 @@ func ParsePath(path string) (category string, subcategory *string, slug string) 
 	case 3:
 		return parts[0], &parts[1], parts[2]
 	default:
-		return "", nil, "" // 4+ segments: unmappable -> empty so the caller skips it
+		sub := strings.Join(parts[1:len(parts)-1], "/")
+		return parts[0], &sub, parts[len(parts)-1]
 	}
 }
 

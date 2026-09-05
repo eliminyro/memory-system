@@ -1823,7 +1823,7 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 	if len(scope) == 0 {
 		return []models.Document{}, nil
 	}
-	docs, err := s.docs.List(ctx, scope, category, subcategory, opts.SlugPrefix, opts.OrderBy, opts.Order, opts.Limit, opts.Offset)
+	docs, err := s.docs.List(ctx, scope, category, subcategory, opts.SlugPrefix, opts.SubcategoryPrefix, opts.OrderBy, opts.Order, opts.Limit, opts.Offset)
 	if err != nil {
 		return nil, err
 	}

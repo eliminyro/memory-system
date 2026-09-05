@@ -502,9 +502,12 @@ func (h *apiHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
 		offset = n
 	}
-	var slugPrefix, orderBy, order *string
+	var slugPrefix, subcategoryPrefix, orderBy, order *string
 	if v := q.Get("slug_prefix"); v != "" {
 		slugPrefix = &v
+	}
+	if v := q.Get("subcategory_prefix"); v != "" {
+		subcategoryPrefix = &v
 	}
 	if v := q.Get("order_by"); v != "" {
 		orderBy = &v
@@ -512,7 +515,7 @@ func (h *apiHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("order"); v != "" {
 		order = &v
 	}
-	opts, err := service.ValidateListOptions(slugPrefix, orderBy, order, &limit, &offset)
+	opts, err := service.ValidateListOptions(slugPrefix, subcategoryPrefix, orderBy, order, &limit, &offset)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

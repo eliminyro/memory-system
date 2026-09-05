@@ -4,27 +4,35 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 )
 
 // ListOptions carries the validated browse parameters shared by the MCP
-// list_documents tool and the REST browse endpoint. SlugPrefix is LIKE-escaped;
-// an empty OrderBy keeps the legacy composite order.
+// list_documents tool and the REST browse endpoint. SlugPrefix and
+// SubcategoryPrefix are LIKE-escaped; an empty OrderBy keeps the legacy order.
 type ListOptions struct {
-	SlugPrefix string
-	OrderBy    string
-	Order      string
-	Limit      int
-	Offset     int
+	SlugPrefix        string
+	SubcategoryPrefix string
+	OrderBy           string
+	Order             string
+	Limit             int
+	Offset            int
 }
 
 // ValidateListOptions validates the browse parameters both surfaces accept and
 // returns the repository arguments, so escaping and the order_by allowlist can't
 // diverge between them. A nil pointer means the caller omitted that parameter.
-func ValidateListOptions(slugPrefix, orderBy, order *string, limit, offset *int) (ListOptions, error) {
+func ValidateListOptions(slugPrefix, subcategoryPrefix, orderBy, order *string, limit, offset *int) (ListOptions, error) {
 	var o ListOptions
 	if slugPrefix != nil {
 		o.SlugPrefix = escapeLikePrefix(*slugPrefix)
+	}
+	if subcategoryPrefix != nil && *subcategoryPrefix != "" {
+		if err := models.ValidateSubcategoryPath(*subcategoryPrefix); err != nil {
+			return ListOptions{}, err
+		}
+		o.SubcategoryPrefix = escapeLikePrefix(*subcategoryPrefix)
 	}
 	if orderBy != nil && *orderBy != "" {
 		if _, ok := repository.ListOrderColumns[*orderBy]; !ok {
