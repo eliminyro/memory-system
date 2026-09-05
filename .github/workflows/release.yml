@@ -1,11 +1,10 @@
 name: Release
 
-# Chained off a successful CI run on master (k8smith pattern). The head-SHA
-# guard below refuses to release a commit CI did not validate.
+# Fires on push to master (PR merges land here). CI already validated the code on
+# the PR via the required "Checks" gate, so the suite is not re-run; GoReleaser's own
+# build is the compile sanity before anything ships.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
     branches: [master]
 
 concurrency:
@@ -16,9 +15,7 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      !contains(github.event.workflow_run.head_commit.message, '[skip ci]')
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     permissions:
       contents: write
       packages: write
@@ -32,15 +29,6 @@ jobs:
           # Default GITHUB_TOKEN (contents: write) suffices: we push a tag and a
           # trailing docs-only CHANGELOG commit to unprotected master, and no
           # downstream workflow keys off the tag.
-
-      - name: Verify commit matches the CI trigger
-        run: |
-          expected="${{ github.event.workflow_run.head_sha }}"
-          current=$(git rev-parse HEAD)
-          if [ "$current" != "$expected" ]; then
-            echo "::error::master moved ($expected -> $current); skipping release"
-            exit 1
-          fi
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
