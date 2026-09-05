@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/eliminyro/memory-system/internal/authzseed"
+	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/service"
 )
@@ -174,25 +175,29 @@ func TestIncludes_ScopeConditional(t *testing.T) {
 	require.Equal(t, []uuid.UUID{u, s, x}, incIDs(v))
 }
 
-// TestIncludes_ReadScopeInvariant: a non-prompt parent readable via a grant includes
-// a prompt in the owning tenant; a foreign-home caller never sees the prompt.
-func TestIncludes_ReadScopeInvariant(t *testing.T) {
+// TestIncludes_GrantedPromptResolves: a prompt included by a parent in a granted
+// tenant resolves for the grantee (includes edges are same-tenant); a caller with
+// no grant on that tenant cannot read the parent at all.
+func TestIncludes_GrantedPromptResolves(t *testing.T) {
 	f := newAuthzFixture(t)
 	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
 
 	bCtx := ctxFor(f.tenantB, f.subjB)
 	parent := mkIncDoc(t, f, bCtx, "learnings", nil, "inc-parent", "parent in B", nil)
-	prompt := mkIncDoc(t, f, bCtx, "prompts", strp("derpy"), "inc-secret", "SECRET-PROMPT-MARKER", nil)
+	prompt := mkIncDoc(t, f, bCtx, "prompts", strp("derpy"), "inc-secret", "SHARED-PROMPT-MARKER", nil)
 	linkInc(t, f, bCtx, parent, prompt)
 
+	// A is a member of B: the parent and its same-tenant prompt include both resolve.
 	aCtx := ctxFor(f.tenantA, f.subjA)
 	v, err := f.svc.GetDocumentByIDExpanded(aCtx, parent, false, "", "", nil)
 	require.NoError(t, err)
-	require.NotContains(t, incIDs(v), prompt, "a foreign-home caller never resolves the prompt")
-	require.Equal(t, service.IncludeSkippedUnreadable, manifestStatus(v.IncludeManifest, prompt))
-	for _, d := range v.Includes {
-		require.NotEqual(t, "prompts", d.Category, "no prompt content is assembled")
-	}
+	require.Contains(t, incIDs(v), prompt, "a grantee resolves the parent's prompt include")
+	require.Equal(t, service.IncludeIncluded, manifestStatus(v.IncludeManifest, prompt))
+
+	// A subject with no grant on B cannot read the parent, so its includes never load.
+	tCtx := ctxFor(f.tenantT, f.subjT)
+	_, err = f.svc.GetDocumentByIDExpanded(tCtx, parent, false, "", "", nil)
+	require.ErrorIs(t, err, apperr.ErrNotFound)
 }
 
 // TestIncludes_ArchivedSkipped: an archived include target is skipped_missing.

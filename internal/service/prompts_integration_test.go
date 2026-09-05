@@ -47,41 +47,67 @@ func TestPrompts_CurationAndSearch(t *testing.T) {
 	require.True(t, seen, "a category-filtered search returns prompts")
 }
 
-// TestPrompts_OwnTenantOnly: a granted tenant's prompt is invisible on every read
-// path while its non-prompt documents remain readable.
-func TestPrompts_OwnTenantOnly(t *testing.T) {
+// TestPrompts_SharedReads: prompts follow the normal readable scope. A granted
+// tenant's prompt and a common-pool prompt are readable on every read path; a
+// prompt in a tenant the caller cannot read stays invisible.
+func TestPrompts_SharedReads(t *testing.T) {
 	f := newAuthzFixture(t)
-	// subjA can read tenant B (member grant), the cross-tenant read path.
+	// subjA can read tenant B (member grant); subjT (tenant T) has no grant on B.
 	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
 
 	bCtx := ctxFor(f.tenantB, f.subjB)
-	_, err := f.svc.StoreDocument(bCtx, "prompts", strp("derpy"), "secret", promptContent("b-only prompt marker"), false, "", nil, nil)
+	_, err := f.svc.StoreDocument(bCtx, "prompts", strp("team"), "root", promptContent("team-marker"), false, "", nil, nil)
 	require.NoError(t, err)
-	_, err = f.svc.StoreDocument(bCtx, "learnings", nil, "shared-"+randToken(), promptContent("b learning marker"), false, "", nil, nil)
+	adminCtx := ctxFor(f.tenantA, f.admin)
+	_, err = f.svc.StoreDocument(adminCtx, "prompts", strp("org"), "root", promptContent("org-marker"), false, "", &models.BootstrapTenantID, nil)
 	require.NoError(t, err)
 
 	aCtx := ctxFor(f.tenantA, f.subjA)
-	// get_document of B's prompt path from A: not found (prompts are own-tenant-only).
-	_, err = f.svc.GetDocument(aCtx, "prompts", strp("derpy"), "secret", false, "", nil)
-	require.ErrorIs(t, err, apperr.ErrNotFound)
 
-	// list_documents from A never shows B's prompt.
-	docs, err := f.svc.ListDocuments(aCtx, nil, nil, nil, service.ListOptions{})
+	// get_document: A reads B's team prompt (grant) and the org prompt (common pool).
+	team, err := f.svc.GetDocument(aCtx, "prompts", strp("team"), "root", false, "", nil)
 	require.NoError(t, err)
+	require.Equal(t, f.tenantB, team.TenantID)
+	org, err := f.svc.GetDocument(aCtx, "prompts", strp("org"), "root", false, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, models.BootstrapTenantID, org.TenantID)
+
+	// list_documents (category=prompts): both shared prompts are visible to A.
+	cat := "prompts"
+	docs, err := f.svc.ListDocuments(aCtx, &cat, nil, nil, service.ListOptions{})
+	require.NoError(t, err)
+	var sawTeam, sawOrg bool
 	for _, d := range docs {
-		require.False(t, d.DocType == models.DocTypePrompt && d.TenantID == f.tenantB, "B's prompt leaked to A")
-	}
-
-	// But B's non-prompt learning is still visible to A via the grant.
-	res, err := f.svc.Search(aCtx, "b learning marker", nil, nil, nil, 20, false, "", nil, false)
-	require.NoError(t, err)
-	var sawLearning bool
-	for _, r := range res {
-		if r.TenantID == f.tenantB {
-			sawLearning = true
+		if d.DocType != models.DocTypePrompt {
+			continue
+		}
+		switch d.TenantID {
+		case f.tenantB:
+			sawTeam = true
+		case models.BootstrapTenantID:
+			sawOrg = true
 		}
 	}
-	require.True(t, sawLearning, "a granted tenant's non-prompt document stays readable")
+	require.True(t, sawTeam, "granted tenant's prompt appears in list")
+	require.True(t, sawOrg, "common-pool prompt appears in list")
+
+	// category-filtered search surfaces B's prompt across the readable set.
+	res, err := f.svc.Search(aCtx, "team-marker", &cat, nil, nil, 20, false, "", nil, false)
+	require.NoError(t, err)
+	var sawTeamSearch bool
+	for _, r := range res {
+		if r.DocType == models.DocTypePrompt && r.TenantID == f.tenantB {
+			sawTeamSearch = true
+		}
+	}
+	require.True(t, sawTeamSearch, "filtered search surfaces the granted tenant's prompt")
+
+	// subjT has no grant on B: B's team prompt is invisible, the common-pool prompt is not.
+	tCtx := ctxFor(f.tenantT, f.subjT)
+	_, err = f.svc.GetDocument(tCtx, "prompts", strp("team"), "root", false, "", nil)
+	require.ErrorIs(t, err, apperr.ErrNotFound)
+	_, err = f.svc.GetDocument(tCtx, "prompts", strp("org"), "root", false, "", nil)
+	require.NoError(t, err)
 }
 
 // TestScope_Write covers set, preserve-on-omit, update, clear, and that a scope is

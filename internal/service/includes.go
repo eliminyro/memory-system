@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 )
@@ -22,12 +21,11 @@ const (
 
 // Include manifest statuses — one per resolved includes edge.
 const (
-	IncludeIncluded          = "included"
-	IncludeSkippedScope      = "skipped_scope"
-	IncludeSkippedUnreadable = "skipped_unreadable"
-	IncludeSkippedCycle      = "skipped_cycle"
-	IncludeSkippedDepth      = "skipped_depth"
-	IncludeSkippedMissing    = "skipped_missing"
+	IncludeIncluded       = "included"
+	IncludeSkippedScope   = "skipped_scope"
+	IncludeSkippedCycle   = "skipped_cycle"
+	IncludeSkippedDepth   = "skipped_depth"
+	IncludeSkippedMissing = "skipped_missing"
 )
 
 // IncludeRef records how one includes edge resolved.
@@ -58,7 +56,6 @@ type includeResolver struct {
 	s         *MemoryService
 	ctx       context.Context
 	scope     []uuid.UUID // caller's readable tenant set
-	home      uuid.UUID   // caller's home tenant (prompt own-tenant guard)
 	condScope string      // read-time scope for conditional includes
 	seen      map[uuid.UUID]bool
 	onPath    map[uuid.UUID]bool
@@ -69,13 +66,13 @@ type includeResolver struct {
 
 // resolveIncludes expands root's outgoing includes into root.Includes (flat,
 // ordered, de-duplicated) and root.IncludeManifest. Every target is read through
-// the same scope + prompt guard as a direct read, so nothing unreadable surfaces.
+// the caller's scope, so nothing unreadable surfaces.
 func (s *MemoryService) resolveIncludes(ctx context.Context, root *DocumentView, scope []uuid.UUID, condScope string) {
 	if s.edges == nil {
 		return
 	}
 	r := &includeResolver{
-		s: s, ctx: ctx, scope: scope, home: auth.TenantIDFromContext(ctx), condScope: condScope,
+		s: s, ctx: ctx, scope: scope, condScope: condScope,
 		seen:   map[uuid.UUID]bool{root.ID: true},
 		onPath: map[uuid.UUID]bool{root.ID: true},
 	}
@@ -91,7 +88,7 @@ func (s *MemoryService) GetDocumentExpanded(ctx context.Context, category string
 	if err != nil {
 		return nil, err
 	}
-	scope, err := s.readScopeForPrompts(ctx, &category, nil, overrideID)
+	scope, err := s.readScope(ctx, overrideID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,16 +155,13 @@ func (r *includeResolver) walk(docID uuid.UUID, depth int) {
 	}
 }
 
-// resolveOne reads one include target through the caller's scope + prompt guard,
-// then applies the scope condition. Returns a skip status instead of a view when
-// the target is unreadable, scope-filtered, archived, or gone.
+// resolveOne reads one include target through the caller's scope, then applies the
+// scope condition. Returns a skip status instead of a view when the target is
+// scope-filtered, archived, or gone.
 func (r *includeResolver) resolveOne(id uuid.UUID) (*DocumentView, string) {
 	doc, err := r.s.docs.GetByID(r.ctx, r.scope, id)
 	if err != nil {
 		return nil, IncludeSkippedMissing
-	}
-	if doc.DocType == models.DocTypePrompt && doc.TenantID != r.home {
-		return nil, IncludeSkippedUnreadable
 	}
 	if doc.Scope != nil && strings.TrimSpace(*doc.Scope) != "" && !scopeMatches(*doc.Scope, r.condScope) {
 		return nil, IncludeSkippedScope
