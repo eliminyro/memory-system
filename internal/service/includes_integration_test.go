@@ -175,6 +175,33 @@ func TestIncludes_ScopeConditional(t *testing.T) {
 	require.Equal(t, []uuid.UUID{u, s, x}, incIDs(v))
 }
 
+// TestIncludes_ScopeHierarchicalGlob: a "**" scope resolves under a hierarchical
+// read token, a multi-valued read matches if any token matches any pattern, and a
+// read whose tokens match no pattern is skipped_scope.
+func TestIncludes_ScopeHierarchicalGlob(t *testing.T) {
+	f := newAuthzFixture(t)
+	ctx := ctxFor(f.tenantA, f.subjA)
+	root := mkIncDoc(t, f, ctx, "learnings", nil, "g-root", "root", nil)
+	g := mkIncDoc(t, f, ctx, "learnings", nil, "g-scoped", "scoped", strp("a11s/**"))
+	linkInc(t, f, ctx, root, g)
+
+	// "**" crosses the segment under a11s.
+	v, err := f.svc.GetDocumentByIDExpanded(ctx, root, false, "", "a11s/platform", nil)
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{g}, incIDs(v))
+
+	// Multi-valued read: one non-matching token, one matching -> resolves.
+	v, err = f.svc.GetDocumentByIDExpanded(ctx, root, false, "", "hilo a11s/gaming/root", nil)
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{g}, incIDs(v))
+
+	// No token matches a11s/** -> skipped_scope.
+	v, err = f.svc.GetDocumentByIDExpanded(ctx, root, false, "", "hilo personal", nil)
+	require.NoError(t, err)
+	require.Empty(t, incIDs(v))
+	require.Equal(t, service.IncludeSkippedScope, manifestStatus(v.IncludeManifest, g))
+}
+
 // TestIncludes_GrantedPromptResolves: a prompt included by a parent in a granted
 // tenant resolves for the grantee (includes edges are same-tenant); a caller with
 // no grant on that tenant cannot read the parent at all.

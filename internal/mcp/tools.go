@@ -151,7 +151,7 @@ type GetDocumentInput struct {
 	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Admin-only break-glass: peek an expired section once without resetting its clock (non-admins stay withheld — use mark_verified to unlock). Requires reason. Audited in override_log."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	Expand      bool    `json:"expand,omitempty" jsonschema:"Resolve this document's outgoing 'includes' edges and return the assembled documents plus a resolution manifest. Off by default."`
-	Scope       string  `json:"scope,omitempty" jsonschema:"Read-time scope for conditional includes: an included document whose scope is non-empty resolves only when it matches (exact or glob). Ignored unless expand is set."`
+	Scope       string  `json:"scope,omitempty" jsonschema:"Read-time scope for conditional includes: a whitespace-separated set of tokens. An included document whose scope is non-empty resolves when any token matches any of its patterns via a hierarchical '/'-glob ('**' crosses segments, '*' within one; exact wins). Ignored unless expand is set."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -160,7 +160,7 @@ type GetDocumentByIDInput struct {
 	ForceRead  bool    `json:"force_read,omitempty" jsonschema:"Admin-only break-glass: peek an expired section once without resetting its clock (non-admins stay withheld — use mark_verified to unlock). Requires reason. Audited in override_log."`
 	Reason     string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	Expand     bool    `json:"expand,omitempty" jsonschema:"Resolve this document's outgoing 'includes' edges and return the assembled documents plus a resolution manifest. Off by default."`
-	Scope      string  `json:"scope,omitempty" jsonschema:"Read-time scope for conditional includes: an included document whose scope is non-empty resolves only when it matches (exact or glob). Ignored unless expand is set."`
+	Scope      string  `json:"scope,omitempty" jsonschema:"Read-time scope for conditional includes: a whitespace-separated set of tokens. An included document whose scope is non-empty resolves when any token matches any of its patterns via a hierarchical '/'-glob ('**' crosses segments, '*' within one; exact wins). Ignored unless expand is set."`
 	TenantID   *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -211,7 +211,7 @@ type StoreMemoryInput struct {
 	Force       bool    `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Prefer update_section on a returned candidate instead."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force=true. Brief explanation of why this is not a duplicate."`
 	Pin         *bool   `json:"pin,omitempty" jsonschema:"Mark the document a pin (never-evict): exempt from access-recency eviction. On re-store, omit to keep the current pin state, or set true/false to change it."`
-	Scope       *string `json:"scope,omitempty" jsonschema:"Applicability of any document: empty = always applies, or a space-separated pattern list (project/glob) gating conditional includes. Omit to keep the current value; empty string clears it."`
+	Scope       *string `json:"scope,omitempty" jsonschema:"Applicability of any document: empty = always applies, or a whitespace-separated list of '/'-delimited glob patterns ('**' crosses segments, '*' within one) gating conditional includes at read time. Omit to keep the current value; empty string clears it."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
