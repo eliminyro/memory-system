@@ -4,11 +4,14 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/eliminyro/memory-system/internal/auth"
 	"github.com/eliminyro/memory-system/internal/authz"
+	"github.com/eliminyro/memory-system/internal/middleware"
 	"github.com/eliminyro/memory-system/internal/service"
 	"github.com/eliminyro/memory-system/internal/version"
 )
@@ -67,12 +70,14 @@ Admin tools: list_tenants, create_tenant, update_tenant, delete_tenant, create_a
 	s.mcp = mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{Instructions: regularInstructions})
 	s.registerTools(s.mcp)
 	s.registerACLTools(s.mcp)
+	s.mcp.AddReceivingMiddleware(logToolCalls)
 
 	// Admin server — memory tools + delegated-ACL tools + admin tools
 	s.adminMcp = mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{Instructions: adminInstructions})
 	s.registerTools(s.adminMcp)
 	s.registerACLTools(s.adminMcp)
 	s.registerAdminTools(s.adminMcp)
+	s.adminMcp.AddReceivingMiddleware(logToolCalls)
 
 	return s
 }
@@ -89,7 +94,7 @@ func (s *Server) isAdmin(ctx context.Context) bool {
 	}
 	granted, err := s.checker.Check(ctx, authz.TypeSystem, authz.SystemObjectID, authz.RelAdmin, subj.Type, subj.ID)
 	if err != nil {
-		slog.Default().Warn("mcp admin check errored; treating as non-admin",
+		slog.Default().Error("mcp admin check errored; treating as non-admin",
 			"subject_id", subj.ID, "error", err)
 		return false
 	}
@@ -103,4 +108,47 @@ func (s *Server) HTTPHandler() http.Handler {
 		}
 		return s.mcp
 	}, &mcpsdk.StreamableHTTPOptions{Stateless: true})
+}
+
+// logToolCalls is a receiving middleware that logs one metadata line per
+// tools/call. Arguments and results are never read — they carry memory content
+// and PII; only tool name, tenant, request id, outcome, and duration are logged.
+func logToolCalls(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+		if method != "tools/call" {
+			return next(ctx, method, req)
+		}
+		start := time.Now()
+		res, err := next(ctx, method, req)
+		logToolOutcome(ctx, req, res, err, time.Since(start))
+		return res, err
+	}
+}
+
+func logToolOutcome(ctx context.Context, req mcpsdk.Request, res mcpsdk.Result, err error, d time.Duration) {
+	name := ""
+	if p, ok := req.GetParams().(*mcpsdk.CallToolParamsRaw); ok {
+		name = p.Name
+	}
+	attrs := []any{"tool", name, "duration_ms", d.Milliseconds()}
+	if tid := auth.TenantIDFromContext(ctx); tid != uuid.Nil {
+		attrs = append(attrs, "tenant_id", tid.String())
+	}
+	if rid := middleware.RequestIDFromContext(ctx); rid != "" {
+		attrs = append(attrs, "request_id", rid)
+	}
+	switch {
+	case err != nil:
+		// Protocol/transport error; tool-level internal errors are logged at their source.
+		slog.Default().Error("mcp tool call", append(attrs, "outcome", "error", "error", err.Error())...)
+	case isErrorResult(res):
+		slog.Default().Warn("mcp tool call", append(attrs, "outcome", "error")...)
+	default:
+		slog.Default().Info("mcp tool call", append(attrs, "outcome", "ok")...)
+	}
+}
+
+func isErrorResult(res mcpsdk.Result) bool {
+	r, ok := res.(*mcpsdk.CallToolResult)
+	return ok && r != nil && r.IsError
 }

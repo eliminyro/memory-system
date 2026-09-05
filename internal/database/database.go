@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -62,6 +63,7 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("enable pgvector: %w", err)
 	}
 
+	slog.Info("database connected", "dialect", db.Name())
 	return db, nil
 }
 
@@ -127,6 +129,7 @@ func BaselineGlobalConfigDefaults() GlobalConfigDefaults {
 }
 
 func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColumnDefaults, gc GlobalConfigDefaults) error {
+	slog.Info("running migrations", "provider", provider, "model", model, "dimensions", dimensions)
 	// Check existing vector dimensions BEFORE AutoMigrate (which may reset atttypmod).
 	var existingDim int
 	dimErr := db.Raw(`
@@ -139,7 +142,7 @@ func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColum
 
 	// All DDL, backfills, and seeds in one transaction so a crash rolls back
 	// cleanly. Postgres allows DDL in transactions: CREATE/ALTER/UPDATE/INSERT.
-	return db.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		// lock_timeout bounds the DDL table-lock waits so a stuck migration
 		// surfaces instead of hanging boot forever.
 		if err := tx.Exec("SET LOCAL lock_timeout = '60s'").Error; err != nil {
@@ -149,7 +152,12 @@ func Migrate(db *gorm.DB, provider, model string, dimensions int, td TenantColum
 			return fmt.Errorf("acquire migrate advisory lock: %w", err)
 		}
 		return migrateInTx(tx, provider, model, dimensions, corpusPopulated, td, gc)
-	})
+	}); err != nil {
+		return err
+	}
+
+	slog.Info("migrations complete")
+	return nil
 }
 
 func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopulated bool, td TenantColumnDefaults, gc GlobalConfigDefaults) error {

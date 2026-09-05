@@ -73,21 +73,21 @@ func (identityRow) TableName() string { return "tenant_users" }
 // in a shared tenant map to distinct subjects. It returns ErrUnauthorized for
 // empty/unverified emails (never trust unverified claims) and for any DB miss or
 // error (don't leak DB state as auth decisions); the AS maps all to a 403 at
-// /idp/callback. Every rejection emits one slog entry (event=ResolverRejectEvent
-// + `reason`): DB errors at Warn, the rest at Info.
+// /idp/callback. Every rejection emits one Debug slog entry
+// (event=ResolverRejectEvent + `reason`) — normal auth churn on a hot path.
 func (r *MemoryUserResolver) Resolve(ctx context.Context, c idp.Claims) (string, error) {
 	logger := r.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if c.Email == "" {
-		logger.Info("authletas: resolver rejected",
+		logger.Debug("authletas: resolver rejected",
 			"event", ResolverRejectEvent,
 			"reason", rejectReasonEmailEmpty)
 		return "", ErrUnauthorized
 	}
 	if !c.EmailVerified {
-		logger.Info("authletas: resolver rejected",
+		logger.Debug("authletas: resolver rejected",
 			"event", ResolverRejectEvent,
 			"reason", rejectReasonEmailUnverified,
 			"email", c.Email)
@@ -126,7 +126,7 @@ func (r *MemoryUserResolver) Resolve(ctx context.Context, c idp.Claims) (string,
 	if r.Provision != nil {
 		if _, perr := r.Provision(ctx, c); perr != nil {
 			if errors.Is(perr, ErrProvisionNotAllowed) {
-				logger.Info("authletas: resolver rejected",
+				logger.Debug("authletas: resolver rejected",
 					"event", ResolverRejectEvent,
 					"reason", rejectReasonNotAllowed,
 					"email", c.Email)
@@ -147,15 +147,15 @@ func (r *MemoryUserResolver) Resolve(ctx context.Context, c idp.Claims) (string,
 		}
 		return id, nil
 	}
-	logger.Info("authletas: resolver rejected",
+	logger.Debug("authletas: resolver rejected",
 		"event", ResolverRejectEvent,
 		"reason", rejectReasonTenantNotFound,
 		"email", c.Email)
 	return "", ErrUnauthorized
 }
 
-// rejectDBError logs a db_error rejection at Warn (never leaking the internal
-// error) and returns ErrUnauthorized so the AS maps it to a 403.
+// rejectDBError logs a db_error rejection at Warn — an infra failure, louder than
+// normal auth churn — without leaking the internal error to the caller (403).
 func (r *MemoryUserResolver) rejectDBError(logger *slog.Logger, email string, err error) error {
 	logger.Warn("authletas: resolver rejected",
 		"event", ResolverRejectEvent,
@@ -165,10 +165,10 @@ func (r *MemoryUserResolver) rejectDBError(logger *slog.Logger, email string, er
 	return ErrUnauthorized
 }
 
-// rejectReason logs an Info-level rejection with the given reason and returns
+// rejectReason logs a Debug-level rejection with the given reason and returns
 // ErrUnauthorized (a 403). For non-DB rejections.
 func (r *MemoryUserResolver) rejectReason(logger *slog.Logger, email, reason string) error {
-	logger.Info("authletas: resolver rejected",
+	logger.Debug("authletas: resolver rejected",
 		"event", ResolverRejectEvent,
 		"reason", reason,
 		"email", email)

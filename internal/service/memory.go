@@ -35,7 +35,7 @@ func (s *MemoryService) logOverride(ctx context.Context, ev repository.OverrideE
 		return
 	}
 	if err := s.overrides.Log(ctx, ev); err != nil {
-		slog.Default().Warn("override audit write failed",
+		slog.Default().Error("override audit write failed",
 			"tool", ev.Tool,
 			"override_type", ev.OverrideType,
 			"error", err,
@@ -432,7 +432,7 @@ func (s *MemoryService) authorize(ctx context.Context, objType, objID, relation 
 	}
 	granted, err := s.authzEngine.Check(ctx, objType, objID, relation, subj.Type, subj.ID)
 	if err != nil {
-		slog.Default().Warn("authz check errored; denying",
+		slog.Default().Error("authz check errored; denying",
 			"object_type", objType,
 			"object_id", objID,
 			"relation", relation,
