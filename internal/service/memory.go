@@ -240,6 +240,9 @@ type MemoryService struct {
 	// globalCfg reads runtime global config (the duplicate-threshold default for the
 	// write guard); nil (offline CLI / tests) falls back to defaultDuplicateThreshold.
 	globalCfg GlobalConfig
+	// metrics appends best-effort usage events (access/verify) for opted-in tenants;
+	// nil (offline CLI / tests / metrics unwired) disables emission entirely.
+	metrics *repository.MetricEventRepository
 }
 
 // GlobalConfig is the read-only slice of the global-config accessor the service
@@ -255,6 +258,7 @@ type GlobalConfig interface {
 	HistoryEnabled() bool
 	DuplicateThreshold() float64
 	SelfServicePolicy() string
+	RetentionGraceDays() int
 }
 
 // defaultSnippetChars mirrors config MEMORY_SNIPPET_CHARS default so a service
@@ -268,6 +272,10 @@ const defaultCandidatePool = 20
 // defaultDuplicateThreshold mirrors the global instance_config default so the
 // write guard still has a sane cutoff when no globalCfg is wired (offline CLI / tests).
 const defaultDuplicateThreshold = 0.85
+
+// defaultRetentionGraceDays mirrors the instance_config default so the retention
+// dry-run has a sane grace window when no globalCfg is wired (offline CLI / tests).
+const defaultRetentionGraceDays = 30
 
 // Option configures optional MemoryService behavior at construction time.
 type Option func(*MemoryService)
@@ -310,6 +318,14 @@ func WithEdgeRepository(edges *repository.EdgeRepository) Option {
 func WithGlobalConfig(gc GlobalConfig) Option {
 	return func(s *MemoryService) {
 		s.globalCfg = gc
+	}
+}
+
+// WithMetricEventRepository injects the metric-events repo. Without it metrics
+// stays nil and no usage events are emitted (offline CLI / tests).
+func WithMetricEventRepository(metrics *repository.MetricEventRepository) Option {
+	return func(s *MemoryService) {
+		s.metrics = metrics
 	}
 }
 
@@ -879,10 +895,10 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if snippet {
 		s.applySnippets(ctx, results, query, scope)
 	}
-	// Async, best-effort access-recency bump (D2): touch the served docs' parents
-	// off the request ctx, never blocking or failing the search (bounded inside).
+	// Async, best-effort serve-bump (D2) + access metric emit for opted-in tenants:
+	// both off the request ctx, never blocking or failing the search (bounded inside).
 	if len(results) > 0 {
-		s.bumpAccessed(ctx, distinctResultDocIDs(results)...)
+		s.bumpAndRecord(ctx, distinctResultDocIDs(results), accessEvents(results))
 	}
 	return results, nil
 }
@@ -891,7 +907,15 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 // a detached, deadline-bounded context so it never blocks the request, outlives it
 // unbounded, or fails the caller. TouchAccessed's day guard caps it to 1 write/day.
 func (s *MemoryService) bumpAccessed(ctx context.Context, docIDs ...uuid.UUID) {
-	if s.docs == nil || len(docIDs) == 0 {
+	s.bumpAndRecord(ctx, docIDs, nil)
+}
+
+// bumpAndRecord runs the serve-bump and, for opted-in tenants, appends the given
+// metric events — both inside one detached, deadline-bounded, panic-guarded
+// goroutine so a slow or failing write never blocks or breaks the caller.
+func (s *MemoryService) bumpAndRecord(ctx context.Context, docIDs []uuid.UUID, events []models.MetricEvent) {
+	bump := s.docs != nil && len(docIDs) > 0
+	if !bump && len(events) == 0 {
 		return
 	}
 	detached := context.WithoutCancel(ctx)
@@ -899,10 +923,63 @@ func (s *MemoryService) bumpAccessed(ctx context.Context, docIDs ...uuid.UUID) {
 		defer panicguard.Recover(nil, "access-recency bump")
 		bumpCtx, cancel := context.WithTimeout(detached, 5*time.Second)
 		defer cancel()
-		if err := s.docs.TouchAccessed(bumpCtx, docIDs); err != nil {
-			slog.Default().Warn("access-recency bump failed", "error", err)
+		if bump {
+			if err := s.docs.TouchAccessed(bumpCtx, docIDs); err != nil {
+				slog.Default().Warn("access-recency bump failed", "error", err)
+			}
 		}
+		s.recordMetricEvents(bumpCtx, events)
 	}()
+}
+
+// recordMetricEvents appends events for tenants with metrics_enabled, best-effort:
+// an append error or an unreadable tenant flag drops the event, never the op.
+func (s *MemoryService) recordMetricEvents(ctx context.Context, events []models.MetricEvent) {
+	if s.metrics == nil || len(events) == 0 {
+		return
+	}
+	enabled := s.metricsEnabledTenants(ctx, distinctEventTenants(events))
+	for i := range events {
+		if !enabled[events[i].TenantID] {
+			continue
+		}
+		if err := s.metrics.Append(ctx, &events[i]); err != nil {
+			slog.Default().Warn("metric event append failed", "event_type", events[i].EventType, "error", err)
+		}
+	}
+}
+
+// metricsEnabledTenants returns which of ids have metrics_enabled; a lookup miss or
+// error yields an empty set (fail-safe: record nothing on a config glitch).
+func (s *MemoryService) metricsEnabledTenants(ctx context.Context, ids []uuid.UUID) map[uuid.UUID]bool {
+	out := make(map[uuid.UUID]bool, len(ids))
+	if s.tenants == nil || len(ids) == 0 {
+		return out
+	}
+	tenants, err := s.tenants.GetByIDs(ctx, ids)
+	if err != nil {
+		return out
+	}
+	for _, t := range tenants {
+		if t.MetricsEnabled {
+			out[t.ID] = true
+		}
+	}
+	return out
+}
+
+// distinctEventTenants collects the unique tenant IDs across events.
+func distinctEventTenants(events []models.MetricEvent) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(events))
+	ids := make([]uuid.UUID, 0, len(events))
+	for i := range events {
+		if _, ok := seen[events[i].TenantID]; ok {
+			continue
+		}
+		seen[events[i].TenantID] = struct{}{}
+		ids = append(ids, events[i].TenantID)
+	}
+	return ids
 }
 
 // distinctResultDocIDs collects the unique owning document IDs of search results,
@@ -918,6 +995,29 @@ func distinctResultDocIDs(results []repository.SearchResult) []uuid.UUID {
 		ids = append(ids, r.DocumentID)
 	}
 	return ids
+}
+
+// accessEvents builds one access metric event per distinct served document,
+// carrying its owning tenant, doc_type, and id (metrics_enabled gating and the
+// append happen off the request path in recordMetricEvents).
+func accessEvents(results []repository.SearchResult) []models.MetricEvent {
+	seen := make(map[uuid.UUID]struct{}, len(results))
+	events := make([]models.MetricEvent, 0, len(results))
+	for i := range results {
+		docID := results[i].DocumentID
+		if _, ok := seen[docID]; ok {
+			continue
+		}
+		seen[docID] = struct{}{}
+		id := docID
+		events = append(events, models.MetricEvent{
+			EventType: models.MetricEventAccess,
+			TenantID:  results[i].TenantID,
+			DocID:     &id,
+			DocType:   results[i].DocType,
+		})
+	}
+	return events
 }
 
 // SearchResponse is the search envelope shared by the MCP and HTTP surfaces:
@@ -1090,9 +1190,38 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 		OverrideType: models.OverrideTypeVerification,
 		Reason:       "section verified",
 	})
-	// Verifying is a liveness signal: keep the doc off the access-cold path.
-	s.bumpAccessed(ctx, section.DocumentID)
+	// Verifying is a liveness signal: keep the doc off the access-cold path, and
+	// record a best-effort verify event for opted-in tenants (detached goroutine).
+	s.recordVerify(ctx, tid, section.DocumentID)
 	return nil
+}
+
+// recordVerify bumps the verified doc's access-recency and, for an opted-in tenant,
+// appends a verify event — all in one detached goroutine, gated before the doc_type
+// lookup so a non-metrics verify pays nothing on its critical path.
+func (s *MemoryService) recordVerify(ctx context.Context, tenantID, docID uuid.UUID) {
+	detached := context.WithoutCancel(ctx)
+	go func() {
+		defer panicguard.Recover(nil, "verify record")
+		c, cancel := context.WithTimeout(detached, 5*time.Second)
+		defer cancel()
+		if s.docs != nil {
+			if err := s.docs.TouchAccessed(c, []uuid.UUID{docID}); err != nil {
+				slog.Default().Warn("access-recency bump failed", "error", err)
+			}
+		}
+		if s.metrics == nil || s.docs == nil || !s.metricsEnabledTenants(c, []uuid.UUID{tenantID})[tenantID] {
+			return
+		}
+		doc, err := s.docs.GetByID(c, []uuid.UUID{tenantID}, docID)
+		if err != nil || doc == nil {
+			return
+		}
+		id := docID
+		if err := s.metrics.Append(c, &models.MetricEvent{EventType: models.MetricEventVerify, TenantID: tenantID, DocID: &id, DocType: doc.DocType}); err != nil {
+			slog.Default().Warn("metric event append failed", "event_type", models.MetricEventVerify, "error", err)
+		}
+	}()
 }
 
 // StoreResult is the outcome of StoreDocument. Status "similar_exists" means the
@@ -2839,6 +2968,7 @@ type UpdateTenantFields struct {
 	// global default); it wins over DuplicateThreshold when both are set.
 	ClearDuplicateThreshold bool
 	CleanupScanEnabled      *bool
+	MetricsEnabled          *bool
 	// SelfServicePolicy accepts "open" | "admin_only" | "inherit" (the last clears
 	// the per-tenant override to NULL). Admin-only — never wired to self-service.
 	SelfServicePolicy *string
@@ -2867,7 +2997,7 @@ func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields U
 // intact; a shared tenant's plain member is refused. This matches the by-id
 // sibling UpdateTenantSettings (also manager). Every call is audited to
 // override_log (compromised-key trail).
-func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
+func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) (*models.Tenant, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
 		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
@@ -2875,7 +3005,7 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 	// No fields = status read: return the current row without touching the DB or
 	// audit log (avoids a "noop" override_log entry and an updated_at bump). A
 	// read is always allowed regardless of the self-service policy.
-	if stalenessMode == nil && duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil {
+	if stalenessMode == nil && duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil && metricsEnabled == nil {
 		return s.tenants.GetByID(ctx, tid)
 	}
 	// Self-service gate: toggle edits require manager (admin_only escalates to
@@ -2895,6 +3025,7 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 		DuplicateThreshold:      duplicateThreshold,
 		ClearDuplicateThreshold: clearDuplicateThreshold,
 		CleanupScanEnabled:      cleanupScanEnabled,
+		MetricsEnabled:          metricsEnabled,
 	})
 	if err != nil {
 		return nil, err
@@ -2905,7 +3036,7 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 		Tool:         models.OverrideToolUpdateMyTenantSettings,
 		TargetID:     &target,
 		OverrideType: models.OverrideTypeSettingsChange,
-		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled),
+		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled, metricsEnabled),
 	})
 	return tenant, nil
 }
@@ -2917,14 +3048,14 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 // a WRITE, gated by the tenant's self-service policy at manager level
 // (requireSelfService: open ⇒ manager, admin_only ⇒ admin, system-admin bypass) —
 // managers manage settings, the lock escalates to admins. Writes are audited.
-func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.UUID, stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool) (*models.Tenant, error) {
+func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.UUID, stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) (*models.Tenant, error) {
 	tenant, err := s.tenants.GetByID(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	// No fields = settings read: gate on manage rights, populate the derived
 	// effective policy, and return without touching the DB or the audit log.
-	if stalenessMode == nil && duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil {
+	if stalenessMode == nil && duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil && metricsEnabled == nil {
 		if !s.CanManageTenant(ctx, tenantID) {
 			return nil, fmt.Errorf("%w: not authorized to view this tenant's settings", apperr.ErrInvalidInput)
 		}
@@ -2941,6 +3072,7 @@ func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.
 		DuplicateThreshold:      duplicateThreshold,
 		ClearDuplicateThreshold: clearDuplicateThreshold,
 		CleanupScanEnabled:      cleanupScanEnabled,
+		MetricsEnabled:          metricsEnabled,
 	})
 	if err != nil {
 		return nil, err
@@ -2951,15 +3083,15 @@ func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.
 		Tool:         models.OverrideToolUpdateTenantSettings,
 		TargetID:     &target,
 		OverrideType: models.OverrideTypeSettingsChange,
-		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled),
+		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled, metricsEnabled),
 	})
 	tenant.EffectivePolicy = tenant.EffectiveSelfServicePolicy(s.effectiveSelfServicePolicyDefault())
 	return tenant, nil
 }
 
 // formatSettingsChange renders the patch as a compact override_log.reason string.
-func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool) string {
-	parts := make([]string, 0, 4)
+func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) string {
+	parts := make([]string, 0, 5)
 	if stalenessMode != nil {
 		parts = append(parts, "staleness_mode="+*stalenessMode)
 	}
@@ -2973,6 +3105,9 @@ func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, duplicate
 	}
 	if cleanupScanEnabled != nil {
 		parts = append(parts, fmt.Sprintf("cleanup_scan_enabled=%t", *cleanupScanEnabled))
+	}
+	if metricsEnabled != nil {
+		parts = append(parts, fmt.Sprintf("metrics_enabled=%t", *metricsEnabled))
 	}
 	if len(parts) == 0 {
 		return "noop"
@@ -3024,6 +3159,9 @@ func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fiel
 	}
 	if fields.CleanupScanEnabled != nil {
 		tenant.CleanupScanEnabled = *fields.CleanupScanEnabled
+	}
+	if fields.MetricsEnabled != nil {
+		tenant.MetricsEnabled = *fields.MetricsEnabled
 	}
 	if fields.SelfServicePolicy != nil {
 		// "inherit" clears the override to NULL; Save persists a nil pointer as NULL.
@@ -3610,6 +3748,19 @@ func (s *MemoryService) LintMemory(ctx context.Context, checks []string, thresho
 	// Instance-wide policy findings (unknown rule keys, all-maintenance-off types).
 	if _, ok := requested["policy"]; len(checks) == 0 || ok {
 		findings = append(findings, s.policyLintFindings()...)
+	}
+	// Retention dry-run: preview would-be-evicted docs; never deletes, toggle-independent.
+	if _, ok := requested["retention"]; len(checks) == 0 || ok {
+		grace := defaultRetentionGraceDays
+		if s.globalCfg != nil {
+			grace = s.globalCfg.RetentionGraceDays()
+		}
+		cutoffs := repository.BuildRetentionCutoffs(s.policyAll(), grace)
+		retFindings, err := repository.NewRetentionRepository(s.db).CandidateFindings(ctx, tid, cutoffs)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, retFindings...)
 	}
 	return findings, nil
 }

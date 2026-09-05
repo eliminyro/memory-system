@@ -49,10 +49,41 @@ func TestTenantSettings_ManagerReadAndWrite(t *testing.T) {
 	require.True(t, updated.DuplicateGuard)
 
 	// Persisted: an admin read-back reflects the change.
-	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, nil, false, nil)
+	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, nil, false, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, models.StalenessModeAdvisory, persisted.StalenessMode)
 	require.True(t, persisted.DuplicateGuard)
+}
+
+// TestTenantSettings_MetricsEnabledThroughSelfService proves metrics_enabled is
+// written through the same self-service-gated settings path: an admin sets it
+// (persisted + reflected in the DTO), and admin_only refuses a non-admin manager.
+func TestTenantSettings_MetricsEnabledThroughSelfService(t *testing.T) {
+	f := newWriteAPIFixture(t)
+	tenant, err := f.svc.CreateTenant(f.adminCtx, "set-metrics-"+uuid.NewString(), "", models.TenantTypeShared)
+	require.NoError(t, err)
+	base := "/tenants/" + tenant.ID.String() + "/settings"
+
+	rec := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(rec, ctxJSONReq(http.MethodPatch, base, adminReqCtx(tenant.ID), map[string]any{"metrics_enabled": true}))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var got tenantSettingsResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.True(t, got.MetricsEnabled)
+
+	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, nil, false, nil, nil)
+	require.NoError(t, err)
+	require.True(t, persisted.MetricsEnabled)
+
+	// admin_only: the lock escalates to admin, so a non-admin manager is refused.
+	adminOnly := models.SelfServicePolicyAdminOnly
+	_, err = f.svc.UpdateTenant(f.adminCtx, tenant.ID, service.UpdateTenantFields{SelfServicePolicy: &adminOnly})
+	require.NoError(t, err)
+	mgr := "mgr-" + uuid.NewString()
+	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantManager(tenant.ID, mgr)))
+	recW := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(recW, ctxJSONReq(http.MethodPatch, base, userCtx(tenant.ID, mgr), map[string]any{"metrics_enabled": false}))
+	require.Equal(t, http.StatusBadRequest, recW.Code, recW.Body.String())
 }
 
 // TestTenantSettings_SystemAdminReadAndWrite proves a system admin reads and

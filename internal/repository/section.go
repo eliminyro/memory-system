@@ -674,3 +674,53 @@ func (r *SectionRepository) MarkVerified(ctx context.Context, tenantID uuid.UUID
 	}
 	return nil
 }
+
+// StalenessCount is one gauge cell: the current count of stale (or expired)
+// sections for a tenant × doc_type, feeding the metrics gauges.
+type StalenessCount struct {
+	TenantID uuid.UUID `json:"tenant_id"`
+	DocType  string    `json:"doc_type"`
+	Count    int64     `json:"count"`
+}
+
+// CountStaleByTenant counts, per tenant × doc_type, live sections whose age
+// (NOW − COALESCE(verified_at, created_at)) exceeds the doc_type's verification
+// window. days maps doc_type→verification_age_days; non-positive windows are skipped.
+func (r *SectionRepository) CountStaleByTenant(ctx context.Context, days map[string]int) ([]StalenessCount, error) {
+	return r.countAgedSections(ctx, days, false)
+}
+
+// CountExpiredByTenant counts the same over each doc_type's expiration window, but
+// only for hard-mode tenants — matching read-time withholding (expired is hard-only).
+func (r *SectionRepository) CountExpiredByTenant(ctx context.Context, days map[string]int) ([]StalenessCount, error) {
+	return r.countAgedSections(ctx, days, true)
+}
+
+// countAgedSections runs one grouped COUNT per doc_type window. Stale counts raw
+// corpus health across all tenants (usable on the default off-mode); hardOnly
+// restricts to hard-mode tenants (the expired gauge, matching read-gating).
+func (r *SectionRepository) countAgedSections(ctx context.Context, days map[string]int, hardOnly bool) ([]StalenessCount, error) {
+	out := make([]StalenessCount, 0, len(days))
+	for docType, d := range days {
+		if d <= 0 {
+			continue
+		}
+		q := r.db.WithContext(ctx).
+			Table("sections AS s").
+			Select("doc.tenant_id AS tenant_id, doc.doc_type AS doc_type, COUNT(*) AS count").
+			Joins("JOIN documents doc ON doc.id = s.document_id")
+		if hardOnly {
+			q = q.Joins("JOIN tenants t ON t.id = doc.tenant_id AND t.staleness_mode = ?", models.StalenessModeHard)
+		}
+		var rows []StalenessCount
+		if err := q.
+			Where("doc.doc_type = ? AND doc.archived_at IS NULL", docType).
+			Where("NOW() - COALESCE(s.verified_at, s.created_at) > make_interval(days => ?)", d).
+			Group("doc.tenant_id, doc.doc_type").
+			Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("count aged sections (%s): %w", docType, err)
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}

@@ -62,10 +62,12 @@ upstream IdP). Data is tenant-scoped with an optional shared "common" pool; a ca
 - **Staleness & verification** — per-`doc_type` freshness thresholds as a recall-time
   *signal*: `off` (none), `advisory` (warn in the response), or `hard` (withhold stale
   content until re-verified). The signal never deletes.
-- **Agent-driven retirement** — no automated time-based sweep archives or deletes aged
-  documents. Agents retire knowledge deliberately: supersede an entry (a `supersedes`
-  edge archives its target and purges its content into a lineage-only tombstone; the
-  content is not recoverable), update it in place, or delete it.
+- **Agent-driven retirement, plus an opt-in sweep** — by default nothing deletes on a
+  timer. Agents retire knowledge deliberately: supersede an entry (a `supersedes` edge
+  archives its target and purges its content into a lineage-only tombstone; the content is
+  not recoverable), update it in place, or delete it. An **opt-in retention sweep**
+  (`retention_sweep_enabled`, default off) additionally hard-deletes documents that are both
+  expired past their doc_type age *and* access-cold — see [Retention sweep](#retention-sweep).
 - **Live global configuration** — an admin-only config page at `/ui/admin` (system admins
   only) edits runtime globals in the database with no restart: retrieval tuning, rate
   limits, new-tenant defaults, the near-duplicate threshold, and the cleanup webhook.
@@ -76,6 +78,10 @@ upstream IdP). Data is tenant-scoped with an optional shared "common" pool; a ca
 - **Cleanup pipeline** — a nightly scanner queues near-duplicate candidates for review and
   can POST a per-scan JSON summary to a configurable webhook, plus a companion sweep that
   hard-deletes long-dead (revoked or expired) API keys so key listings stay tidy.
+- **Usage metrics (opt-in)** — a per-tenant, append-only event log (`access` / `verify` /
+  `cleanup`) with configurable retention, plus live stale/expired gauges, surfaced on an
+  admin dashboard. Off per tenant by default (`metrics_enabled`); the aggregation is
+  Prometheus-shaped for a later `/metrics` endpoint. See [Usage metrics](#usage-metrics).
 - **Web console + MCP admin tools** — a full web console at `/ui`: browse and edit
   memories (color-coded per owning tenant), manage tenants (create, rename, delete),
   members and per-document ACL grants, and API keys (create, rotate, revoke, purge), and
@@ -255,6 +261,9 @@ stored value always wins over the env default — see
 | `RATE_LIMIT_TRUSTED_PROXY_DEPTH` | `0` | **seed** — number of trusted reverse-proxy/CDN hops in front for client-IP rate-limit keying. `0` (default) trusts none: `X-Forwarded-For` is ignored and the key is `RemoteAddr` (unspoofable). Behind a proxy/CDN, set it to your trusted-hop count so the client IP is read from the right `X-Forwarded-For` entry; leaving it `0` there makes all traffic share one bucket. |
 | `CLEANUP_ENABLED` | `true` | **seed** — enable the nightly near-duplicate cleanup scanner. |
 | `CLEANUP_INTERVAL_HOURS` | `24` | **seed** — scan interval (shared by the dead-key sweep); a change takes effect at the next scheduler fire. |
+| `RETENTION_SWEEP_ENABLED` | `false` | **seed** — opt-in expired-document retention sweep. When on, the cleanup scanner hard-deletes documents expired past their doc_type age *and* access-cold; default off. See [Retention sweep](#retention-sweep). |
+| `RETENTION_GRACE_DAYS` | `30` | **seed** — extra days added to a doc_type's `expiration_age_days` before an access-cold document is eligible for the sweep; `>= 0`, `0` = none. |
+| `METRICS_RETENTION_DAYS` | `90` | **seed** — prune horizon for the `metric_events` usage log; the cleanup scanner drops rows older than this. `>= 1`. |
 | `REQUIRE_CONFIG_LISTENER` | `false` | **seed** — when `true`, a dead config-invalidation listener fails `/~/ready` (never `/~/health`). Off by default: a single replica gets every change write-through and has no peers to fall behind. Turn it on for multi-replica deployments. See [Architecture](#architecture). |
 | `MEMORY_MMR_LAMBDA` | `0.5` | **seed** — MMR diversity re-rank lambda for hybrid search; range `(0, 1]`. `0.5` is the LongMemEval-tuned optimum; `1.0` disables (pure relevance). |
 | `MEMORY_CANDIDATE_POOL` | `20` | **seed** — per-list SQL `LIMIT` each of the semantic and lexical candidate lists draws before fusion; range `[1, 1000]`. |
@@ -295,6 +304,8 @@ database and edited — without a restart — on the admin config page at **`/ui
 (system admins only). A stored value always wins over the env default. Most changes apply
 immediately (retrieval tuning, toggles, new-tenant defaults, self-service, log level, rate
 limits, request-size cap); `CLEANUP_INTERVAL_HOURS` takes effect at the next scheduler fire.
+The retention-sweep fields (`retention_sweep_enabled`, `retention_grace_days`,
+`metrics_retention_days`) are edited here too, alongside `cleanup_enabled`.
 
 Two globals have **no env var** and are set only on the page:
 
@@ -368,6 +379,46 @@ works the same way: upload an archive from the admin UI or `POST /api/admin/impo
 (multipart, a zip, processed asynchronously by a background worker). See
 [`docs/administering.md`](docs/administering.md) for the full first-run bootstrap,
 break-glass reset, document import, user-management, and key-lifecycle runbook.
+
+### Retention sweep
+
+By default the server never deletes on a timer — retirement is agent-driven (supersede,
+update, delete). An **opt-in** sweep can additionally remove documents that have outlived
+their usefulness. Turn it on with `retention_sweep_enabled` (default off, on the config
+page or `RETENTION_SWEEP_ENABLED`); it then rides the cleanup scanner, gated independently
+of the near-duplicate cleanup (`cleanup_enabled`).
+
+A document is deleted only when **all** hold: its liveness clock —
+`GREATEST(last verification, last access, creation)` — is older than its doc_type's
+`expiration_age_days` **plus** `retention_grace_days`; it is not pinned; and its doc_type
+has `expiration_age_days > 0`. A document read or re-verified during the grace window bumps
+that clock and survives — the grace window and the access gate are the safety net. Two
+escape hatches keep a document forever: a per-document **pin**, and setting its doc_type's
+`expiration_age_days = 0` (never-expire, so never eligible — this is how you exempt a whole
+category).
+
+The delete is a **hard delete** — the supersede purge cascade (sections, embeddings, FTS
+rows, edges) plus a `deletion_events` audit row (reason `retention_sweep`). It is **not
+recoverable**; the grace window, the access gate, and the dry-run are the safety net, not an
+archive tier. Preview the blast radius before enabling with the `lint_memory`
+`retention_candidate` finding, which runs the candidate query without deleting, regardless
+of toggle state.
+
+### Usage metrics
+
+Each tenant can opt into a usage-metrics event log with `metrics_enabled` (default off), set
+on `PATCH /tenants/{id}/settings` or the `update_my_tenant_settings` MCP tool. It rides the
+self-service gate: an admin sets it for any tenant, a tenant manager only where the tenant's
+self-service policy is `open`. When on, the tenant appends to the `metric_events` log on
+each `access`, `verify`, and `cleanup` (a retention delete), pruned by the cleanup scanner
+at `metrics_retention_days` (default 90). Stale and expired counts are **live gauges**
+(computed COUNT queries), not events.
+
+`GET /api/admin/metrics` (admin-only; `days` and `top` query params, default 30 days / top
+10) returns a JSON summary — event counts over the window, the stale/expired gauges, and the
+top-accessed documents — rendered on the admin **Metrics** dashboard page. The aggregation
+is Prometheus-shaped (counters keyed tenant × doc_type × event_type, gauges tenant ×
+doc_type); a `/metrics` exposition endpoint over the same series is planned, not yet shipped.
 
 ## Connecting a client
 
@@ -489,8 +540,13 @@ Honest about what it is and isn't:
   contract — a different product from memory systems that rewrite your notes on ingest.
 - **History is an audit trail, not rollback.** Mutation history is append-only, shared-tenant,
   and toggle-gated; `update_section` overwrites — there is no per-edit version restore.
-- **Opt-in by default.** Mutation history is off until an operator enables its global
-  toggle; the duplicate guard and staleness signal are per-tenant opt-in.
+- **Opt-in by default.** Mutation history and the retention sweep are each off until an
+  operator enables their global toggle; the duplicate guard, staleness signal, and usage
+  metrics are per-tenant opt-in.
+- **Retention deletes are irreversible.** When the sweep is enabled it hard-deletes — no
+  recoverable archive tier. The grace window, the access-recency gate, per-doc pins, a
+  doc_type's `expiration_age_days=0`, and the `lint_memory` dry-run are the safety net, and
+  a `deletion_events` audit row records each delete.
 
 ## References
 

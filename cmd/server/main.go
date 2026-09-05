@@ -149,6 +149,9 @@ func globalConfigSeed(cfg *config.Config) database.GlobalConfigDefaults {
 		AdminEmails:           cfg.AdminAllowedEmails,
 		CleanupEnabled:        cfg.CleanupEnabled,
 		CleanupIntervalHours:  cfg.CleanupIntervalHours,
+		RetentionSweepEnabled: cfg.RetentionSweepEnabled,
+		RetentionGraceDays:    cfg.RetentionGraceDays,
+		MetricsRetentionDays:  cfg.MetricsRetentionDays,
 		RateLimitRPS:          cfg.RateLimitRPS,
 		RateLimitBurst:        cfg.RateLimitBurst,
 		TrustedProxyDepth:     cfg.RateLimitTrustedProxyDepth,
@@ -223,6 +226,8 @@ func main() {
 	mutationHistoryRepo := repository.NewMutationHistoryRepository(db)
 	importJobRepo := repository.NewImportJobRepository(db)
 	edgeRepo := repository.NewEdgeRepository(db)
+	retentionRepo := repository.NewRetentionRepository(db)
+	metricEventRepo := repository.NewMetricEventRepository(db)
 
 	// Root context for background work — cancelled on SIGINT/SIGTERM so the
 	// listener, scanners, and HTTP server shut down together.
@@ -233,6 +238,10 @@ func main() {
 	// boot and recomputed on write. Shared by the service + server layers.
 	globalCfg := globalconfig.New(instanceConfigRepo)
 	policyStore := staleness.NewPolicyStore(db)
+
+	// Read-only metrics aggregator behind GET /api/admin/metrics: event-log
+	// counters + live stale/expired gauges from the effective policy windows.
+	metricsSvc := service.NewMetricsService(metricEventRepo, sectionRepo, policyStore)
 
 	// Config-invalidation listener: LISTEN must be established (both channels
 	// registered) BEFORE the initial loads below, so a change committed during
@@ -300,7 +309,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, policyStore, overrideRepo, cleanupRepo, instanceConfigRepo, mutationHistoryRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithSnippetChars(cfg.SnippetChars), service.WithCandidatePool(cfg.CandidatePool), service.WithEdgeRepository(edgeRepo), service.WithGlobalConfig(globalCfg))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, policyStore, overrideRepo, cleanupRepo, instanceConfigRepo, mutationHistoryRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithSnippetChars(cfg.SnippetChars), service.WithCandidatePool(cfg.CandidatePool), service.WithEdgeRepository(edgeRepo), service.WithGlobalConfig(globalCfg), service.WithMetricEventRepository(metricEventRepo))
 	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
 	// Toggle defaults stamped onto every tenant created through the service.
@@ -340,7 +349,7 @@ func main() {
 	// cleanup_enabled / interval / retention live from the accessor each cycle.
 	cleanupNotifier := cleanup.NewNotifier(globalCfg)
 	cleanupScanner := cleanup.NewScanner(
-		lintRepo, tenantRepo, cleanupRepo, mutationHistoryRepo, policyStore,
+		lintRepo, tenantRepo, cleanupRepo, mutationHistoryRepo, retentionRepo, metricEventRepo, policyStore,
 		globalCfg, cleanupNotifier, slog.Default(),
 	)
 	cleanupScanner.Start(rootCtx)
@@ -458,6 +467,7 @@ func main() {
 		GlobalConfig:   globalCfg,
 		ConfigListener: configListener,
 		SetLogLevel:    func(name string) { applyLogLevel(logLevel, name) },
+		Metrics:        metricsSvc,
 	})
 
 	srv := &http.Server{

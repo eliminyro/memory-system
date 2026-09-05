@@ -13,10 +13,13 @@ import (
 // fakeConfig satisfies GlobalConfig for the notifier tests; only WebhookURL varies.
 type fakeConfig struct{ webhookURL string }
 
-func (f fakeConfig) CleanupEnabled() bool      { return true }
-func (f fakeConfig) CleanupIntervalHours() int { return 24 }
-func (f fakeConfig) HistoryRetentionDays() int { return 90 }
-func (f fakeConfig) WebhookURL() string        { return f.webhookURL }
+func (f fakeConfig) CleanupEnabled() bool        { return true }
+func (f fakeConfig) CleanupIntervalHours() int   { return 24 }
+func (f fakeConfig) HistoryRetentionDays() int   { return 90 }
+func (f fakeConfig) RetentionSweepEnabled() bool { return false }
+func (f fakeConfig) RetentionGraceDays() int     { return 30 }
+func (f fakeConfig) MetricsRetentionDays() int   { return 90 }
+func (f fakeConfig) WebhookURL() string          { return f.webhookURL }
 
 // rtFunc adapts a func to http.RoundTripper.
 type rtFunc func(*http.Request) (*http.Response, error)

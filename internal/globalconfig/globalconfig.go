@@ -33,6 +33,9 @@ type Snapshot struct {
 	AdminEmails           string
 	CleanupEnabled        bool
 	CleanupIntervalHours  int
+	RetentionSweepEnabled bool
+	RetentionGraceDays    int
+	MetricsRetentionDays  int
 	RateLimitRPS          float64
 	RateLimitBurst        int
 	TrustedProxyDepth     int
@@ -88,6 +91,9 @@ func snapshotFrom(c *models.InstanceConfig) *Snapshot {
 		AdminEmails:           c.AdminEmails,
 		CleanupEnabled:        c.CleanupEnabled,
 		CleanupIntervalHours:  c.CleanupIntervalHours,
+		RetentionSweepEnabled: c.RetentionSweepEnabled,
+		RetentionGraceDays:    c.RetentionGraceDays,
+		MetricsRetentionDays:  c.MetricsRetentionDays,
 		RateLimitRPS:          c.RateLimitRPS,
 		RateLimitBurst:        c.RateLimitBurst,
 		TrustedProxyDepth:     c.TrustedProxyDepth,
@@ -114,6 +120,9 @@ func (a *Accessor) SignupDomains() string       { return a.Snapshot().SignupDoma
 func (a *Accessor) AdminEmails() string         { return a.Snapshot().AdminEmails }
 func (a *Accessor) CleanupEnabled() bool        { return a.Snapshot().CleanupEnabled }
 func (a *Accessor) CleanupIntervalHours() int   { return a.Snapshot().CleanupIntervalHours }
+func (a *Accessor) RetentionSweepEnabled() bool { return a.Snapshot().RetentionSweepEnabled }
+func (a *Accessor) RetentionGraceDays() int     { return a.Snapshot().RetentionGraceDays }
+func (a *Accessor) MetricsRetentionDays() int   { return a.Snapshot().MetricsRetentionDays }
 func (a *Accessor) RateLimitRPS() float64       { return a.Snapshot().RateLimitRPS }
 func (a *Accessor) RateLimitBurst() int         { return a.Snapshot().RateLimitBurst }
 func (a *Accessor) TrustedProxyDepth() int      { return a.Snapshot().TrustedProxyDepth }

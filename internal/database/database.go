@@ -100,6 +100,9 @@ type GlobalConfigDefaults struct {
 	AdminEmails           string
 	CleanupEnabled        bool
 	CleanupIntervalHours  int
+	RetentionSweepEnabled bool
+	RetentionGraceDays    int
+	MetricsRetentionDays  int
 	RateLimitRPS          float64
 	RateLimitBurst        int
 	TrustedProxyDepth     int
@@ -117,6 +120,7 @@ func BaselineGlobalConfigDefaults() GlobalConfigDefaults {
 		StalenessDefault: models.StalenessModeHard, DuplicateGuardDefault: true, CleanupScanDefault: true,
 		DuplicateThreshold: 0.85, SelfServicePolicy: models.SelfServicePolicyOpen,
 		CleanupEnabled: true, CleanupIntervalHours: 24,
+		RetentionGraceDays: 30, MetricsRetentionDays: 90,
 		RateLimitRPS: 20, RateLimitBurst: 40, TrustedProxyDepth: 0, MaxRequestBytes: 1048576,
 		LogLevel: "info",
 	}
@@ -161,6 +165,7 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		&models.OverrideLog{},
 		&models.CleanupQueue{},
 		&models.DeletionEvent{},
+		&models.MetricEvent{},
 		&models.MutationHistory{},
 		&models.EmbeddingMetadata{},
 		&models.InstanceConfig{},
@@ -225,6 +230,9 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_cleanup_pending_pair ON cleanup_queue (tenant_id, doc_a_id, doc_b_id) WHERE resolved_at IS NULL`,
 		// One edge per (source, target, type); backs Create's idempotent-on-conflict path.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_document_edges_triple ON document_edges (source_document_id, target_document_id, edge_type)`,
+		// metric_events access paths: per-tenant windowed counters and event-type prune.
+		`CREATE INDEX IF NOT EXISTS idx_metric_events_tenant_created ON metric_events (tenant_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_metric_events_type_created ON metric_events (event_type, created_at)`,
 	}
 
 	// Config-invalidation: one notify function (channel via TG_ARGV) serving every
@@ -309,8 +317,9 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 			 history_retention_days, staleness_default, duplicate_guard_default, cleanup_scan_default,
 			 duplicate_threshold, self_service_policy, signup_domains, admin_emails, cleanup_enabled,
 			 cleanup_interval_hours, rate_limit_rps, rate_limit_burst, trusted_proxy_depth,
-			 max_request_bytes, log_level, webhook_url, require_config_listener, globals_seeded, updated_at)
-		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
+			 max_request_bytes, log_level, webhook_url, require_config_listener,
+			 retention_sweep_enabled, retention_grace_days, metrics_retention_days, globals_seeded, updated_at)
+		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
 		 ON CONFLICT (id) DO UPDATE SET
 			mmr_lambda = EXCLUDED.mmr_lambda, staleness_penalty = EXCLUDED.staleness_penalty,
 			candidate_pool = EXCLUDED.candidate_pool,
@@ -324,6 +333,9 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 			trusted_proxy_depth = EXCLUDED.trusted_proxy_depth, max_request_bytes = EXCLUDED.max_request_bytes,
 			log_level = EXCLUDED.log_level, webhook_url = EXCLUDED.webhook_url,
 			require_config_listener = EXCLUDED.require_config_listener,
+			retention_sweep_enabled = EXCLUDED.retention_sweep_enabled,
+			retention_grace_days = EXCLUDED.retention_grace_days,
+			metrics_retention_days = EXCLUDED.metrics_retention_days,
 			globals_seeded = true, updated_at = now()
 		 WHERE instance_config.globals_seeded = false`,
 		models.InstanceConfigSingletonID,
@@ -332,6 +344,7 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		gc.SelfServicePolicy, gc.SignupDomains, gc.AdminEmails, gc.CleanupEnabled,
 		gc.CleanupIntervalHours, gc.RateLimitRPS, gc.RateLimitBurst, gc.TrustedProxyDepth,
 		gc.MaxRequestBytes, gc.LogLevel, gc.WebhookURL, gc.RequireConfigListener,
+		gc.RetentionSweepEnabled, gc.RetentionGraceDays, gc.MetricsRetentionDays,
 	).Error; err != nil {
 		return fmt.Errorf("seed instance config: %w", err)
 	}
