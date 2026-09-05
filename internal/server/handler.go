@@ -131,12 +131,13 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("/~/version", versionHandler)
 
 	// Middleware stack (innermost first): CORS nearest the mux; body cap + rate
-	// limiter always wrap the surface, self-disabling per request off live
-	// GlobalConfig; SecurityHeaders outermost so 429/413/OPTIONS carry the CSP.
+	// limiter self-disable per request off live GlobalConfig; SecurityHeaders
+	// carries the CSP; AccessLog outermost so its line covers every rejection.
 	handler := middleware.CORS(mux)
 	handler = withGlobalBodyCap(handler, d.GlobalConfig)
 	handler = middleware.RateLimit(d.GlobalConfig)(handler)
 	handler = middleware.SecurityHeaders(handler)
+	handler = middleware.AccessLog(handler)
 	return handler
 }
 

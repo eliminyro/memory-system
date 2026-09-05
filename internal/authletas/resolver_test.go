@@ -14,12 +14,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// captureLogger returns a JSON slog.Logger and the buffer it writes to (one
-// JSON record per line).
+// captureLogger returns a JSON slog.Logger (at Debug, so reject events are
+// captured) and the buffer it writes to (one JSON record per line).
 func captureLogger(t *testing.T) (*slog.Logger, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	return slog.New(slog.NewJSONHandler(buf, nil)), buf
+	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})), buf
 }
 
 // requireRejectEvent finds the first record matching reason and asserts the
@@ -190,34 +190,34 @@ func TestMemoryUserResolver_EmptyEmailReturnsUnauthorized(t *testing.T) {
 // Each rejection path emits one structured log record with the stable event
 // key + per-reason label, so operators can aggregate without code changes.
 func TestMemoryUserResolver_EmitsRejectEvent(t *testing.T) {
-	t.Run("email_empty logs at INFO with no email field", func(t *testing.T) {
+	t.Run("email_empty logs at DEBUG with no email field", func(t *testing.T) {
 		logger, buf := captureLogger(t)
 		db := openTestDB(t)
 		r := &MemoryUserResolver{DB: db, Logger: logger}
 		_, _ = r.Resolve(context.Background(), idp.Claims{Email: "", EmailVerified: true})
-		rec := requireRejectEvent(t, buf, rejectReasonEmailEmpty, "INFO")
+		rec := requireRejectEvent(t, buf, rejectReasonEmailEmpty, "DEBUG")
 		if _, ok := rec["email"]; ok {
 			t.Fatalf("email field must be absent for empty-email reject, rec=%v", rec)
 		}
 	})
 
-	t.Run("email_unverified logs at INFO with email field", func(t *testing.T) {
+	t.Run("email_unverified logs at DEBUG with email field", func(t *testing.T) {
 		logger, buf := captureLogger(t)
 		db := openTestDB(t)
 		r := &MemoryUserResolver{DB: db, Logger: logger}
 		_, _ = r.Resolve(context.Background(), idp.Claims{Email: "u@x", EmailVerified: false})
-		rec := requireRejectEvent(t, buf, rejectReasonEmailUnverified, "INFO")
+		rec := requireRejectEvent(t, buf, rejectReasonEmailUnverified, "DEBUG")
 		if rec["email"] != "u@x" {
 			t.Fatalf("email=%v want u@x", rec["email"])
 		}
 	})
 
-	t.Run("tenant_not_found logs at INFO with email field", func(t *testing.T) {
+	t.Run("tenant_not_found logs at DEBUG with email field", func(t *testing.T) {
 		logger, buf := captureLogger(t)
 		db := openTestDB(t)
 		r := &MemoryUserResolver{DB: db, Logger: logger}
 		_, _ = r.Resolve(context.Background(), idp.Claims{Email: "stranger@example", EmailVerified: true})
-		rec := requireRejectEvent(t, buf, rejectReasonTenantNotFound, "INFO")
+		rec := requireRejectEvent(t, buf, rejectReasonTenantNotFound, "DEBUG")
 		if rec["email"] != "stranger@example" {
 			t.Fatalf("email=%v want stranger@example", rec["email"])
 		}
@@ -336,7 +336,7 @@ func TestMemoryUserResolver_MultiUserTenant_ReturnsPerUserID(t *testing.T) {
 
 // TestMemoryUserResolver_ProvisionNotAllowedRejects: a Provision callback
 // returning ErrProvisionNotAllowed yields ErrUnauthorized plus a reject event
-// with reason "not_allowed" at INFO.
+// with reason "not_allowed" at DEBUG.
 func TestMemoryUserResolver_ProvisionNotAllowedRejects(t *testing.T) {
 	logger, buf := captureLogger(t)
 	db := openTestDB(t)
@@ -354,7 +354,7 @@ func TestMemoryUserResolver_ProvisionNotAllowedRejects(t *testing.T) {
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("got %v, want ErrUnauthorized", err)
 	}
-	rec := requireRejectEvent(t, buf, rejectReasonNotAllowed, "INFO")
+	rec := requireRejectEvent(t, buf, rejectReasonNotAllowed, "DEBUG")
 	if rec["email"] != "blocked@example.com" {
 		t.Fatalf("email=%v want blocked@example.com", rec["email"])
 	}
@@ -362,7 +362,7 @@ func TestMemoryUserResolver_ProvisionNotAllowedRejects(t *testing.T) {
 
 // TestMemoryUserResolver_ProvisionOtherErrorRejects: any non-sentinel provision
 // error must not leak — Resolve returns ErrUnauthorized and logs a db_error
-// reject at WARN.
+// reject at DEBUG.
 func TestMemoryUserResolver_ProvisionOtherErrorRejects(t *testing.T) {
 	logger, buf := captureLogger(t)
 	db := openTestDB(t)

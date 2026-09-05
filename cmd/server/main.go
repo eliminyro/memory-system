@@ -277,6 +277,7 @@ func main() {
 		slog.Error("failed to create embedding provider", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("embedding provider active", "provider", cfg.EmbeddingProvider, "model", cfg.EmbeddingModel(), "dimensions", cfg.EmbeddingDimensions)
 
 	// Admin email allowlist — bootstrap-only: read from DB global config (env-seeded,
 	// admin-editable, applied at restart) to seed system:memory#admin tuples at
