@@ -43,6 +43,9 @@ type Deps struct {
 	// shared LevelVar, so a PATCH of log_level takes effect live.
 	SetLogLevel func(level string)
 
+	// Metrics backs the admin metrics dashboard (GET /api/admin/metrics).
+	Metrics metricsSummarizer
+
 	// PublicBaseURL is the server's external origin (scheme+host, no trailing
 	// slash); the UI's OAuth config is derived from it so login works on any host.
 	PublicBaseURL string
@@ -89,7 +92,7 @@ func NewHandler(d Deps) http.Handler {
 	// Web UI JSON API — JWT-only, reusing /mcp's bearer validation + tenant bridge.
 	// Requires authlet wiring; without it the UI can't authenticate.
 	if d.AuthletWiring != nil && d.Memory != nil {
-		api := &apiHandler{memory: d.Memory, importJobs: d.ImportJobs, maxUploadBytes: d.ImportMaxUploadBytes, instanceConfig: d.InstanceConfig, globalCfg: d.GlobalConfig, setLogLevel: d.SetLogLevel}
+		api := &apiHandler{memory: d.Memory, importJobs: d.ImportJobs, maxUploadBytes: d.ImportMaxUploadBytes, instanceConfig: d.InstanceConfig, globalCfg: d.GlobalConfig, setLogLevel: d.SetLogLevel, metrics: d.Metrics}
 		apiStack := d.AuthletWiring.BearerMW(d.AuthletWiring.UserContextBridge()(http.StripPrefix("/api", api.mux())))
 		mux.Handle("/api/", apiStack)
 	}

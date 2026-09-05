@@ -75,12 +75,12 @@ func TestSelfServiceToggleEditMatrix(t *testing.T) {
 	require.NoError(t, err)
 	memberTU, err := svc.GrantTenantUser(adminCtx, "m-"+uuid.NewString()+"@example.com", shared.ID, models.TenantUserRoleMember)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, memberTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, memberTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil, nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "open: a plain member may NOT edit toggles (manager required)")
 
 	openAdminTU, err := svc.GrantTenantUser(adminCtx, "oa-"+uuid.NewString()+"@example.com", shared.ID, models.TenantUserRoleAdmin)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, openAdminTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, openAdminTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil, nil)
 	require.NoError(t, err, "open: a manager (tenant-admin) may edit toggles")
 
 	// admin_only on a personal tenant: owner blocked, system admin allowed.
@@ -90,11 +90,11 @@ func TestSelfServiceToggleEditMatrix(t *testing.T) {
 	require.NoError(t, err)
 	ownerTU, err := svc.GrantTenantUser(adminCtx, "o-"+uuid.NewString()+"@example.com", personal.ID, models.TenantUserRoleOwner)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(personal.ID, ownerTU.ID.String()), strPtr(models.StalenessModeHard), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(personal.ID, ownerTU.ID.String()), strPtr(models.StalenessModeHard), nil, nil, false, nil, nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "admin_only: personal owner blocked from editing toggles")
 
 	sysCtx := auth.WithTenantID(auth.WithLocalAdmin(context.Background()), personal.ID)
-	_, err = svc.UpdateMyTenantSettings(sysCtx, strPtr(models.StalenessModeHard), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(sysCtx, strPtr(models.StalenessModeHard), nil, nil, false, nil, nil)
 	require.NoError(t, err, "admin_only: a system admin may still edit toggles")
 
 	// admin_only on a shared tenant: tenant-admin allowed, plain member blocked.
@@ -104,12 +104,12 @@ func TestSelfServiceToggleEditMatrix(t *testing.T) {
 	require.NoError(t, err)
 	adminTU, err := svc.GrantTenantUser(adminCtx, "sa-"+uuid.NewString()+"@example.com", sharedLocked.ID, models.TenantUserRoleAdmin)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(sharedLocked.ID, adminTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(sharedLocked.ID, adminTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil, nil)
 	require.NoError(t, err, "admin_only: a shared tenant-admin may edit toggles")
 
 	memTU, err := svc.GrantTenantUser(adminCtx, "sm-"+uuid.NewString()+"@example.com", sharedLocked.ID, models.TenantUserRoleMember)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(sharedLocked.ID, memTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(sharedLocked.ID, memTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil, nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "admin_only: a plain member is blocked")
 }
 
@@ -178,7 +178,7 @@ func TestSelfServicePolicyAdminOnlySetter(t *testing.T) {
 	// must leave the stored override untouched.
 	ownerTU, err := svc.GrantTenantUser(adminCtx, "so-"+uuid.NewString()+"@example.com", tenant.ID, models.TenantUserRoleOwner)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(tenant.ID, ownerTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(tenant.ID, ownerTU.ID.String()), strPtr(models.StalenessModeAdvisory), nil, nil, false, nil, nil)
 	require.NoError(t, err)
 	tenants, err := svc.ListTenants(adminCtx)
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestSelfServiceDefaultOpenRegression(t *testing.T) {
 	require.NoError(t, err)
 	ownerCtx := ctxFor(personal.ID, ownerTU.ID.String())
 
-	_, err = svc.UpdateMyTenantSettings(ownerCtx, strPtr(models.StalenessModeAdvisory), nil, nil, false, nil)
+	_, err = svc.UpdateMyTenantSettings(ownerCtx, strPtr(models.StalenessModeAdvisory), nil, nil, false, nil, nil)
 	require.NoError(t, err, "default-open: owner edits toggles")
 	_, key, err := svc.CreateAPIKey(ownerCtx, personal.ID, "self", nil, nil)
 	require.NoError(t, err, "default-open: owner self-creates a key")

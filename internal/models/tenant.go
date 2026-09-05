@@ -93,6 +93,7 @@ type Tenant struct {
 	StalenessMode      string `gorm:"size:16;not null;default:'off'" json:"staleness_mode"`
 	DuplicateGuard     bool   `gorm:"not null;default:false" json:"duplicate_guard"`
 	CleanupScanEnabled bool   `gorm:"not null;default:false" json:"cleanup_scan_enabled"`
+	MetricsEnabled     bool   `gorm:"not null;default:false" json:"metrics_enabled"`
 
 	// DuplicateThreshold is the per-tenant near-duplicate cutoff OVERRIDE for the
 	// write guard (0<v<=1); NULL inherits the global instance_config default.

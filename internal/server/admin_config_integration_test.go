@@ -125,6 +125,32 @@ func TestAdminConfig_PartialUpdatePersistsAndAppliesLive(t *testing.T) {
 	require.InDelta(t, newLambda, f.gc.MMRLambda(), 1e-9)
 }
 
+// TestAdminConfig_RetentionFieldsRoundTripAndValidate proves the retention
+// instance_config fields PATCH round-trip (persist + live accessor) and that
+// validation rejects a negative grace and a sub-1 metrics retention.
+func TestAdminConfig_RetentionFieldsRoundTripAndValidate(t *testing.T) {
+	f := newConfigFixture(t)
+
+	rec := httptest.NewRecorder()
+	f.h.mux().ServeHTTP(rec, ctxJSONReq(http.MethodPatch, "/admin/config", f.admin, map[string]any{
+		"retention_sweep_enabled": true, "retention_grace_days": 14, "metrics_retention_days": 45,
+	}))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	after := f.getConfig(t, f.admin)
+	require.True(t, after.RetentionSweepEnabled)
+	require.Equal(t, 14, after.RetentionGraceDays)
+	require.Equal(t, 45, after.MetricsRetentionDays)
+	require.Equal(t, 14, f.gc.RetentionGraceDays())
+	require.Equal(t, 45, f.gc.MetricsRetentionDays())
+
+	for _, p := range []map[string]any{{"retention_grace_days": -1}, {"metrics_retention_days": 0}} {
+		recB := httptest.NewRecorder()
+		f.h.mux().ServeHTTP(recB, ctxJSONReq(http.MethodPatch, "/admin/config", f.admin, p))
+		require.Equal(t, http.StatusBadRequest, recB.Code, recB.Body.String())
+	}
+}
+
 // TestAdminConfig_InvalidValueRejectedAtomically proves an out-of-range field
 // rejects the whole PATCH with 400 and applies nothing: a valid sibling field in
 // the same request is not persisted either, and the accessor is untouched.

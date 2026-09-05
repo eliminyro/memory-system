@@ -1508,6 +1508,8 @@ function route() {
     (isAdmin || writableTenants.length ? renderTenantPanel(id) : renderMemories()).catch(showError);
   } else if (h === "#config") {
     (isAdmin ? renderConfig() : renderMemories()).catch(showError);
+  } else if (h === "#metrics") {
+    (isAdmin ? renderMetrics() : renderMemories()).catch(showError);
   } else if (h === "#connect") {
     renderConnect();
   } else {
@@ -1531,6 +1533,7 @@ function renderTabBar() {
   }
   if (isAdmin) {
     tabs.push({ label: "Config", view: "config", hash: "config", active: h === "#config" });
+    tabs.push({ label: "Metrics", view: "metrics", hash: "metrics", active: h === "#metrics" });
   }
   for (const t of tabs) {
     const b = el("button", { type: "button", textContent: t.label, className: t.active ? "active" : "" });
@@ -1668,6 +1671,9 @@ const CONFIG_SCHEMA = [
   { title: "Maintenance sweeps", tc: "var(--warn)", note: "nightly", fields: [
     { key: "cleanup_enabled", label: "Cleanup pipeline", env: "CLEANUP_ENABLED", desc: "Nightly lint scan populating cleanup_queue with near-duplicate candidates.", ctl: "seg", options: ["off", "on"], bool: true },
     { key: "cleanup_interval_hours", label: "Cleanup interval", env: "CLEANUP_INTERVAL_HOURS", def: "default 24", ctl: "num", type: "int", min: 1, unit: "hours" },
+    { key: "retention_sweep_enabled", label: "Retention sweep", env: "RETENTION_SWEEP_ENABLED", desc: "Hard-delete expired, cold, unpinned documents on the sweep. Off leaves staleness intact.", ctl: "seg", options: ["off", "on"], bool: true },
+    { key: "retention_grace_days", label: "Retention grace", env: "RETENTION_GRACE_DAYS", desc: "Extra days past expiry before a cold document is eligible for eviction.", def: "default 30 · 0 = none", ctl: "num", type: "int", min: 0, unit: "days", depends: "retention_sweep_enabled" },
+    { key: "metrics_retention_days", label: "Metrics retention", env: "METRICS_RETENTION_DAYS", desc: "Sweep prunes metric_events older than this.", def: "default 90 · min 1", ctl: "num", type: "int", min: 1, unit: "days" },
   ] },
   { title: "HTTP hardening", tc: "var(--cool)", fields: [
     { key: "rate_limit_rps", label: "Rate limit", env: "RATE_LIMIT_RPS", desc: "Token-bucket over the auth+write surface.", def: "≤0 disables · default 20", ctl: "num", type: "float", min: 0, unit: "req/s" },
@@ -1835,6 +1841,94 @@ async function renderConfig() {
     }
     return row;
   }
+}
+
+// ── Metrics dashboard ─────────────────────────────────────────────────────────
+// Admin-only page over GET /api/admin/metrics: event counts + live stale/expired
+// gauges + top-accessed docs over a selectable window. Read-only, no external libs.
+
+// mShortId renders a UUID as a short {text,title} cell (full id on hover).
+function mShortId(id) { return id ? { text: String(id).slice(0, 8), title: String(id) } : { text: "—" }; }
+
+// mTable builds an .admin-table from headers + rows (each cell a string or a
+// {text,title} tooltip cell); an empty rows list renders the `empty` message.
+function mTable(headers, rows, empty) {
+  if (!rows.length) return el("p", { className: "state-msg", textContent: empty });
+  const td = (c) => (c && typeof c === "object" && "text" in c)
+    ? el("td", { textContent: c.text, title: c.title || "" })
+    : el("td", { textContent: String(c) });
+  const thead = el("thead", {}, el("tr", {}, ...headers.map((hd) => el("th", { textContent: hd }))));
+  const tbody = el("tbody", {}, ...rows.map((cells) => el("tr", {}, ...cells.map(td))));
+  return el("div", { className: "admin-table-wrap" }, el("table", { className: "admin-table" }, thead, tbody));
+}
+
+async function renderMetrics(days = 30) {
+  const seq = ++_renderSeq;
+  navStack.length = 0;
+  view.replaceChildren(el("p", { className: "state-msg", textContent: "loading…" }));
+  let m;
+  try {
+    m = await apiFetch(`/admin/metrics?days=${days}&top=10`);
+  } catch (err) {
+    if (seq === _renderSeq) showError(err);
+    return;
+  }
+  if (seq !== _renderSeq) return; // navigated away during the fetch (B7)
+  view.replaceChildren();
+
+  const winSeg = el("div", { className: "segmented seg-inline" },
+    ...[7, 30, 90].map((d) => {
+      const b = el("button", { type: "button", textContent: d + "d" });
+      if (d === days) b.classList.add("active");
+      return b;
+    }));
+  view.append(el("div", { className: "view-head" },
+    el("h1", { className: "mem-title" }, document.createTextNode("Metrics "),
+      el("span", { className: "pill pill--cool", textContent: "admins only" })),
+    winSeg));
+
+  const totals = { access: 0, verify: 0, cleanup: 0 };
+  for (const c of (m.counts || [])) totals[c.event_type] = (totals[c.event_type] || 0) + c.count;
+  view.append(el("div", { className: "legend" },
+    el("span", { className: "pill pill--cool", textContent: "access " + totals.access }),
+    el("span", { className: "pill pill--ok", textContent: "verify " + totals.verify }),
+    el("span", { className: "pill pill--warn", textContent: "cleanup " + totals.cleanup }),
+    el("span", { className: "count", textContent: `window ${m.window_days}d · since ${fmtDate(m.since)}` })));
+
+  const panel = (title, tc, note, body) => {
+    const p = el("div", { className: "panel" });
+    p.style.setProperty("--tc", tc); // CSSOM (CSP forbids inline style attrs)
+    const phead = el("div", { className: "panel-head" }, el("span", { className: "dot" }), el("h2", { textContent: title }));
+    if (note) phead.append(el("span", { className: "eyebrow ph-note", textContent: note }));
+    p.append(phead, el("div", { className: "section" }, body));
+    return p;
+  };
+
+  const countRows = (m.counts || []).map((c) => [mShortId(c.tenant_id), c.doc_type, c.event_type, c.count]);
+  const gauges = new Map();
+  const gkey = (g) => g.tenant_id + "|" + g.doc_type;
+  for (const g of (m.stale_sections || [])) gauges.set(gkey(g), { t: g.tenant_id, dt: g.doc_type, stale: g.count, expired: 0 });
+  for (const g of (m.expired_sections || [])) {
+    const e = gauges.get(gkey(g)) || { t: g.tenant_id, dt: g.doc_type, stale: 0, expired: 0 };
+    e.expired = g.count;
+    gauges.set(gkey(g), e);
+  }
+  const gaugeRows = [...gauges.values()].map((g) => [mShortId(g.t), g.dt, g.stale, g.expired]);
+  const topRows = (m.top_accessed || []).map((d) => [
+    { text: d.title || d.path || String(d.doc_id).slice(0, 8), title: d.path || String(d.doc_id) },
+    d.doc_type, mShortId(d.tenant_id), d.count,
+  ]);
+
+  const panels = el("div", { className: "config-panels" });
+  panels.append(
+    panel("Event counts", "var(--accent)", "over the window", mTable(["Tenant", "Doc type", "Event", "Count"], countRows, "No events recorded in this window.")),
+    panel("Liveness gauges", "var(--warn)", "live", mTable(["Tenant", "Doc type", "Stale", "Expired"], gaugeRows, "No stale or expired sections.")),
+    panel("Top accessed", "var(--cool)", "from the event log", mTable(["Document", "Doc type", "Tenant", "Accesses"], topRows, "No access events in this window.")),
+  );
+  view.append(panels);
+
+  initRockers(view, (btn, seg) => { if (seg === winSeg) renderMetrics(parseInt(btn.textContent, 10)); });
+  placeThumbsIn(view, false);
 }
 
 // ── Tenants tab ───────────────────────────────────────────────────────────────
@@ -2398,6 +2492,12 @@ function tenantSettingsSection(t) {
   enf.append(el("div", { className: "toggle-row" },
     el("div", { className: "lbl" }, document.createTextNode("Cleanup scan "), el("small", { textContent: "nightly near-duplicate sweep" })),
     cleanSeg));
+  const metricsSeg = el("div", { className: "segmented seg-inline" },
+    el("button", { type: "button", textContent: "off" }),
+    el("button", { type: "button", textContent: "on" }));
+  enf.append(el("div", { className: "toggle-row" },
+    el("div", { className: "lbl" }, document.createTextNode("Metrics "), el("small", { textContent: "record access/verify/cleanup usage events" })),
+    metricsSeg));
   const errLine = el("div", { className: "state-err" });
   errLine.hidden = true;
   enf.append(errLine);
@@ -2415,6 +2515,7 @@ function tenantSettingsSection(t) {
     setActive(staleSeg, s.staleness_mode || "off");
     setActive(dupSeg, s.duplicate_guard ? "on" : "off");
     setActive(cleanSeg, s.cleanup_scan_enabled ? "on" : "off");
+    setActive(metricsSeg, s.metrics_enabled ? "on" : "off");
     placeThumbsIn(lockSec, false);
     placeThumbsIn(enf, false);
   }
@@ -2436,6 +2537,7 @@ function tenantSettingsSection(t) {
     if (seg === staleSeg) save(`/tenants/${t.id}/settings`, { staleness_mode: val });
     else if (seg === dupSeg) save(`/tenants/${t.id}/settings`, { duplicate_guard: val === "on" });
     else if (seg === cleanSeg) save(`/tenants/${t.id}/settings`, { cleanup_scan_enabled: val === "on" });
+    else if (seg === metricsSeg) save(`/tenants/${t.id}/settings`, { metrics_enabled: val === "on" });
     else if (seg === lockSeg) save(`/admin/tenants/${t.id}`, { self_service_policy: val === "admin-only" ? "admin_only" : "open" });
   });
 

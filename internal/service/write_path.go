@@ -301,6 +301,15 @@ func (s *MemoryService) policyDocTypes(pred func(models.EffectivePolicy) bool) [
 	return s.thresholds.DocTypesWhere(pred)
 }
 
+// policyAll returns the full effective policy set (retention window derivation),
+// or nil when no policy store is wired (offline CLI / tests).
+func (s *MemoryService) policyAll() map[string]models.EffectivePolicy {
+	if s.thresholds == nil {
+		return nil
+	}
+	return s.thresholds.All()
+}
+
 // embedSections embeds the parsed sections, or returns zero vectors when the
 // doc_type does not embed (the caller then stores NULL embeddings).
 func (s *MemoryService) embedSections(ctx context.Context, sections []parsedSection, doEmbed bool) ([]pgvector.Vector, error) {

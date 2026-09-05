@@ -211,21 +211,38 @@ once without resetting the clock — a non-admin `force_read` leaves it withheld
 So the safe bundle is only half a server-side setting; the other half is a
 client-side habit. Make sure the assistant that talks to this instance is told
 to verify-on-recall, and to retire outdated knowledge deliberately — supersede,
-update, or delete — since no automated sweep will do it. The ready-to-paste
+update, or delete — since no automated sweep runs by default. The ready-to-paste
 [memory usage prompt](memory-usage-prompt.md) already includes exactly this
 guidance — drop it into your agent's system prompt.
 
-### No automated retention sweep
+### Retention: agent-driven by default, opt-in sweep
 
-There is **no automated time-based deletion**. Earlier versions ran a staleness
-archive→hard-delete sweep and a separate global access-recency eviction; both
-have been **removed**. Nothing archives or deletes documents on a timer.
+By default there is **no automated time-based deletion** — nothing archives or
+deletes documents on a timer. Knowledge retirement is **agent-driven** and
+deliberate: supersede an entry (a `supersedes` edge archives its target and purges
+its content, leaving a lineage-only tombstone — the archived content is not
+recoverable), update it in place, or delete it. The staleness setting above is only
+a **recall-time signal** — `advisory` warns, `hard` withholds — and never deletes.
 
-Knowledge retirement is **agent-driven** and deliberate: supersede an entry (a
-`supersedes` edge archives its target and purges its content, leaving a
-lineage-only tombstone — the archived content is not recoverable), update it in
-place, or delete it. The staleness setting above is only a **recall-time
-signal** — `advisory` warns, `hard` withholds — and never deletes.
+An operator can additionally enable a **retention sweep** (`retention_sweep_enabled`,
+default off; config page or `RETENTION_SWEEP_ENABLED`). When on, the cleanup scanner
+hard-deletes documents that are both expired past their doc_type age and access-cold.
+A document is eligible only when its liveness clock —
+`GREATEST(last verification, last access, creation)` — is older than the doc_type's
+`expiration_age_days` plus the global `retention_grace_days` (default 30), it is not
+pinned, and its doc_type has `expiration_age_days > 0`. A document read or re-verified
+during the grace window bumps that clock and survives, so the grace window and the
+access gate are the safety net. Two escape hatches keep a document forever: a
+per-document **pin**, and a doc_type's `expiration_age_days = 0` (never-expire, hence
+never eligible — this is how you exempt a whole category).
+
+The sweep rides the cleanup scanner but is gated independently of the near-duplicate
+cleanup: a cycle runs when `cleanup_enabled` **or** `retention_sweep_enabled` is on.
+The delete is a **hard delete** — the supersede purge cascade (sections, embeddings,
+FTS rows, edges) plus a `deletion_events` audit row (reason `retention_sweep`) — and
+is **not recoverable**. Preview it first: the `lint_memory` `retention_candidate`
+finding runs the candidate query without deleting, regardless of toggle state, so you
+can see the blast radius before flipping the toggle on.
 
 Staleness also feeds retrieval **ranking**: the global `staleness_penalty`
 (config page / `MEMORY_STALENESS_PENALTY`, default `0.2`, `0` = off) down-weights
@@ -348,10 +365,11 @@ matches, and the manifest names what was skipped — see [Document includes](#do
 ## Live global configuration
 
 Runtime-tunable globals — retrieval tuning, the new-tenant defaults above,
-self-service, the maintenance schedule, HTTP hardening, log level, the
-near-duplicate threshold, and the cleanup webhook — are stored in the
-`instance_config` singleton and edited **live**, with no restart, on the admin
-config page at **`/ui/admin`** (system admins only). The matching environment
+self-service, the maintenance schedule, the retention-sweep fields
+(`retention_sweep_enabled`, `retention_grace_days`, `metrics_retention_days`),
+HTTP hardening, log level, the near-duplicate threshold, and the cleanup webhook —
+are stored in the `instance_config` singleton and edited **live**, with no restart,
+on the admin config page at **`/ui/admin`** (system admins only). The matching environment
 variables (see [Configuration](../README.md#configuration)) **seed** these
 columns on first migrate; from then on the stored value wins.
 
@@ -368,6 +386,32 @@ scheduler fire. Two globals have **no env var** and are set only here:
 `ADMIN_ALLOWED_EMAILS` seeds the config page's admin-emails field — it grants
 `system:memory#admin` at startup, so an edit applies on the next restart. Live
 grant/revoke is via the Tenants admin UI.
+
+---
+
+## Usage metrics
+
+Each tenant can opt into a usage-metrics event log with **`metrics_enabled`** (default
+off). Set it per tenant on `PATCH /tenants/{id}/settings`, the Tenants admin UI toggle,
+or the `update_my_tenant_settings` MCP tool. It rides the same self-service gate as the
+other tenant settings: an admin sets it for any tenant, a tenant manager only where the
+tenant's self-service policy is `open`, admin-only otherwise.
+
+When on, the tenant appends to the append-only `metric_events` log on each **`access`**
+(distinct documents served by a search), **`verify`** (`mark_verified`), and
+**`cleanup`** (a retention-sweep delete). All emitters are best-effort and off the
+critical path — a metrics write never breaks a read, verify, or delete. The cleanup
+scanner prunes rows older than `metrics_retention_days` (default 90) on each cycle,
+alongside the mutation-history prune. Stale and expired counts are **live gauges**
+(computed COUNT queries over current section state), not events.
+
+`GET /api/admin/metrics` (system admins only) returns a JSON summary — event counts
+over the window, the stale/expired gauges, and the top-accessed documents. It takes
+`days` (or `window`, default 30) and `top` (default 10) query params. The admin
+**Metrics** dashboard page (`/ui`, `#metrics`) renders this summary. The aggregation is
+Prometheus-shaped — counters keyed tenant × doc_type × event_type, gauges tenant ×
+doc_type, no per-document labels — so a `/metrics` exposition endpoint over the same
+series can be added later without rework; it is not shipped yet.
 
 ---
 

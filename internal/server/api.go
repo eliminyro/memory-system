@@ -35,6 +35,10 @@ type apiHandler struct {
 	instanceConfig instanceConfigStore
 	globalCfg      configRefresher
 	setLogLevel    func(level string)
+
+	// metrics backs the admin metrics dashboard (/api/admin/metrics), threaded
+	// down to adminAPIHandler in mux().
+	metrics metricsSummarizer
 }
 
 // mux builds the /api router; routes omit the /api prefix (caller strips it).
@@ -90,7 +94,7 @@ func (h *apiHandler) mux() *http.ServeMux {
 
 	// Admin surface /admin/* (i.e. /api/admin/*), gated by adminOnly so non-admins
 	// get a clean 403; the shared bearer + UserContextBridge stack set the subject.
-	admin := &adminAPIHandler{memory: h.memory, importJobs: h.importJobs, maxUploadBytes: h.maxUploadBytes, instanceConfig: h.instanceConfig, globalCfg: h.globalCfg, setLogLevel: h.setLogLevel}
+	admin := &adminAPIHandler{memory: h.memory, importJobs: h.importJobs, maxUploadBytes: h.maxUploadBytes, instanceConfig: h.instanceConfig, globalCfg: h.globalCfg, setLogLevel: h.setLogLevel, metrics: h.metrics}
 	m.Handle("/admin/", adminOnly(h.memory)(http.StripPrefix("/admin", admin.mux())))
 	return m
 }
@@ -704,6 +708,7 @@ type tenantSettingsResponse struct {
 	DuplicateGuard             bool      `json:"duplicate_guard"`
 	DuplicateThreshold         *float64  `json:"duplicate_threshold"`
 	CleanupScanEnabled         bool      `json:"cleanup_scan_enabled"`
+	MetricsEnabled             bool      `json:"metrics_enabled"`
 	SelfServicePolicy          *string   `json:"self_service_policy"`
 	EffectiveSelfServicePolicy string    `json:"effective_self_service_policy"`
 }
@@ -715,6 +720,7 @@ func settingsResponse(t *models.Tenant) tenantSettingsResponse {
 		DuplicateGuard:             t.DuplicateGuard,
 		DuplicateThreshold:         t.DuplicateThreshold,
 		CleanupScanEnabled:         t.CleanupScanEnabled,
+		MetricsEnabled:             t.MetricsEnabled,
 		SelfServicePolicy:          t.SelfServicePolicy,
 		EffectiveSelfServicePolicy: t.EffectivePolicy,
 	}
@@ -729,7 +735,7 @@ func (h *apiHandler) getTenantSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	t, err := h.memory.UpdateTenantSettings(r.Context(), id, nil, nil, nil, false, nil)
+	t, err := h.memory.UpdateTenantSettings(r.Context(), id, nil, nil, nil, false, nil, nil)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -750,13 +756,14 @@ func (h *apiHandler) patchTenantSettings(w http.ResponseWriter, r *http.Request)
 		DuplicateGuard     *bool    `json:"duplicate_guard"`
 		DuplicateThreshold optFloat `json:"duplicate_threshold"`
 		CleanupScanEnabled *bool    `json:"cleanup_scan_enabled"`
+		MetricsEnabled     *bool    `json:"metrics_enabled"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
 	// Presence-aware: omitted = unchanged, explicit null = clear to inherit global.
 	clearThreshold := body.DuplicateThreshold.Present && body.DuplicateThreshold.Value == nil
-	t, err := h.memory.UpdateTenantSettings(r.Context(), id, body.StalenessMode, body.DuplicateGuard, body.DuplicateThreshold.Value, clearThreshold, body.CleanupScanEnabled)
+	t, err := h.memory.UpdateTenantSettings(r.Context(), id, body.StalenessMode, body.DuplicateGuard, body.DuplicateThreshold.Value, clearThreshold, body.CleanupScanEnabled, body.MetricsEnabled)
 	if err != nil {
 		writeErr(w, err)
 		return

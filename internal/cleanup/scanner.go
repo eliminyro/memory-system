@@ -25,6 +25,8 @@ type ScanStats struct {
 	PairsSkipped   int // already enqueued
 	Errors         int
 	HistoryPruned  int
+	MetricsPruned  int // metric_events rows past metrics_retention_days
+	DocsEvicted    int // retention-sweep hard deletes
 }
 
 // GlobalConfig is the live global-config slice the cleanup pipeline reads each
@@ -33,52 +35,62 @@ type GlobalConfig interface {
 	CleanupEnabled() bool
 	CleanupIntervalHours() int
 	HistoryRetentionDays() int
+	RetentionSweepEnabled() bool
+	RetentionGraceDays() int
+	MetricsRetentionDays() int
 	WebhookURL() string
 }
 
-// PolicySource supplies the doc_types the scanner skips (cleanup_scan=false);
-// *staleness.PolicyStore satisfies it.
+// PolicySource supplies the doc_types the scanner skips (cleanup_scan=false) and
+// the full effective set for retention windows; *staleness.PolicyStore satisfies it.
 type PolicySource interface {
 	DocTypesWhere(func(models.EffectivePolicy) bool) []string
+	All() map[string]models.EffectivePolicy
 }
 
 // Scanner runs the near-duplicate scan and keeps cleanup_queue populated.
 type Scanner struct {
-	lint     *repository.LintRepository
-	tenants  *repository.TenantRepository
-	queue    *repository.CleanupQueueRepository
-	history  *repository.MutationHistoryRepository
-	policies PolicySource
-	gc       GlobalConfig
-	notifier *Notifier
-	logger   *slog.Logger
+	lint      *repository.LintRepository
+	tenants   *repository.TenantRepository
+	queue     *repository.CleanupQueueRepository
+	history   *repository.MutationHistoryRepository
+	retention *repository.RetentionRepository
+	metrics   *repository.MetricEventRepository
+	policies  PolicySource
+	gc        GlobalConfig
+	notifier  *Notifier
+	logger    *slog.Logger
 
 	// runMu serialises RunOnce so an overlapping ticker fire can't cause
 	// concurrent upserts (which, absent a partial unique index, duplicate rows).
 	runMu sync.Mutex
 }
 
-// NewScanner constructs the scanner. gc supplies the live retention window,
-// interval, and enabled flag; a nil notifier means silent scans.
+// NewScanner constructs the scanner. gc supplies the live windows, interval, and
+// enabled flags; a nil notifier means silent scans.
 func NewScanner(
 	lint *repository.LintRepository,
 	tenants *repository.TenantRepository,
 	queue *repository.CleanupQueueRepository,
 	history *repository.MutationHistoryRepository,
+	retention *repository.RetentionRepository,
+	metrics *repository.MetricEventRepository,
 	policies PolicySource,
 	gc GlobalConfig,
 	notifier *Notifier,
 	logger *slog.Logger,
 ) *Scanner {
 	return &Scanner{
-		lint:     lint,
-		tenants:  tenants,
-		queue:    queue,
-		history:  history,
-		policies: policies,
-		gc:       gc,
-		notifier: notifier,
-		logger:   logger,
+		lint:      lint,
+		tenants:   tenants,
+		queue:     queue,
+		history:   history,
+		retention: retention,
+		metrics:   metrics,
+		policies:  policies,
+		gc:        gc,
+		notifier:  notifier,
+		logger:    logger,
 	}
 }
 
@@ -103,14 +115,23 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 		return stats, fmt.Errorf("list tenants: %w", err)
 	}
 
-	for _, tenant := range allTenants {
-		if tenant.CleanupScanEnabled {
-			stats.TenantsScanned++
-			if err := s.scanTenant(ctx, tenant.ID, &stats); err != nil {
-				s.logger.Warn("cleanup scan: tenant failed", "tenant_id", tenant.ID, "error", err)
-				stats.Errors++
+	// Near-dup self-gates on cleanup_enabled so a retention-only cycle (prunes +
+	// eviction) still runs without enqueuing dup pairs.
+	if s.gc.CleanupEnabled() {
+		for _, tenant := range allTenants {
+			if tenant.CleanupScanEnabled {
+				stats.TenantsScanned++
+				if err := s.scanTenant(ctx, tenant.ID, &stats); err != nil {
+					s.logger.Warn("cleanup scan: tenant failed", "tenant_id", tenant.ID, "error", err)
+					stats.Errors++
+				}
 			}
 		}
+	}
+
+	// Destructive eviction is a separate deliberate opt-in from near-dup cleanup.
+	if s.gc.RetentionSweepEnabled() {
+		s.retentionSweep(ctx, allTenants, &stats)
 	}
 
 	// Prune mutation_history past its live retention window (global, not per-tenant).
@@ -121,6 +142,16 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 			stats.Errors++
 		} else {
 			stats.HistoryPruned += int(pruned)
+		}
+	}
+	// Prune metric_events past metrics_retention_days, whenever the cycle runs.
+	if days := s.gc.MetricsRetentionDays(); s.metrics != nil && days > 0 {
+		cutoff := time.Now().AddDate(0, 0, -days)
+		if pruned, err := s.metrics.PruneOlderThan(ctx, cutoff); err != nil {
+			s.logger.Warn("metric_events prune failed", "error", err)
+			stats.Errors++
+		} else {
+			stats.MetricsPruned += int(pruned)
 		}
 	}
 
@@ -160,6 +191,50 @@ func (s *Scanner) scanTenant(ctx context.Context, tenantID uuid.UUID, stats *Sca
 	return nil
 }
 
+// retentionSweep evicts expired, access-cold, unpinned docs for every
+// non-bootstrap tenant, using per-doc_type windows (expiration + grace).
+func (s *Scanner) retentionSweep(ctx context.Context, tenants []models.Tenant, stats *ScanStats) {
+	if s.retention == nil || s.policies == nil {
+		return
+	}
+	cutoffs := repository.BuildRetentionCutoffs(s.policies.All(), s.gc.RetentionGraceDays())
+	if len(cutoffs) == 0 {
+		return
+	}
+	for _, tenant := range tenants {
+		if tenant.ID == models.BootstrapTenantID {
+			continue
+		}
+		deleted, err := s.retention.DeleteExpiredCold(ctx, tenant.ID, cutoffs)
+		if err != nil {
+			s.logger.Warn("retention sweep: tenant failed", "tenant_id", tenant.ID, "error", err)
+			stats.Errors++
+		}
+		stats.DocsEvicted += len(deleted)
+		s.emitCleanupEvents(ctx, tenant, deleted)
+	}
+}
+
+// emitCleanupEvents appends one cleanup metric event per evicted doc, best-effort
+// and only for a metrics-enabled tenant — an append error never affects the sweep.
+func (s *Scanner) emitCleanupEvents(ctx context.Context, tenant models.Tenant, deleted []repository.RetentionDeletion) {
+	if s.metrics == nil || !tenant.MetricsEnabled {
+		return
+	}
+	for _, d := range deleted {
+		id := d.ID
+		ev := &models.MetricEvent{
+			EventType: models.MetricEventCleanup,
+			TenantID:  tenant.ID,
+			DocID:     &id,
+			DocType:   d.DocType,
+		}
+		if err := s.metrics.Append(ctx, ev); err != nil {
+			s.logger.Warn("retention sweep: cleanup metric append failed", "tenant_id", tenant.ID, "error", err)
+		}
+	}
+}
+
 // Start launches the scan loop until ctx is cancelled. Each cycle reads
 // cleanup_enabled and cleanup_interval_hours live from the accessor, so a change
 // applies at the next fire (next-cycle, not instant). The first sweep fires now.
@@ -169,7 +244,7 @@ func (s *Scanner) Start(ctx context.Context) {
 		// rather than the whole goroutine (and the scan cadence) dying.
 		tick := func() {
 			defer panicguard.Recover(s.logger, "cleanup scan")
-			if !s.gc.CleanupEnabled() {
+			if !s.gc.CleanupEnabled() && !s.gc.RetentionSweepEnabled() {
 				return
 			}
 			s.runAndLog(ctx)
@@ -206,5 +281,7 @@ func (s *Scanner) runAndLog(ctx context.Context) {
 		"pairs_skipped", stats.PairsSkipped,
 		"errors", stats.Errors,
 		"history_pruned", stats.HistoryPruned,
+		"metrics_pruned", stats.MetricsPruned,
+		"docs_evicted", stats.DocsEvicted,
 	)
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,16 @@ type adminAPIHandler struct {
 	instanceConfig instanceConfigStore
 	globalCfg      configRefresher
 	setLogLevel    func(level string)
+
+	// metrics backs GET /admin/metrics: the read-only dashboard aggregate. An
+	// interface so handler tests can stub it without a database.
+	metrics metricsSummarizer
+}
+
+// metricsSummarizer is the metrics-service slice the admin dashboard endpoint
+// needs; *service.MetricsService satisfies it.
+type metricsSummarizer interface {
+	DashboardSummary(ctx context.Context, window time.Duration, topN int) (*service.DashboardSummary, error)
 }
 
 // importJobStore is the slice of the import_jobs repository the admin HTTP
@@ -103,6 +114,7 @@ func (h *adminAPIHandler) mux() *http.ServeMux {
 	m.HandleFunc("PATCH /config", h.patchConfig)
 	m.HandleFunc("GET /doc-type-policies", h.getDocTypePolicies)
 	m.HandleFunc("PATCH /doc-type-policies", h.patchDocTypePolicy)
+	m.HandleFunc("GET /metrics", h.getMetrics)
 	return m
 }
 
@@ -436,6 +448,12 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 	if p.CleanupIntervalHours != nil {
 		check(config.ValidateCleanupIntervalHours(*p.CleanupIntervalHours))
 	}
+	if p.RetentionGraceDays != nil {
+		check(config.ValidateRetentionGraceDays(*p.RetentionGraceDays))
+	}
+	if p.MetricsRetentionDays != nil {
+		check(config.ValidateMetricsRetentionDays(*p.MetricsRetentionDays))
+	}
 	if p.RateLimitRPS != nil {
 		check(config.ValidateRateLimitRPS(*p.RateLimitRPS))
 	}
@@ -452,6 +470,30 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 		check(config.ValidateLogLevel(*p.LogLevel))
 	}
 	return errs
+}
+
+// getMetrics backs GET /admin/metrics: the read-only dashboard summary over an
+// optional window (?days= or ?window=, default 30) listing ?top docs (default 10).
+// adminOnly gates the route, so a non-admin is refused before dispatch.
+func (h *adminAPIHandler) getMetrics(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	days := 30
+	for _, k := range []string{"days", "window"} {
+		if n, err := strconv.Atoi(q.Get(k)); err == nil && n > 0 {
+			days = n
+			break
+		}
+	}
+	topN := 10
+	if n, err := strconv.Atoi(q.Get("top")); err == nil && n > 0 {
+		topN = n
+	}
+	summary, err := h.metrics.DashboardSummary(r.Context(), time.Duration(days)*24*time.Hour, topN)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 // importAuthorizer decides whether the caller may target tenantID for an

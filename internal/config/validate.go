@@ -121,3 +121,17 @@ func ValidateCleanupIntervalHours(v int) error {
 	}
 	return nil
 }
+
+func ValidateRetentionGraceDays(v int) error {
+	if v < 0 {
+		return fmt.Errorf("retention_grace_days must be >= 0, got %d", v)
+	}
+	return nil
+}
+
+func ValidateMetricsRetentionDays(v int) error {
+	if v < 1 {
+		return fmt.Errorf("metrics_retention_days must be >= 1, got %d", v)
+	}
+	return nil
+}
