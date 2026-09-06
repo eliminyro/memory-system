@@ -209,7 +209,7 @@ jobs:
       # sboms config shells out to.
       - name: Install syft (goreleaser SBOM)
         if: steps.version.outputs.should_release == 'true' && steps.gate.outputs.proceed == 'true'
-        uses: anchore/sbom-action/download-syft@aa80c8c5bd439a416a62804f2151ab38c671a638 # v0.24.1
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       # GoReleaser always creates a DRAFT (release.draft: true). --release-notes is
       # passed only when NOTES.md was harvested; otherwise GoReleaser's own grouped
