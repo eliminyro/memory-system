@@ -208,7 +208,7 @@ type StoreMemoryInput struct {
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory: go, infrastructure, hilo, etc."`
 	Slug        string  `json:"slug" jsonschema:"Document slug/filename without extension"`
 	Content     string  `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
-	Force       bool    `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Prefer update_section on a returned candidate instead."`
+	Force       bool    `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Only needed for a new path genuinely distinct from the listed candidates; a store to an existing path is an update and never trips the guard."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force=true. Brief explanation of why this is not a duplicate."`
 	Pin         *bool   `json:"pin,omitempty" jsonschema:"Mark the document a pin (never-evict): exempt from access-recency eviction. On re-store, omit to keep the current pin state, or set true/false to change it."`
 	Scope       *string `json:"scope,omitempty" jsonschema:"Applicability of any document: empty = always applies, or a whitespace-separated list of '/'-delimited glob patterns ('**' crosses segments, '*' within one) gating conditional includes at read time. Omit to keep the current value; empty string clears it."`
@@ -518,7 +518,7 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 		return jsonResult(map[string]any{
 			"status":     "similar_exists",
 			"candidates": result.Candidates,
-			"hint":       "Prefer update_section on the closest candidate, or resubmit with force=true and a reason if the collision is a false positive.",
+			"hint":       "This new path's content closely matches the listed document(s). If it's the same topic, add to one with update_section; if it's genuinely distinct, resubmit with force=true and a reason.",
 		}), nil, nil
 	}
 	return jsonResult(map[string]any{
