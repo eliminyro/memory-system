@@ -1268,7 +1268,15 @@ func (s *MemoryService) StoreDocumentScoped(
 	// whole-document centroids as today; skipped entirely when embed is off.
 	contentHash := hashContent(content)
 	settings := s.tenantSettings(ctx, tid)
-	if settings.DuplicateGuard && !force && policy.DuplicateGuard && policy.Embed && len(embeddings) > 0 {
+	runGuard := settings.DuplicateGuard && !force && policy.DuplicateGuard && policy.Embed && len(embeddings) > 0
+	if runGuard && s.docs != nil {
+		// A store to a path that already resolves in this tenant is an update, not a new
+		// sibling — the guard (block a second doc for an existing topic) is moot, so skip it.
+		if existing, gerr := s.docs.GetByPath(ctx, repository.ReadTenants(tid), tid, category, subcategory, slug); gerr == nil && existing.TenantID == tid {
+			runGuard = false
+		}
+	}
+	if runGuard {
 		hit, err := s.sections.FindByContentHash(ctx, tid, contentHash, category, subcategory, slug)
 		if err != nil {
 			return nil, fmt.Errorf("content-hash check: %w", err)

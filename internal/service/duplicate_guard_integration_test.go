@@ -264,3 +264,33 @@ func TestDuplicateGuard_ScopePreserved(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", res.Status, "common-pool docs must never be flagged as duplicates")
 }
+
+// TestDuplicateGuard_ExistingPathSkipsGuard proves a store to an already-resolving path
+// is an update that bypasses the guard even when it near-duplicates a *different* doc,
+// while the same content at a NEW path still flags. Regression: it used to block updates.
+func TestDuplicateGuard_ExistingPathSkipsGuard(t *testing.T) {
+	db := openServicePG(t)
+	svc := newVecTestSvc(db, authz.NewPostgresStore(db), dupGuardEmbedder())
+	tenant := dgTenant(t, db, true)
+	ctx := dgCtx(tenant.ID)
+
+	// An existing doc (MKA) and a distinct neighbour (MKB), cosine 0 -> both store.
+	existing, err := svc.StoreDocument(ctx, "learnings", nil, "dg-existing", "# E\n\n## s\nMKA e\n", false, "", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "ok", existing.Status)
+	_, err = svc.StoreDocument(ctx, "learnings", nil, "dg-neighbour", "# N\n\n## s\nMKB n\n", false, "", nil, nil)
+	require.NoError(t, err)
+
+	// Update the existing path with content that near-duplicates the neighbour (cosine
+	// 1.0); the path already resolves -> guard skipped -> ok, same doc updated in place.
+	upd, err := svc.StoreDocument(ctx, "learnings", nil, "dg-existing", "# E2\n\n## s\nMKB e2\n", false, "", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "ok", upd.Status, "a store to an existing path is an update, never guarded")
+	require.Equal(t, existing.Document.ID, upd.Document.ID, "same path updated in place, not a new doc")
+
+	// The same content at a NEW path is still a genuine near-duplicate and flags.
+	res, err := svc.StoreDocument(ctx, "learnings", nil, "dg-newpath", "# NP\n\n## s\nMKB np\n", false, "", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "similar_exists", res.Status, "a new near-duplicate path is still guarded")
+	require.NotNil(t, dgCandidate(res, "learnings/dg-neighbour"), "the neighbour is the collider")
+}
