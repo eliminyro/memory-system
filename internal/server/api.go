@@ -556,8 +556,9 @@ func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content *string `json:"content"`
-		Heading *string `json:"heading"`
+		Content  *string `json:"content"`
+		Heading  *string `json:"heading"`
+		Verified bool    `json:"verified"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -566,7 +567,7 @@ func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "content or heading is required")
 		return
 	}
-	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, body.Heading, nil)
+	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, body.Heading, body.Verified, nil)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -107,7 +107,7 @@ func TestHistoryToggleOffRecordsNothing(t *testing.T) {
 
 	docID, secID := f.storeDoc(t, ctx)
 	body := "changed"
-	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, nil)
+	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, false, nil)
 	require.NoError(t, err)
 	require.NoError(t, f.svc.DeleteDocumentByID(ctx, docID, nil))
 
@@ -133,7 +133,7 @@ func TestHistorySharedTenantRecords(t *testing.T) {
 
 	// update_section: prior content + heading captured.
 	body := "new body"
-	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, nil)
+	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, false, nil)
 	require.NoError(t, err)
 	rows = f.historyRows(t, docID)
 	require.Equal(t, models.MutationOpUpdateSection, rows[0].OpType)
@@ -208,7 +208,7 @@ func TestHistoryPersonalTenantNeverRecords(t *testing.T) {
 
 	docID, secID := f.storeDoc(t, ctx)
 	body := "changed"
-	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, nil)
+	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, false, nil)
 	require.NoError(t, err)
 	require.NoError(t, f.svc.DeleteDocumentByID(ctx, docID, nil))
 
@@ -224,7 +224,7 @@ func TestHistoryBestEffortNilRepo(t *testing.T) {
 
 	docID, secID := f.storeDoc(t, ctx)
 	body := "changed"
-	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, nil)
+	_, err := f.svc.UpdateSection(ctx, secID, &body, nil, false, nil)
 	require.NoError(t, err, "update must not fail when history sink is absent")
 	require.NoError(t, f.svc.DeleteDocumentByID(ctx, docID, nil), "delete must not fail when history sink is absent")
 
@@ -241,7 +241,7 @@ func TestHistoryViewAccess(t *testing.T) {
 
 	docID, secID := f.storeDoc(t, ownerCtx)
 	body := "new body"
-	_, err := f.svc.UpdateSection(ownerCtx, secID, &body, nil, nil)
+	_, err := f.svc.UpdateSection(ownerCtx, secID, &body, nil, false, nil)
 	require.NoError(t, err)
 
 	entries, err := f.svc.GetDocumentHistory(ownerCtx, docID, nil)

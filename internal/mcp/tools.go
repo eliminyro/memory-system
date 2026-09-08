@@ -219,6 +219,7 @@ type UpdateSectionInput struct {
 	SectionID string  `json:"section_id" jsonschema:"the section UUID to update"`
 	Content   *string `json:"content,omitempty" jsonschema:"optional new markdown content for the section; omit to leave content (and its embedding) untouched for a heading-only edit"`
 	Heading   *string `json:"heading,omitempty" jsonschema:"optional new heading for the section; empty string clears it"`
+	Verified  bool    `json:"verified,omitempty" jsonschema:"when true, also stamp verified_at on success (resets the freshness clock) — folds a following mark_verified into this call"`
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
@@ -549,7 +550,7 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	section, err := s.memory.UpdateSection(ctx, id, input.Content, input.Heading, tenantOverride)
+	section, err := s.memory.UpdateSection(ctx, id, input.Content, input.Heading, input.Verified, tenantOverride)
 	if err != nil {
 		return toolErr("update section", err)
 	}

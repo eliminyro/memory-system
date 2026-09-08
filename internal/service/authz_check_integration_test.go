@@ -194,7 +194,7 @@ func TestAuthzOwnTenantAccess(t *testing.T) {
 	require.NoError(t, err, "own-tenant read")
 
 	body := "updated body"
-	_, err = f.svc.UpdateSection(ctx, f.secA, &body, nil, nil)
+	_, err = f.svc.UpdateSection(ctx, f.secA, &body, nil, false, nil)
 	require.NoError(t, err, "own-tenant section write")
 
 	require.NoError(t, f.svc.MarkVerified(ctx, f.secA, nil), "own-tenant mark_verified")
@@ -217,7 +217,7 @@ func TestAuthzCrossTenantDenied(t *testing.T) {
 	// mark_verified / update_section on B's section: tenant scoping denies (the
 	// section is not in readTenants(A)).
 	body := "x"
-	_, err = f.svc.UpdateSection(ctx, f.secB, &body, nil, nil)
+	_, err = f.svc.UpdateSection(ctx, f.secB, &body, nil, false, nil)
 	require.Error(t, err, "cross-tenant update_section must be denied")
 	require.ErrorIs(t, f.svc.MarkVerified(ctx, f.secB, nil), apperr.ErrNotFound)
 
@@ -260,12 +260,12 @@ func TestAuthzCommonPool(t *testing.T) {
 
 	// Non-admin writes to the common pool are denied.
 	body := "x"
-	_, err = f.svc.UpdateSection(user, f.secC, &body, nil, nil)
+	_, err = f.svc.UpdateSection(user, f.secC, &body, nil, false, nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "non-admin common-pool update_section")
 	require.ErrorIs(t, f.svc.MarkVerified(user, f.secC, nil), apperr.ErrInvalidInput, "non-admin common-pool mark_verified")
 
 	// Admin writes to the common pool succeed.
-	_, err = f.svc.UpdateSection(admin, f.secC, &body, nil, nil)
+	_, err = f.svc.UpdateSection(admin, f.secC, &body, nil, false, nil)
 	require.NoError(t, err, "admin common-pool update_section")
 	require.NoError(t, f.svc.MarkVerified(admin, f.secC, nil), "admin common-pool mark_verified")
 }
