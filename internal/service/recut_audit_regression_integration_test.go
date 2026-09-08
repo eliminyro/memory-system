@@ -36,7 +36,7 @@ func TestUpdateSection_PromptKeepsNullEmbedding(t *testing.T) {
 	require.True(t, embeddingIsNull(t, f.db, secID), "a freshly stored prompt section starts NULL-embedded")
 
 	body := "edited prompt body"
-	_, err = f.svc.UpdateSection(ctx, secID, &body, nil, nil)
+	_, err = f.svc.UpdateSection(ctx, secID, &body, nil, false, nil)
 	require.NoError(t, err, "editing a prompt section must succeed")
 	require.True(t, embeddingIsNull(t, f.db, secID),
 		"a prompt section MUST stay NULL-embedded after update_section (else it leaks via get_related)")
@@ -50,7 +50,7 @@ func TestUpdateSection_NonPromptStillEmbeds(t *testing.T) {
 	ctx := ctxFor(f.tenantA, f.subjA)
 
 	body := "updated learnings body"
-	_, err := f.svc.UpdateSection(ctx, f.secA, &body, nil, nil)
+	_, err := f.svc.UpdateSection(ctx, f.secA, &body, nil, false, nil)
 	require.NoError(t, err)
 	require.False(t, embeddingIsNull(t, f.db, f.secA),
 		"a normal doc's section keeps a non-NULL embedding after update_section")

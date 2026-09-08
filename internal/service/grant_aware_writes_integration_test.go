@@ -31,7 +31,7 @@ func TestGrantAwareMemberCanWriteCommonPool(t *testing.T) {
 	require.Equal(t, models.BootstrapTenantID, res.Document.TenantID, "doc created in common pool")
 
 	body := "edited by member"
-	_, err = f.svc.UpdateSection(memberCtx, res.Document.Sections[0].ID, &body, nil, &models.BootstrapTenantID)
+	_, err = f.svc.UpdateSection(memberCtx, res.Document.Sections[0].ID, &body, nil, false, &models.BootstrapTenantID)
 	require.NoError(t, err, "member updates common-pool section")
 	_, err = f.svc.UpdateDocumentTitle(memberCtx, res.Document.ID, "new title", &models.BootstrapTenantID)
 	require.NoError(t, err, "member updates common-pool title")
@@ -41,7 +41,7 @@ func TestGrantAwareMemberCanWriteCommonPool(t *testing.T) {
 	bCtx := ctxFor(f.tenantB, f.subjB)
 	_, err = f.svc.StoreDocument(bCtx, "learnings", nil, "nope-"+uuid.NewString(), "# T\n\nbody", false, "", &models.BootstrapTenantID, nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "ungranted store refused")
-	_, err = f.svc.UpdateSection(bCtx, f.secC, &body, nil, &models.BootstrapTenantID)
+	_, err = f.svc.UpdateSection(bCtx, f.secC, &body, nil, false, &models.BootstrapTenantID)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "ungranted update refused")
 	_, err = f.svc.UpdateDocumentTitle(bCtx, f.docC, "hax", &models.BootstrapTenantID)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "ungranted title update refused")
@@ -126,6 +126,6 @@ func TestGrantAwareGuestEditorUpdateStillWorks(t *testing.T) {
 	bCtx := ctxFor(f.tenantB, f.subjB)
 
 	body := "guest edit"
-	_, err := f.svc.UpdateSection(bCtx, f.secC, &body, nil, nil)
+	_, err := f.svc.UpdateSection(bCtx, f.secC, &body, nil, false, nil)
 	require.NoError(t, err, "guest editor updates common-pool section via no-override")
 }

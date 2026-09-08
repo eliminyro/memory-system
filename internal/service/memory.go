@@ -1480,7 +1480,8 @@ func centroid(embs []pgvector.Vector) pgvector.Vector {
 
 // UpdateSection partially updates a section: content!=nil re-embeds and sets
 // content; heading!=nil sets heading (blank -> NULL). Both nil is a no-op.
-func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content *string, heading *string, overrideID *uuid.UUID) (*models.Section, error) {
+// verified=true also stamps verified_at (like a following mark_verified).
+func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content *string, heading *string, verified bool, overrideID *uuid.UUID) (*models.Section, error) {
 	tid, err := s.resolveWriteScope(ctx, overrideID, authz.RelMember)
 	if err != nil {
 		return nil, err
@@ -1562,6 +1563,26 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 			ActorEmail:   email,
 			Before:       beforeSnap,
 		})
+	}
+
+	// verified=true resets the freshness clock in the same call — reuse the
+	// mark_verified stamp + audit + verify-event path (no extra authz: the write
+	// this call already passed is a stronger right than verifying).
+	if verified {
+		if err := s.sections.MarkVerified(ctx, tid, sectionID); err != nil {
+			return nil, fmt.Errorf("verify section: %w", err)
+		}
+		now := time.Now()
+		section.VerifiedAt = &now
+		secID := sectionID
+		s.logOverride(ctx, repository.OverrideEvent{
+			TenantID:     tid,
+			Tool:         models.OverrideToolMarkVerified,
+			TargetID:     &secID,
+			OverrideType: models.OverrideTypeVerification,
+			Reason:       "section verified on update",
+		})
+		s.recordVerify(ctx, tid, section.DocumentID)
 	}
 
 	// Updating is a liveness signal: keep the doc off the access-cold path.
