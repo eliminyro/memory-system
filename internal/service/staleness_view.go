@@ -46,10 +46,24 @@ type DocumentView struct {
 	UpdatedAt   time.Time     `json:"updated_at"`
 	Sections    []SectionView `json:"sections,omitempty"`
 
+	// Typed edges to other documents, both directions, read-scope gated. Compact
+	// (no content); populated on document reads, omitted when the doc has none.
+	Edges []EdgeView `json:"edges,omitempty"`
+
 	// Populated only on an expand read: the resolved included documents (flat,
 	// ordered, de-duplicated) and a per-edge resolution manifest.
 	Includes        []DocumentView `json:"includes,omitempty"`
 	IncludeManifest []IncludeRef   `json:"include_manifest,omitempty"`
+}
+
+// EdgeView is the compact edge projection embedded on a document read: the edge
+// type, its direction relative to this doc, and the other endpoint's identity.
+type EdgeView struct {
+	EdgeType  string `json:"edge_type"`
+	Direction string `json:"direction"`
+	Path      string `json:"path"`
+	Title     string `json:"title"`
+	Archived  bool   `json:"archived,omitempty"`
 }
 
 // buildDocumentView applies the staleness filter to each section per the tenant's
