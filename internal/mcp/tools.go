@@ -270,7 +270,7 @@ type GetRelatedInput struct {
 type LinkDocumentsInput struct {
 	SourceDocumentID string  `json:"source_document_id" jsonschema:"UUID of the source document (the one making the statement)"`
 	TargetDocumentID string  `json:"target_document_id" jsonschema:"UUID of the target document (the one pointed at; archived on supersedes)"`
-	EdgeType         string  `json:"edge_type" jsonschema:"One of: supersedes, derived_from, relates_to"`
+	EdgeType         string  `json:"edge_type" jsonschema:"One of: supersedes, derived_from, relates_to, includes"`
 	TenantID         *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 

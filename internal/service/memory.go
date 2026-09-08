@@ -1040,6 +1040,7 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	}
 	// A read is a liveness signal: keep the doc off the access-cold path.
 	s.bumpAccessed(ctx, doc.ID)
+	s.attachEdges(ctx, &view, doc.ID, scope)
 	return &view, nil
 }
 
@@ -1081,6 +1082,7 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	}
 	// A read is a liveness signal: keep the doc off the access-cold path.
 	s.bumpAccessed(ctx, doc.ID)
+	s.attachEdges(ctx, &view, doc.ID, scope)
 	return &view, nil
 }
 
@@ -3537,6 +3539,30 @@ func (s *MemoryService) ListDocumentEdges(ctx context.Context, docID uuid.UUID, 
 	// Restrict the OTHER endpoint to the caller's read scope so a doc-only guest
 	// can't see a sibling's path/title in a tenant they cannot read.
 	return s.edges.ListByDocument(ctx, docID, scope)
+}
+
+// attachEdges best-effort fills view.Edges with the doc's compact edge list under
+// the already-resolved read scope. An unconfigured store or a fetch error leaves
+// Edges empty — edges are supplementary and must never fail the primary read.
+func (s *MemoryService) attachEdges(ctx context.Context, view *DocumentView, docID uuid.UUID, scope []uuid.UUID) {
+	if s.edges == nil || len(scope) == 0 {
+		return
+	}
+	items, err := s.edges.ListByDocument(ctx, docID, scope)
+	if err != nil || len(items) == 0 {
+		return
+	}
+	edges := make([]EdgeView, 0, len(items))
+	for _, it := range items {
+		edges = append(edges, EdgeView{
+			EdgeType:  it.EdgeType,
+			Direction: it.Direction,
+			Path:      it.OtherDocumentPath,
+			Title:     it.OtherDocumentTitle,
+			Archived:  it.OtherDocumentArchived,
+		})
+	}
+	view.Edges = edges
 }
 
 const (
