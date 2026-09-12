@@ -381,6 +381,32 @@ func (r *DocumentRepository) GenerateIndex(ctx context.Context, tenantIDs []uuid
 // TouchAccessed day-granular bumps last_accessed_at=now() for the given docs,
 // skipping any already touched today so repeat same-day serves cost <=1 write
 // (D2). Empty input is a no-op. Plain []uuid.UUID + GORM IN ? matches the column.
+// TouchWritten records that a document was written: the change moves updated_at,
+// and the write itself is a liveness signal, so it keeps the document off the
+// access-cold path that eviction reads.
+func (r *DocumentRepository) TouchWritten(ctx context.Context, tenantID, docID uuid.UUID) error {
+	const sql = `UPDATE documents SET updated_at = now(), last_accessed_at = now() WHERE id = ? AND tenant_id = ?`
+	if err := r.db.WithContext(ctx).Exec(sql, docID, tenantID).Error; err != nil {
+		return fmt.Errorf("touch written: %w", err)
+	}
+	return nil
+}
+
+// UpdateTitle sets a document's title and nothing else. Saving the whole struct
+// would write back every column, reverting anything a concurrent writer changed
+// outside this call's intent.
+func (r *DocumentRepository) UpdateTitle(ctx context.Context, tenantID, docID uuid.UUID, title string) error {
+	const sql = `UPDATE documents SET title = ?, updated_at = now() WHERE id = ? AND tenant_id = ?`
+	res := r.db.WithContext(ctx).Exec(sql, title, docID, tenantID)
+	if res.Error != nil {
+		return fmt.Errorf("update title: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("%w: document %s", apperr.ErrNotFound, docID)
+	}
+	return nil
+}
+
 // TouchUpdated advances one document's updated_at. Section writes go straight to
 // the section row, so without this a section edit leaves the document looking
 // unchanged to anything that polls updated_at to decide whether to re-read.

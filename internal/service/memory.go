@@ -1624,10 +1624,12 @@ func (s *MemoryService) UpdateDocumentTitle(ctx context.Context, docID uuid.UUID
 		beforeSnap = marshalBefore(updateTitleBefore{Title: doc.Title})
 	}
 
-	doc.Title = title
-	if err := s.docs.Save(ctx, doc.TenantID, doc); err != nil {
-		return nil, fmt.Errorf("save document: %w", err)
+	// Title only: saving the struct would write back every column and revert
+	// whatever a concurrent writer changed.
+	if err := s.docs.UpdateTitle(ctx, doc.TenantID, doc.ID, title); err != nil {
+		return nil, fmt.Errorf("update title: %w", err)
 	}
+	doc.Title = title
 
 	if recordHistory {
 		subj, email := s.actorFields(ctx)
