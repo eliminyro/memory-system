@@ -1329,22 +1329,33 @@ func (s *MemoryService) StoreDocumentScoped(
 			if recordHistory {
 				overwriteBefore = docBeforeSnapshot(existing)
 			}
-			doc.ID = existing.ID
-			doc.CreatedAt = existing.CreatedAt
-			doc.DocType = existing.DocType // preserve an admin override; don't revert
-			doc.Pinned = existing.Pinned
+			// writeSections needs these below, and doc.Sections is nilled before
+			// the save — which would clear them, since doc IS existing.
+			existingSections := existing.Sections
+
+			// Overwrite the row rather than rebuild it: a column this call does
+			// not set keeps its stored value instead of being zeroed. DocType is
+			// deliberately absent — an admin override outranks the inferred type.
+			existing.Title = doc.Title
+			existing.ContentHash = doc.ContentHash
+			existing.LastAccessedAt = doc.LastAccessedAt
 			if pin != nil {
-				doc.Pinned = *pin
+				existing.Pinned = *pin
 			}
 			// scope: unset preserves the current value; set updates or clears.
-			if scope == nil {
-				doc.Scope = existing.Scope
+			if scope != nil {
+				existing.Scope = scope
 			}
+			doc = existing
+			// Preloaded sections would cascade-upsert on save, writing an
+			// embed=false doc's NULL embeddings as an invalid '[]' vector.
+			doc.Sections = nil
+
 			if err := txDocs.Save(ctx, tid, doc); err != nil {
 				return fmt.Errorf("save document: %w", err)
 			}
 			// 7. Write mode.
-			finalSections, err = writeSections(ctx, txSections, policy.WriteMode, policy.Embed, existing.Sections, sectionModels, doc.ID)
+			finalSections, err = writeSections(ctx, txSections, policy.WriteMode, policy.Embed, existingSections, sectionModels, doc.ID)
 			if err != nil {
 				return err
 			}
