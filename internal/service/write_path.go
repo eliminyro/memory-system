@@ -67,13 +67,14 @@ func (s *MemoryService) PutSection(ctx context.Context, category string, subcate
 			if recordHistory {
 				overwriteBefore = docBeforeSnapshot(existing)
 			}
-			// Detach preloaded sections so Save can't cascade-upsert them: an
-			// embed=false doc's sections carry NULL embeddings that serialize to an
-			// invalid '[]' vector. writeSections owns the section writes.
+			// Drop the preloaded sections: writeSections owns them and the final
+			// set is assigned to doc below.
 			doc.Sections = nil
+			// Stamp the columns this write is for. Saving the struct would write
+			// back every column, reverting a concurrent writer's title or scope.
 			doc.LastAccessedAt = &now
-			if err := txDocs.Save(ctx, tid, doc); err != nil {
-				return fmt.Errorf("save document: %w", err)
+			if err := txDocs.TouchWritten(ctx, tid, doc.ID); err != nil {
+				return fmt.Errorf("touch document: %w", err)
 			}
 			finalSections, err = writeSections(ctx, txSections, mode, policy.Embed, existingSections, incoming, doc.ID)
 			return err
