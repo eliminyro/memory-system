@@ -1585,6 +1585,12 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 		s.recordVerify(ctx, tid, section.DocumentID)
 	}
 
+	// The section row carries the edit, so the document would otherwise look
+	// unchanged to anything polling updated_at to decide whether to re-read.
+	if err := s.docs.TouchUpdated(ctx, ownerTID, section.DocumentID); err != nil {
+		return nil, fmt.Errorf("touch document: %w", err)
+	}
+
 	// Updating is a liveness signal: keep the doc off the access-cold path.
 	s.bumpAccessed(ctx, section.DocumentID)
 	return section, nil
@@ -1835,6 +1841,12 @@ func (s *MemoryService) DeleteSection(ctx context.Context, sectionID uuid.UUID, 
 			if err := txDocs.Delete(ctx, docTenant, section.DocumentID); err != nil {
 				return fmt.Errorf("delete empty document: %w", err)
 			}
+			return nil
+		}
+		// Removing a section changes what the document says; stamp it so a
+		// reader polling updated_at sees the removal.
+		if err := txDocs.TouchUpdated(ctx, docTenant, section.DocumentID); err != nil {
+			return fmt.Errorf("touch document: %w", err)
 		}
 		return nil
 	})
