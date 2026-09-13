@@ -236,6 +236,9 @@ type MemoryService struct {
 	// in NewMemoryService so a service built without WithCandidatePool still gets the
 	// default, not the int zero value.
 	candidatePool int
+	// fallbackThreshold is the hot-result count below which Search runs a cold
+	// (archived) fallback pass. Set explicitly in NewMemoryService; 0 disables it.
+	fallbackThreshold int
 	// globalCfg reads runtime global config (the duplicate-threshold default for the
 	// write guard); nil (offline CLI / tests) falls back to defaultDuplicateThreshold.
 	globalCfg GlobalConfig
@@ -249,6 +252,7 @@ type MemoryService struct {
 type GlobalConfig interface {
 	MMRLambda() float64
 	CandidatePool() int
+	FallbackThreshold() int
 	SnippetChars() int
 	DuplicateGuardDefault() bool
 	CleanupScanDefault() bool
@@ -264,6 +268,10 @@ const defaultSnippetChars = 400
 // defaultCandidatePool mirrors config MEMORY_CANDIDATE_POOL default so a service
 // built without WithCandidatePool (offline CLI / tests) still bounds candidates.
 const defaultCandidatePool = 20
+
+// defaultFallbackThreshold mirrors config MEMORY_FALLBACK_THRESHOLD default so a
+// service built without WithFallbackThreshold still runs the cold fallback pass.
+const defaultFallbackThreshold = 3
 
 // defaultDuplicateThreshold mirrors the global instance_config default so the
 // write guard still has a sane cutoff when no globalCfg is wired (offline CLI / tests).
@@ -294,6 +302,14 @@ func WithSnippetChars(chars int) Option {
 func WithCandidatePool(n int) Option {
 	return func(s *MemoryService) {
 		s.candidatePool = n
+	}
+}
+
+// WithFallbackThreshold sets the hot-result count below which Search runs the
+// cold (archived) fallback pass. Without it fallbackThreshold keeps its default.
+func WithFallbackThreshold(n int) Option {
+	return func(s *MemoryService) {
+		s.fallbackThreshold = n
 	}
 }
 
@@ -345,22 +361,23 @@ func NewMemoryService(
 		engine = authz.NewEngine(authzStore)
 	}
 	s := &MemoryService{
-		db:             db,
-		docs:           docs,
-		sections:       sections,
-		embedder:       embedder,
-		tenants:        tenants,
-		keys:           keys,
-		lint:           lint,
-		thresholds:     thresholds,
-		overrides:      overrides,
-		cleanup:        cleanup,
-		instanceConfig: instanceConfig,
-		history:        history,
-		authz:          authzStore,
-		authzEngine:    engine,
-		snippetChars:   defaultSnippetChars,
-		candidatePool:  defaultCandidatePool,
+		db:                db,
+		docs:              docs,
+		sections:          sections,
+		embedder:          embedder,
+		tenants:           tenants,
+		keys:              keys,
+		lint:              lint,
+		thresholds:        thresholds,
+		overrides:         overrides,
+		cleanup:           cleanup,
+		instanceConfig:    instanceConfig,
+		history:           history,
+		authz:             authzStore,
+		authzEngine:       engine,
+		snippetChars:      defaultSnippetChars,
+		candidatePool:     defaultCandidatePool,
+		fallbackThreshold: defaultFallbackThreshold,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -561,6 +578,15 @@ func (s *MemoryService) effectiveCandidatePool() int {
 		}
 	}
 	return s.candidatePool
+}
+
+// effectiveFallbackThreshold resolves the cold-pass trigger count: the live
+// global value (0 = operator-disabled, honoured), else the construction fallback.
+func (s *MemoryService) effectiveFallbackThreshold() int {
+	if s.globalCfg != nil {
+		return s.globalCfg.FallbackThreshold()
+	}
+	return s.fallbackThreshold
 }
 
 // effectiveSnippetChars resolves the snippet window size: the live global value,
@@ -772,7 +798,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	results, err := s.sections.HybridSearch(ctx, repository.SearchParams{
+	params := repository.SearchParams{
 		TenantIDs:      scope,
 		Embedding:      embedding,
 		Query:          query,
@@ -783,14 +809,19 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		CandidatePool:  s.effectiveCandidatePool(),
 		MMRLambda:      s.effectiveMMRLambda(),
 		HiddenDocTypes: s.policyDocTypes(func(p models.EffectivePolicy) bool { return !p.DefaultSearch }),
-	})
+		Tier:           repository.TierHot,
+	}
+	results, err := s.sections.HybridSearch(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	// Label each result by its owning tenant, then overlay the content/event
-	// needs-verification flag as an advisory status.
+	// Thin hot pool -> a cold (archived) pass appends dormant hits after it.
+	results = s.appendDormant(ctx, params, results)
+	// Label each result by its owning tenant, overlay the content/event
+	// needs-verification status, then the advisory time-to-archive warning.
 	s.labelResultTenants(ctx, results)
 	applyFlagStatus(results)
+	s.applyArchiveWarnings(results)
 	if forceRead {
 		s.logOverride(ctx, repository.OverrideEvent{
 			TenantID:     auth.TenantIDFromContext(ctx),
@@ -809,6 +840,54 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 		s.bumpAndRecord(ctx, distinctResultDocIDs(results), accessEvents(results))
 	}
 	return results, nil
+}
+
+// appendDormant runs the cold (archived) fallback pass when the hot pool answered
+// thinly (below the fallback threshold), appending its hits labeled dormant after
+// the hot results, capped at Limit. Skipped when it can add nothing.
+func (s *MemoryService) appendDormant(ctx context.Context, params repository.SearchParams, hot []repository.SearchResult) []repository.SearchResult {
+	threshold := s.effectiveFallbackThreshold()
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 || len(hot) >= threshold || len(hot) >= limit {
+		return hot
+	}
+	params.Tier = repository.TierCold
+	cold, err := s.sections.HybridSearch(ctx, params)
+	if err != nil {
+		slog.Default().Warn("dormant fallback search failed", "error", err)
+		return hot
+	}
+	for i := 0; i < len(cold) && len(hot) < limit; i++ {
+		cold[i].Dormant = true
+		hot = append(hot, cold[i])
+	}
+	return hot
+}
+
+// applyArchiveWarnings sets the advisory ArchivesInDays on each flagged result
+// whose non-prunable doc_type carries a grace (flagged_at + expiration_age).
+func (s *MemoryService) applyArchiveWarnings(results []repository.SearchResult) {
+	for i := range results {
+		// Dormant hits have already archived — the time-to-archive warning is moot.
+		if results[i].FlaggedAt == nil || results[i].Dormant {
+			continue
+		}
+		results[i].ArchivesInDays = archivesInDays(s.policyFor(results[i].DocType), *results[i].FlaggedAt)
+	}
+}
+
+// archivesInDays is the advisory time-to-archive for a flagged non-prunable doc:
+// days until flagged_at + expiration_age. Nil for a prunable/no-grace doc;
+// negative days (overdue, unswept) pass through — advisory, not clamped.
+func archivesInDays(pol models.EffectivePolicy, flaggedAt time.Time) *int {
+	if pol.Prunable || pol.ExpirationAgeDays <= 0 {
+		return nil
+	}
+	d := int(time.Until(flaggedAt.AddDate(0, 0, pol.ExpirationAgeDays)).Hours() / 24)
+	return &d
 }
 
 // bumpAccessed fires a best-effort, day-guarded access-recency bump for docIDs on
@@ -1093,9 +1172,23 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	// Verifying is a liveness signal: keep the doc off the access-cold path, and
 	// record a best-effort verify event for opted-in tenants (detached goroutine).
 	s.recordVerify(ctx, tid, section.DocumentID)
-	// Re-verifying clears this section's needs-verification flag.
+	// Re-verifying clears this section's needs-verification flag and revives the
+	// document if it had been archived, returning it to the hot pool.
 	s.clearSectionFlag(ctx, sectionID)
+	s.reviveDocument(ctx, section.DocumentID)
 	return nil
+}
+
+// reviveDocument unarchives a document after a re-verify (revive-on-verify) so it
+// rejoins the hot pool. Best-effort inline: idempotent (a live doc is a 0-row
+// no-op), and a failure is logged, never surfaced — the verify already stuck.
+func (s *MemoryService) reviveDocument(ctx context.Context, docID uuid.UUID) {
+	if s.docs == nil {
+		return
+	}
+	if _, err := s.docs.UnarchiveByID(ctx, docID); err != nil {
+		slog.Default().Warn("unarchive on verify failed", "error", err)
+	}
 }
 
 // recordVerify bumps the verified doc's access-recency and, for an opted-in tenant,
@@ -1604,8 +1697,9 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 			Reason:       "section verified on update",
 		})
 		s.recordVerify(ctx, tid, section.DocumentID)
-		// Re-verifying clears this section's needs-verification flag.
+		// Re-verifying clears the flag and revives an archived doc back to hot.
 		s.clearSectionFlag(ctx, sectionID)
+		s.reviveDocument(ctx, section.DocumentID)
 	}
 
 	// The section row carries the edit, so the document would otherwise look
@@ -1901,7 +1995,35 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 		return nil, err
 	}
 	s.labelDocumentTenants(ctx, docs)
+	s.attachListWarnings(ctx, docs)
 	return docs, nil
+}
+
+// attachListWarnings sets the advisory Flagged + ArchivesInDays on listed docs:
+// Flagged when any section needs verification; ArchivesInDays the time-to-archive
+// once every section is flagged (the non-prunable archive gate). Best-effort.
+func (s *MemoryService) attachListWarnings(ctx context.Context, docs []models.Document) {
+	if len(docs) == 0 || s.sections == nil {
+		return
+	}
+	ids := make([]uuid.UUID, len(docs))
+	for i := range docs {
+		ids[i] = docs[i].ID
+	}
+	summ, err := s.sections.FlaggedSummaryByDocs(ctx, ids)
+	if err != nil {
+		return
+	}
+	for i := range docs {
+		sm, ok := summ[docs[i].ID]
+		if !ok || sm.Flagged == 0 {
+			continue
+		}
+		docs[i].Flagged = true
+		if sm.Total > 0 && sm.Flagged == sm.Total && sm.MaxFlaggedAt != nil {
+			docs[i].ArchivesInDays = archivesInDays(s.policyFor(docs[i].DocType), *sm.MaxFlaggedAt)
+		}
+	}
 }
 
 // labelDocumentTenants fills the display-only TenantName/TenantType on each

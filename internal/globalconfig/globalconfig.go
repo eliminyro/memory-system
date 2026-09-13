@@ -20,6 +20,7 @@ type Loader interface {
 type Snapshot struct {
 	MMRLambda             float64
 	CandidatePool         int
+	FallbackThreshold     int
 	SnippetChars          int
 	HistoryRetentionDays  int
 	HistoryEnabled        bool
@@ -75,6 +76,7 @@ func snapshotFrom(c *models.InstanceConfig) *Snapshot {
 	return &Snapshot{
 		MMRLambda:             c.MMRLambda,
 		CandidatePool:         c.CandidatePool,
+		FallbackThreshold:     c.FallbackThreshold,
 		SnippetChars:          c.SnippetChars,
 		HistoryRetentionDays:  c.HistoryRetentionDays,
 		HistoryEnabled:        c.HistoryEnabled,
@@ -101,6 +103,7 @@ func snapshotFrom(c *models.InstanceConfig) *Snapshot {
 // Typed getters — each reads the live snapshot lock-free.
 func (a *Accessor) MMRLambda() float64          { return a.Snapshot().MMRLambda }
 func (a *Accessor) CandidatePool() int          { return a.Snapshot().CandidatePool }
+func (a *Accessor) FallbackThreshold() int      { return a.Snapshot().FallbackThreshold }
 func (a *Accessor) SnippetChars() int           { return a.Snapshot().SnippetChars }
 func (a *Accessor) HistoryRetentionDays() int   { return a.Snapshot().HistoryRetentionDays }
 func (a *Accessor) HistoryEnabled() bool        { return a.Snapshot().HistoryEnabled }

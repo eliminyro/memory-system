@@ -147,6 +147,10 @@ type Config struct {
 	// CandidatePool is the per-list SQL LIMIT each of HybridSearch's semantic and
 	// lexical candidate lists draws before fusion; its half sets the tier cut.
 	CandidatePool int `env:"MEMORY_CANDIDATE_POOL" envDefault:"20"`
+
+	// FallbackThreshold is the hot-result count below which Search runs a second
+	// cold (archived) pass, appending dormant hits. 0 disables the fallback.
+	FallbackThreshold int `env:"MEMORY_FALLBACK_THRESHOLD" envDefault:"3"`
 }
 
 // maxCandidatePool bounds MEMORY_CANDIDATE_POOL: MMR is O(n²) over 2*pool, so an
@@ -311,6 +315,11 @@ func Load() (*Config, error) {
 	// Candidate pool is a per-list SQL LIMIT feeding the O(n²) MMR re-rank; a
 	// non-positive value yields no candidates and an absurd one blows up cost.
 	if err := ValidateCandidatePool(cfg.CandidatePool); err != nil {
+		return nil, err
+	}
+
+	// Fallback threshold gates the cold pass; a negative value is meaningless.
+	if err := ValidateFallbackThreshold(cfg.FallbackThreshold); err != nil {
 		return nil, err
 	}
 

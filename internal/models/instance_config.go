@@ -18,6 +18,7 @@ type InstanceConfig struct {
 	// Retrieval tuning.
 	MMRLambda            float64 `gorm:"not null;default:0.5" json:"mmr_lambda"`
 	CandidatePool        int     `gorm:"not null;default:20" json:"candidate_pool"`
+	FallbackThreshold    int     `gorm:"not null;default:3" json:"fallback_threshold"`
 	SnippetChars         int     `gorm:"not null;default:400" json:"snippet_chars"`
 	HistoryRetentionDays int     `gorm:"not null;default:90" json:"history_retention_days"`
 
@@ -74,6 +75,7 @@ func (InstanceConfig) TableName() string { return "instance_config" }
 type InstanceConfigPatch struct {
 	MMRLambda             *float64 `json:"mmr_lambda"`
 	CandidatePool         *int     `json:"candidate_pool"`
+	FallbackThreshold     *int     `json:"fallback_threshold"`
 	SnippetChars          *int     `json:"snippet_chars"`
 	HistoryEnabled        *bool    `json:"history_enabled"`
 	HistoryRetentionDays  *int     `json:"history_retention_days"`
