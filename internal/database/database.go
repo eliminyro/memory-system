@@ -203,11 +203,14 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	// pool would fall to the static off/false/false column defaults and diverge from
 	// every tenant created via CreateTenant. td is pre-validated by
 	// config.ParseTenantDefaults, so interpolation is safe (DDL rejects bind params).
+	// off is removed; coerce any legacy default so no bootstrap row, column
+	// default, or instance seed below carries off forward.
+	stalenessDefault := models.NormalizeStalenessMode(td.StalenessMode)
 	bootstrapSQL := fmt.Sprintf(`
 		INSERT INTO tenants (id, name, staleness_mode, duplicate_guard, cleanup_scan_enabled, created_at, updated_at)
 		VALUES ('00000000-0000-0000-0000-000000000001', 'default', '%s', %t, %t, NOW(), NOW())
 		ON CONFLICT (id) DO NOTHING
-	`, td.StalenessMode, td.DuplicateGuard, td.CleanupScanEnabled)
+	`, stalenessDefault, td.DuplicateGuard, td.CleanupScanEnabled)
 	if err := tx.Exec(bootstrapSQL).Error; err != nil {
 		return fmt.Errorf("bootstrap tenant: %w", err)
 	}
@@ -293,7 +296,7 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	// pre-validated by config.ParseTenantDefaults, so interpolation is safe (DDL
 	// rejects bind params).
 	tenantDefaultMigrations := []string{
-		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN staleness_mode SET DEFAULT '%s'`, td.StalenessMode),
+		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN staleness_mode SET DEFAULT '%s'`, stalenessDefault),
 		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN duplicate_guard SET DEFAULT %t`, td.DuplicateGuard),
 		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN cleanup_scan_enabled SET DEFAULT %t`, td.CleanupScanEnabled),
 	}
@@ -355,6 +358,15 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		gc.RetentionSweepEnabled, gc.RetentionGraceDays, gc.MetricsRetentionDays,
 	).Error; err != nil {
 		return fmt.Errorf("seed instance config: %w", err)
+	}
+
+	// Two-mode staleness: off is removed. Coerce legacy off rows to the advisory
+	// floor (idempotent) so no tenant or instance default carries off forward.
+	if err := tx.Exec(`UPDATE tenants SET staleness_mode = 'advisory' WHERE staleness_mode = 'off'`).Error; err != nil {
+		return fmt.Errorf("migrate off staleness (tenants): %w", err)
+	}
+	if err := tx.Exec(`UPDATE instance_config SET staleness_default = 'advisory' WHERE staleness_default = 'off'`).Error; err != nil {
+		return fmt.Errorf("migrate off staleness (instance_config): %w", err)
 	}
 
 	// Personal tenants use the owner relation instead of admin (personal-owner-role).

@@ -30,12 +30,6 @@ func TestSectionViewFromModel_Tiering(t *testing.T) {
 	store := viewStore(30, 60)
 	head := "The Heading"
 
-	// off mode: passthrough regardless of age.
-	off, err := sectionViewFromModel(ctx, store, sectionAged(90, &head, "body"), models.DocTypeLearning, models.StalenessModeOff, false)
-	require.NoError(t, err)
-	require.Empty(t, off.Status)
-	require.Equal(t, "body", off.Content)
-
 	// fresh: no status, content served.
 	fresh, err := sectionViewFromModel(ctx, store, sectionAged(5, &head, "body"), models.DocTypeLearning, models.StalenessModeHard, false)
 	require.NoError(t, err)

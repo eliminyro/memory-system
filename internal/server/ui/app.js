@@ -1687,7 +1687,7 @@ const CONFIG_SCHEMA = [
     { key: "history_retention_days", label: "History retention", env: "MEMORY_HISTORY_RETENTION_DAYS", desc: "Sweep prunes mutation_history rows older than this. 0 = keep full history.", def: "default 90 · 0 = keep all", ctl: "num", type: "int", min: 0, unit: "days", depends: "history_enabled" },
   ] },
   { title: "New-tenant defaults", tc: "var(--violet)", note: "MEMORY_DEFAULT_OPTS", fields: [
-    { key: "staleness_default", label: "Staleness mode", desc: "Withhold-on-stale behavior for freshly provisioned tenants.", def: "default off", ctl: "seg", options: ["off", "advisory", "hard"] },
+    { key: "staleness_default", label: "Staleness mode", desc: "Withhold-on-stale behavior for freshly provisioned tenants.", def: "default hard", ctl: "seg", options: ["advisory", "hard"] },
     { key: "duplicate_guard_default", label: "Duplicate guard", desc: "Refuse near-duplicate writes above the similarity threshold.", ctl: "seg", options: ["off", "on"], bool: true },
     { key: "duplicate_threshold", label: "Duplicate threshold", env: "MEMORY_DUPLICATE_THRESHOLD", desc: "Cosine similarity above which a write is rejected (global write-guard threshold).", def: "default 0.85", ctl: "num", type: "float", min: 0, max: 1, exclmin: true },
     { key: "cleanup_scan_default", label: "Cleanup scan", desc: "Run the nightly near-duplicate scan populating cleanup_queue.", ctl: "seg", options: ["off", "on"], bool: true },
@@ -2503,11 +2503,10 @@ function tenantSettingsSection(t) {
   enf.hidden = true;
   enf.append(el("span", { className: "eyebrow", textContent: "enforcement" }));
   const staleSeg = el("div", { className: "segmented seg-inline" },
-    el("button", { type: "button", textContent: "off" }),
     el("button", { type: "button", textContent: "advisory" }),
     el("button", { type: "button", textContent: "hard" }));
   enf.append(el("div", { className: "toggle-row" },
-    el("div", { className: "lbl" }, document.createTextNode("Staleness mode "), el("small", { textContent: "off · advisory flags stale reads · hard withholds guarded content" })),
+    el("div", { className: "lbl" }, document.createTextNode("Staleness mode "), el("small", { textContent: "advisory flags stale reads · hard withholds guarded content" })),
     staleSeg));
   const dupSeg = el("div", { className: "segmented seg-inline" },
     el("button", { type: "button", textContent: "off" }),
@@ -2541,7 +2540,7 @@ function tenantSettingsSection(t) {
   function applyState(s) {
     if (!s) return;
     setActive(lockSeg, s.effective_self_service_policy === "admin_only" ? "admin-only" : "open");
-    setActive(staleSeg, s.staleness_mode || "off");
+    setActive(staleSeg, s.staleness_mode || "advisory");
     setActive(dupSeg, s.duplicate_guard ? "on" : "off");
     setActive(cleanSeg, s.cleanup_scan_enabled ? "on" : "off");
     setActive(metricsSeg, s.metrics_enabled ? "on" : "off");

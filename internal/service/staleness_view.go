@@ -73,7 +73,7 @@ type EdgeView struct {
 }
 
 // buildDocumentView applies the staleness filter to each section per the tenant's
-// mode. store nil or mode "off" passes content through. adminForceRead reveals an
+// mode. A nil store passes content through. adminForceRead reveals an
 // expired body (admin break-glass, no clock reset); non-admins map to false.
 func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *models.Document, mode string, adminForceRead bool) (DocumentView, error) {
 	view := DocumentView{
@@ -115,7 +115,7 @@ func sectionViewFromModel(ctx context.Context, store *staleness.PolicyStore, sec
 		CreatedAt:  sec.CreatedAt,
 		UpdatedAt:  sec.UpdatedAt,
 	}
-	if store == nil || mode == models.StalenessModeOff {
+	if store == nil {
 		view.Content = sec.Content
 		return view, nil
 	}
@@ -147,7 +147,7 @@ func headingPreview(heading *string, content string) string {
 }
 
 // applyStalenessToSearchResults overlays staleness metadata per each result's OWN
-// owning-tenant mode (modeByTenant, keyed by TenantID; absent/"off" is untouched).
+// owning-tenant mode (modeByTenant, keyed by TenantID; an absent mode is untouched).
 // Hard-mode expired blanks the body to a heading preview unless adminForceRead.
 func applyStalenessToSearchResults(ctx context.Context, store *staleness.PolicyStore, results []repository.SearchResult, modeByTenant map[uuid.UUID]string, adminForceRead bool) ([]repository.SearchResult, error) {
 	if store == nil {
@@ -156,7 +156,7 @@ func applyStalenessToSearchResults(ctx context.Context, store *staleness.PolicyS
 	for i := range results {
 		r := &results[i]
 		mode := modeByTenant[r.TenantID]
-		if mode == "" || mode == models.StalenessModeOff {
+		if mode == "" {
 			continue
 		}
 		check := staleness.Check(store, models.Section{

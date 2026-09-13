@@ -518,7 +518,7 @@ func (s *MemoryService) requireSelfService(ctx context.Context, tenant *models.T
 }
 
 // tenantSettings holds per-tenant feature toggles. When the tenants repo is
-// unwired (e.g. import CLI), safe defaults apply: staleness off, guard off.
+// unwired (e.g. import CLI), safe defaults apply: staleness advisory, guard off.
 type tenantSettings struct {
 	StalenessMode      string
 	DuplicateGuard     bool
@@ -527,19 +527,14 @@ type tenantSettings struct {
 
 func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenantSettings {
 	if s.tenants == nil {
-		return tenantSettings{StalenessMode: models.StalenessModeOff}
+		return tenantSettings{StalenessMode: models.StalenessModeAdvisory}
 	}
 	t, err := s.tenants.GetByID(ctx, tid)
 	if err != nil {
-		// Fail safe: unreadable config -> staleness off; never refuse content on a glitch.
-		return tenantSettings{StalenessMode: models.StalenessModeOff}
+		// Fail safe: unreadable config -> advisory (never withholds); never refuse content.
+		return tenantSettings{StalenessMode: models.StalenessModeAdvisory}
 	}
-	mode := t.StalenessMode
-	if _, ok := models.ValidStalenessModes[mode]; !ok {
-		// Fail safe: unrecognised value -> "off" (not "advisory"); never refuse content.
-		mode = models.StalenessModeOff
-	}
-	return tenantSettings{StalenessMode: mode, DuplicateGuard: t.DuplicateGuard, DuplicateThreshold: s.effectiveDuplicateThreshold(t.DuplicateThreshold)}
+	return tenantSettings{StalenessMode: models.NormalizeStalenessMode(t.StalenessMode), DuplicateGuard: t.DuplicateGuard, DuplicateThreshold: s.effectiveDuplicateThreshold(t.DuplicateThreshold)}
 }
 
 // effectiveDuplicateThreshold resolves the write-guard cutoff: a valid per-tenant
@@ -744,11 +739,7 @@ func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repo
 	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
 	for _, t := range tenants {
 		byID[t.ID] = t
-		mode := t.StalenessMode
-		if _, ok := models.ValidStalenessModes[mode]; !ok {
-			mode = models.StalenessModeOff
-		}
-		modeByTenant[t.ID] = mode
+		modeByTenant[t.ID] = models.NormalizeStalenessMode(t.StalenessMode)
 	}
 	for i := range results {
 		if t, ok := byID[results[i].TenantID]; ok {
@@ -764,21 +755,17 @@ func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repo
 // labeling) — replacing the two separate GetByID calls (staleness + label) that a
 // single-document read previously issued for the same row. It preserves the exact
 // fail-safe defaults of the old paths: an unwired tenants repo or a lookup
-// miss/error yields staleness "off" and empty name/type, and an unrecognised
-// staleness value degrades to "off" — never refusing the read on a config glitch.
+// miss/error yields advisory and empty name/type, and an unrecognised
+// staleness value degrades to advisory — never refusing the read on a config glitch.
 func (s *MemoryService) tenantModeAndLabel(ctx context.Context, id uuid.UUID) (stalenessMode, name, typ string) {
 	if s.tenants == nil {
-		return models.StalenessModeOff, "", ""
+		return models.StalenessModeAdvisory, "", ""
 	}
 	t, err := s.tenants.GetByID(ctx, id)
 	if err != nil {
-		return models.StalenessModeOff, "", ""
+		return models.StalenessModeAdvisory, "", ""
 	}
-	mode := t.StalenessMode
-	if _, ok := models.ValidStalenessModes[mode]; !ok {
-		mode = models.StalenessModeOff
-	}
-	return mode, t.Name, t.Type
+	return models.NormalizeStalenessMode(t.StalenessMode), t.Name, t.Type
 }
 
 // Search input bounds shared by every read surface (MCP search_memory and the
@@ -1991,11 +1978,11 @@ func (s *MemoryService) ListTenants(ctx context.Context) ([]models.Tenant, error
 }
 
 // applyCreationDefaults stamps the operator-chosen toggle defaults onto a new
-// tenant. GORM emits the model's struct-tag defaults ('off'/false/false) for
+// tenant. GORM emits the model's struct-tag defaults ('advisory'/false/false) for
 // zero-valued fields, silently bypassing the DB column default, so a configured
 // service must write the values explicitly. A zero/invalid StalenessMode means
 // the service was built without wiring config (offline CLI / tests): leave the
-// fields untouched so the model/DB default (upgrade-safe 'off') applies.
+// fields untouched so the model/DB default (upgrade-safe 'advisory') applies.
 func (s *MemoryService) applyCreationDefaults(t *models.Tenant) {
 	mode := s.TenantDefaults.StalenessMode
 	guard := s.TenantDefaults.DuplicateGuard
@@ -3197,10 +3184,8 @@ func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fiel
 		tenant.Type = *fields.Type
 	}
 	if fields.StalenessMode != nil {
-		if _, ok := models.ValidStalenessModes[*fields.StalenessMode]; !ok {
-			return nil, fmt.Errorf("%w: staleness_mode must be off, advisory, or hard", apperr.ErrInvalidInput)
-		}
-		tenant.StalenessMode = *fields.StalenessMode
+		// Coerce legacy/unknown (incl. off) to the advisory floor rather than reject.
+		tenant.StalenessMode = models.NormalizeStalenessMode(*fields.StalenessMode)
 	}
 	if fields.DuplicateGuard != nil {
 		tenant.DuplicateGuard = *fields.DuplicateGuard
