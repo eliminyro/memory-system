@@ -56,10 +56,23 @@ type DocumentView struct {
 	ReviewPending bool   `json:"review_pending,omitempty"`
 	ReviewReason  string `json:"review_reason,omitempty"`
 
+	// Advisory expiry signals, prunable docs only (nil otherwise): when this doc
+	// expires, and same-type siblings expiring within 7 days. Never withhold.
+	ExpiresAt        *time.Time          `json:"expires_at,omitempty"`
+	ExpiresInDays    *int                `json:"expires_in_days,omitempty"`
+	TypeExpiringSoon []ExpiringSoonEntry `json:"type_expiring_soon,omitempty"`
+
 	// Populated only on an expand read: the resolved included documents (flat,
 	// ordered, de-duplicated) and a per-edge resolution manifest.
 	Includes        []DocumentView `json:"includes,omitempty"`
 	IncludeManifest []IncludeRef   `json:"include_manifest,omitempty"`
+}
+
+// ExpiringSoonEntry is one same-type sibling nearing expiry: its path and the
+// days left before the sweep would evict it.
+type ExpiringSoonEntry struct {
+	Path          string `json:"path"`
+	ExpiresInDays int    `json:"expires_in_days"`
 }
 
 // EdgeView is the compact edge projection embedded on a document read: the edge
@@ -92,6 +105,16 @@ func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *m
 		view.ReviewPending = true
 		if doc.ReviewReason != nil {
 			view.ReviewReason = *doc.ReviewReason
+		}
+	}
+	// Per-doc expiry, prunable types only. Days may be 0/negative (overdue but
+	// unswept) — advisory, so don't clamp.
+	if store != nil {
+		if pol := store.EffectiveFor(doc.DocType); pol.Prunable && pol.ExpirationAgeDays > 0 {
+			expiresAt := doc.CreatedAt.AddDate(0, 0, pol.ExpirationAgeDays)
+			days := int(time.Until(expiresAt).Hours() / 24)
+			view.ExpiresAt = &expiresAt
+			view.ExpiresInDays = &days
 		}
 	}
 	view.Sections = make([]SectionView, 0, len(doc.Sections))

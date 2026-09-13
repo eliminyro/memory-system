@@ -457,3 +457,55 @@ func (r *DocumentRepository) ClearReviewPending(ctx context.Context, docID uuid.
 	}
 	return nil
 }
+
+// ExpiringSoon is one prunable doc nearing its expiry: its path and remaining days.
+type ExpiringSoon struct {
+	Path          string
+	ExpiresInDays int
+}
+
+// expiringSoonSQL selects a tenant's prunable docs of one type whose expiry
+// (created_at + expiration window) lands within the next withinDays, excluding
+// pinned and archived docs, soonest first (older created_at expires first).
+const expiringSoonSQL = `
+	SELECT d.category, d.subcategory, d.slug,
+	       FLOOR(EXTRACT(EPOCH FROM (d.created_at + make_interval(days => ?) - NOW())) / 86400)::int AS expires_in_days
+	FROM documents d
+	WHERE d.tenant_id = ?
+	  AND d.doc_type = ?
+	  AND d.archived_at IS NULL
+	  AND d.pinned = false
+	  AND d.created_at + make_interval(days => ?) > NOW()
+	  AND d.created_at + make_interval(days => ?) <= NOW() + make_interval(days => ?)
+	ORDER BY d.created_at ASC
+	LIMIT ?
+`
+
+// DocsExpiringSoon lists same-tenant same-type prunable docs whose expiry falls
+// within withinDays, capped at limit. Advisory read-time signal; a 0-window type
+// (expirationAgeDays<=0) yields nothing.
+func (r *DocumentRepository) DocsExpiringSoon(ctx context.Context, tenantID uuid.UUID, docType string, expirationAgeDays, withinDays, limit int) ([]ExpiringSoon, error) {
+	if expirationAgeDays <= 0 || withinDays <= 0 || limit <= 0 {
+		return nil, nil
+	}
+	type row struct {
+		Category      string  `gorm:"column:category"`
+		Subcategory   *string `gorm:"column:subcategory"`
+		Slug          string  `gorm:"column:slug"`
+		ExpiresInDays int     `gorm:"column:expires_in_days"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).Raw(expiringSoonSQL,
+		expirationAgeDays, tenantID, docType, expirationAgeDays, expirationAgeDays, withinDays, limit,
+	).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("docs expiring soon (%s): %w", docType, err)
+	}
+	out := make([]ExpiringSoon, 0, len(rows))
+	for _, rw := range rows {
+		out = append(out, ExpiringSoon{
+			Path:          models.BuildPath(rw.Category, rw.Subcategory, rw.Slug),
+			ExpiresInDays: rw.ExpiresInDays,
+		})
+	}
+	return out, nil
+}
