@@ -322,6 +322,19 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		}
 	}
 
+	// Knowledge grace: reference (and the knowledge types inheriting it) get a 30-day
+	// archive grace; prompt is pinned at 0 so operational prompts never archive. Only
+	// NULL rows move, so operator customizations survive.
+	knowledgeGraceMigrations := []string{
+		`UPDATE doc_type_policies SET expiration_age_days = 30 WHERE doc_type = 'reference' AND expiration_age_days IS NULL`,
+		`UPDATE doc_type_policies SET expiration_age_days = 0 WHERE doc_type = 'prompt' AND expiration_age_days IS NULL`,
+	}
+	for _, m := range knowledgeGraceMigrations {
+		if err := tx.Exec(m).Error; err != nil {
+			return fmt.Errorf("knowledge-grace migration: %w", err)
+		}
+	}
+
 	// Move #15's doc-level review flag onto the section needs-verification flag,
 	// then drop the doc columns. Guarded/idempotent: skips once the columns are gone.
 	if err := tx.Exec(`

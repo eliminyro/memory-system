@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
@@ -228,4 +229,123 @@ func TestScannerMetrics_PruneAndCleanupEmit(t *testing.T) {
 		Where("tenant_id = ? AND event_type = ?", tenantID, models.MetricEventCleanup).
 		Count(&cleanupEvents).Error)
 	require.Equal(t, int64(1), cleanupEvents, "one cleanup event per evicted doc for the opted-in tenant")
+}
+
+// archivePolicies makes learning non-prunable (archives on grace) and journal
+// prunable (hard-deletes on lifespan), both with a 30-day window.
+func archivePolicies() cleanup.PolicySource {
+	return staleness.NewPolicyStoreFromEffective(map[string]models.EffectivePolicy{
+		models.DocTypeLearning: {ExpirationAgeDays: 30, Prunable: false},
+		models.DocTypeJournal:  {ExpirationAgeDays: 30, Prunable: true},
+	})
+}
+
+// seedFlaggedDoc creates a non-prunable learning doc with one section per entry in
+// flaggedAgo: a value >= 0 flags that section NOW()-days ago, a negative leaves it fresh.
+func seedFlaggedDoc(t *testing.T, db *gorm.DB, tenantID uuid.UUID, slug string, pinned bool, flaggedAgo []int, rng *rand.Rand) uuid.UUID {
+	t.Helper()
+	doc := &models.Document{
+		ID: uuid.New(), TenantID: tenantID, Category: "learnings",
+		Slug: slug, Title: slug, DocType: models.DocTypeLearning, Pinned: pinned,
+	}
+	require.NoError(t, db.Create(doc).Error)
+	for i, ago := range flaggedAgo {
+		sec := &models.Section{DocumentID: doc.ID, Ordinal: i, Content: slug, Embedding: pgvector.NewVector(randVec(rng))}
+		require.NoError(t, db.Create(sec).Error)
+		if ago >= 0 {
+			require.NoError(t, db.Exec(
+				`UPDATE sections SET flagged_at = NOW() - make_interval(days => ?), flag_reason = 'changed' WHERE id = ?`,
+				ago, sec.ID).Error)
+		}
+	}
+	return doc.ID
+}
+
+// seedJournalDoc creates a prunable journal doc created ageDays ago (its sections'
+// flags are irrelevant — prunable deletion is lifespan-from-creation).
+func seedJournalDoc(t *testing.T, db *gorm.DB, tenantID uuid.UUID, slug string, ageDays int, rng *rand.Rand) uuid.UUID {
+	t.Helper()
+	doc := &models.Document{
+		ID: uuid.New(), TenantID: tenantID, Category: "journal",
+		Slug: slug, Title: slug, DocType: models.DocTypeJournal,
+	}
+	require.NoError(t, db.Create(doc).Error)
+	require.NoError(t, db.Create(&models.Section{
+		DocumentID: doc.ID, Ordinal: 0, Content: slug, Embedding: pgvector.NewVector(randVec(rng)),
+	}).Error)
+	require.NoError(t, db.Exec(
+		`UPDATE documents SET created_at = NOW() - make_interval(days => ?) WHERE id = ?`, ageDays, doc.ID).Error)
+	return doc.ID
+}
+
+func archiveState(t *testing.T, db *gorm.DB, id uuid.UUID) (*time.Time, string) {
+	t.Helper()
+	var doc models.Document
+	require.NoError(t, db.Where("id = ?", id).First(&doc).Error)
+	return doc.ArchivedAt, doc.ArchiveReason
+}
+
+// TestScannerArchive_GraceArchivesStale covers task 5.1: all-flagged-past-grace
+// non-prunable docs archive (kept, not deleted); partial/pinned are spared, a
+// prunable journal still deletes, and the whole pass is gated on the sweep toggle.
+func TestScannerArchive_GraceArchivesStale(t *testing.T) {
+	db := openScanPG(t)
+	rng := rand.New(rand.NewSource(11))
+	tenantID := seedScanTenant(t, db)
+	t.Cleanup(func() {
+		db.Exec("DELETE FROM documents WHERE tenant_id = ?", tenantID)
+		db.Exec("DELETE FROM deletion_events WHERE tenant_id = ?", tenantID)
+		db.Exec("DELETE FROM tenants WHERE id = ?", tenantID)
+	})
+	ctx := context.Background()
+
+	// grace = 30d.
+	stale := seedFlaggedDoc(t, db, tenantID, "stale-all", false, []int{40, 45}, rng)
+	partial := seedFlaggedDoc(t, db, tenantID, "partial-fresh", false, []int{40, -1}, rng)
+	pinned := seedFlaggedDoc(t, db, tenantID, "pinned-stale", true, []int{40}, rng)
+	journal := seedJournalDoc(t, db, tenantID, "2026-01-01", 40, rng)
+	policies := archivePolicies()
+
+	off := newScanner(db, scanGC{}, policies)
+	stats, err := off.RunOnce(ctx)
+	require.NoError(t, err)
+	require.Zero(t, stats.DocsArchived, "archive gated on RetentionSweepEnabled")
+	require.Zero(t, stats.DocsEvicted)
+	staleArchived, _ := archiveState(t, db, stale)
+	require.Nil(t, staleArchived, "sweep off archives nothing")
+
+	on := newScanner(db, scanGC{retention: true}, policies)
+	stats, err = on.RunOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.DocsArchived, "only the fully-stale non-prunable doc")
+	require.Equal(t, 1, stats.DocsEvicted, "the prunable journal is deleted")
+
+	require.Equal(t, int64(1), docCount(t, db, stale), "archived doc is kept, not deleted")
+	gotAt, gotReason := archiveState(t, db, stale)
+	require.NotNil(t, gotAt, "stale doc archived")
+	require.Equal(t, models.ArchiveReasonStale, gotReason)
+	partialAt, _ := archiveState(t, db, partial)
+	require.Nil(t, partialAt, "partially-fresh doc spared")
+	pinnedAt, _ := archiveState(t, db, pinned)
+	require.Nil(t, pinnedAt, "pinned doc spared")
+	require.Zero(t, docCount(t, db, journal), "prunable journal deleted, not archived")
+
+	var auditRows int64
+	require.NoError(t, db.Model(&models.DeletionEvent{}).
+		Where("tenant_id = ? AND reason = ? AND archived_at IS NOT NULL", tenantID, models.ArchiveReasonStale).
+		Count(&auditRows).Error)
+	require.Equal(t, int64(1), auditRows, "one archive audit row (content preserved)")
+}
+
+// TestMigration_KnowledgeGraceDefaults covers task 1: the seed/migration gives
+// reference (and its inheritors) a 30-day grace and pins prompt at 0.
+func TestMigration_KnowledgeGraceDefaults(t *testing.T) {
+	db := openScanPG(t)
+	var ref, prompt models.DocTypePolicy
+	require.NoError(t, db.Where("doc_type = ?", models.DocTypeReference).First(&ref).Error)
+	require.NotNil(t, ref.ExpirationAgeDays)
+	require.Equal(t, 30, *ref.ExpirationAgeDays)
+	require.NoError(t, db.Where("doc_type = ?", models.DocTypePrompt).First(&prompt).Error)
+	require.NotNil(t, prompt.ExpirationAgeDays)
+	require.Equal(t, 0, *prompt.ExpirationAgeDays)
 }

@@ -6,8 +6,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// DeletionEvent is an append-only audit row written on hard-delete (currently
-// only the retention sweep). Kept forever — records what was removed and when.
+// DeletionEvent is an append-only audit row for lifecycle removals: a hard-delete
+// (retention sweep, ArchivedAt nil) or an archive-on-grace (ArchivedAt set, content
+// preserved). Kept forever — records what was retired and when.
 type DeletionEvent struct {
 	ID           uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
 	TenantID     uuid.UUID  `gorm:"type:uuid;not null;index" json:"tenant_id"`
@@ -26,3 +27,7 @@ const DeletionReasonRetention = "retention_sweep"
 // ArchiveReasonSuperseded names the lifecycle rule that retired a doc via a
 // supersedes edge (keep <= 32 chars).
 const ArchiveReasonSuperseded = "superseded"
+
+// ArchiveReasonStale names the archive-on-grace rule: every section flagged and
+// unverified past the doc_type's expiration_age (keep <= 32 chars).
+const ArchiveReasonStale = "stale"

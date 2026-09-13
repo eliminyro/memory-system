@@ -10,17 +10,17 @@ func TestDefaultPolicies_EveryDocTypeHasRow(t *testing.T) {
 	}
 }
 
-func TestResolve_NullInheritsZeroDoesNot(t *testing.T) {
+func TestResolve_NullInheritsExplicitDoesNot(t *testing.T) {
 	ps := DefaultEffectivePolicies[DocTypeProjectState]
-	if ps.ExpirationAgeDays != 0 {
-		t.Errorf("project_state expiration_age_days = %d, want 0 (inherited default)", ps.ExpirationAgeDays)
+	if ps.ExpirationAgeDays != 30 {
+		t.Errorf("project_state expiration_age_days = %d, want 30 (inherited reference grace)", ps.ExpirationAgeDays)
 	}
 	if !ps.Embed || !ps.DuplicateGuard {
 		t.Error("project_state must inherit reference's embed/duplicate_guard = true")
 	}
-	// journal sets its own expiration (30); it isn't the inherited default (0).
-	if j := DefaultEffectivePolicies[DocTypeJournal]; j.ExpirationAgeDays != 30 {
-		t.Errorf("journal expiration_age_days = %d, want 30 (set, not inherited)", j.ExpirationAgeDays)
+	// prompt sets its own expiration (0); it isn't the inherited reference grace (30).
+	if p := DefaultEffectivePolicies[DocTypePrompt]; p.ExpirationAgeDays != 0 {
+		t.Errorf("prompt expiration_age_days = %d, want 0 (set, not inherited)", p.ExpirationAgeDays)
 	}
 }
 

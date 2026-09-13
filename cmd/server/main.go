@@ -236,8 +236,8 @@ func main() {
 	policyStore := staleness.NewPolicyStore(db)
 
 	// Read-only metrics aggregator behind GET /api/admin/metrics: event-log
-	// counters + live flagged/archived gauges.
-	metricsSvc := service.NewMetricsService(metricEventRepo, sectionRepo)
+	// counters + live flagged/soon/archived gauges (policyStore supplies the grace).
+	metricsSvc := service.NewMetricsService(metricEventRepo, sectionRepo, policyStore)
 
 	// Config-invalidation listener: LISTEN must be established (both channels
 	// registered) BEFORE the initial loads below, so a change committed during
