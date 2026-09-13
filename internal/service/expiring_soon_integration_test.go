@@ -28,13 +28,13 @@ func TestExpiringSoon_ReadSignals(t *testing.T) {
 	ctx := ctxFor(f.tenantA, f.subjA)
 
 	// A prunable journal (migrated default: prunable, 30-day expiration).
-	slugA := "j" + uuid.NewString()
+	slugA := "2026-02-01"
 	resA, err := f.svc.StoreDocument(ctx, "journal", nil, slugA, "## H\nfresh journal", false, "", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, models.DocTypeJournal, resA.Document.DocType, "journal category derives the journal doc_type")
 
 	// A same-type sibling backdated so it expires in ~5 days (within the 7-day window).
-	slugB := "j" + uuid.NewString()
+	slugB := "2026-02-02"
 	resB, err := f.svc.StoreDocument(ctx, "journal", nil, slugB, "## H\nsibling journal", false, "", nil, nil)
 	require.NoError(t, err)
 	backdateCreated(t, f, resB.Document.ID, 25)
