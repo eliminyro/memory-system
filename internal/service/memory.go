@@ -1023,6 +1023,7 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	// A read is a liveness signal: keep the doc off the access-cold path.
 	s.bumpAccessed(ctx, doc.ID)
 	s.attachEdges(ctx, &view, doc.ID, scope)
+	s.attachExpiringSoon(ctx, &view, doc)
 	return &view, nil
 }
 
@@ -1065,6 +1066,7 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	// A read is a liveness signal: keep the doc off the access-cold path.
 	s.bumpAccessed(ctx, doc.ID)
 	s.attachEdges(ctx, &view, doc.ID, scope)
+	s.attachExpiringSoon(ctx, &view, doc)
 	return &view, nil
 }
 
@@ -3635,6 +3637,33 @@ func (s *MemoryService) attachEdges(ctx context.Context, view *DocumentView, doc
 		})
 	}
 	view.Edges = edges
+}
+
+// attachExpiringSoon best-effort surfaces same-type siblings (the doc's owning
+// tenant) whose expiry is within 7 days. Non-prunable docs and query errors leave
+// TypeExpiringSoon empty — advisory, must never fail the primary read.
+func (s *MemoryService) attachExpiringSoon(ctx context.Context, view *DocumentView, doc *models.Document) {
+	if s.docs == nil {
+		return
+	}
+	pol := s.policyFor(doc.DocType)
+	if !pol.Prunable || pol.ExpirationAgeDays <= 0 {
+		return
+	}
+	const withinDays, limit = 7, 10
+	items, err := s.docs.DocsExpiringSoon(ctx, doc.TenantID, doc.DocType, pol.ExpirationAgeDays, withinDays, limit)
+	if err != nil {
+		slog.Default().Warn("expiring-soon lookup failed", "document_id", doc.ID, "error", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+	entries := make([]ExpiringSoonEntry, 0, len(items))
+	for _, it := range items {
+		entries = append(entries, ExpiringSoonEntry{Path: it.Path, ExpiresInDays: it.ExpiresInDays})
+	}
+	view.TypeExpiringSoon = entries
 }
 
 const (

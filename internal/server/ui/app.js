@@ -994,6 +994,33 @@ async function showDocument(id) {
     docPanel.append(notice);
   }
 
+  // Advisory expiry nudge: a prunable doc's remaining life, then same-type siblings
+  // the sweep will evict within 7 days.
+  if (doc.expires_in_days != null) {
+    const enotice = el("div", { className: "doc-notice" }, icon(ICON_WARN));
+    enotice.append(el("span", {},
+      document.createTextNode("expires in "),
+      el("b", { textContent: `${doc.expires_in_days} day${doc.expires_in_days === 1 ? "" : "s"}` })));
+    docPanel.append(enotice);
+  }
+  if (Array.isArray(doc.type_expiring_soon) && doc.type_expiring_soon.length) {
+    const soon = doc.type_expiring_soon;
+    const snotice = el("div", { className: "doc-notice" }, icon(ICON_WARN));
+    snotice.append(el("span", {},
+      el("b", { textContent: `${soon.length}` }),
+      document.createTextNode(" "),
+      el("code", { textContent: doc.doc_type || "doc" }),
+      document.createTextNode(` doc${soon.length === 1 ? "" : "s"} expire within 7 days`)));
+    docPanel.append(snotice);
+    const list = el("ul", { className: "expiring-list" });
+    for (const e of soon) {
+      list.append(el("li", {},
+        el("b", { textContent: e.path || "" }),
+        document.createTextNode(` — ${e.expires_in_days}d`)));
+    }
+    docPanel.append(list);
+  }
+
   // Typed edges (edges-on-read). Display-only: EdgeView carries path/title but no
   // endpoint id, and showDocument needs an id — so no navigation, no link picker.
   if (Array.isArray(doc.edges) && doc.edges.length) {

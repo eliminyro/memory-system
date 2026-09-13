@@ -20,6 +20,17 @@ func docReview(t *testing.T, f *authzFixture, id uuid.UUID) (*time.Time, *string
 	return d.ReviewPendingAt, d.ReviewReason
 }
 
+// docReviewErr is the non-failing variant for polled goroutines: it returns the
+// query error instead of require-ing, so a transient/teardown DB error retries
+// rather than failing the test from inside Eventually/Never.
+func docReviewErr(f *authzFixture, id uuid.UUID) (*time.Time, *string, error) {
+	var d models.Document
+	if err := f.db.First(&d, id).Error; err != nil {
+		return nil, nil, err
+	}
+	return d.ReviewPendingAt, d.ReviewReason, nil
+}
+
 // TestDependsOn_ContentChangeFlagsDependent covers the whole depends_on lifecycle:
 // a target content change flags the dependent (advisory, served in full), a no-op /
 // heading-only / verify-only touch flags nothing, and re-verify clears the flag.
@@ -42,7 +53,10 @@ func TestDependsOn_ContentChangeFlagsDependent(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		at, reason := docReview(t, f, dep)
+		at, reason, err := docReviewErr(f, dep)
+		if err != nil {
+			return false
+		}
 		return at != nil && reason != nil && *reason == tgtPath
 	}, 5*time.Second, 50*time.Millisecond, "dependent is flagged review-pending naming the target")
 
@@ -72,7 +86,10 @@ func TestDependsOn_ContentChangeFlagsDependent(t *testing.T) {
 	require.NoError(t, f.svc.MarkVerified(ctx, tgtSec, nil))
 
 	require.Never(t, func() bool {
-		at, _ := docReview(t, f, dep)
+		at, _, err := docReviewErr(f, dep)
+		if err != nil {
+			return false
+		}
 		return at != nil
 	}, 500*time.Millisecond, 50*time.Millisecond, "no-op / verify-only touches never flag the dependent")
 }
