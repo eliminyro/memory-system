@@ -55,10 +55,6 @@ type Document struct {
 	LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`
 	// Pinned exempts the doc from access-based eviction regardless of age (D4).
 	Pinned bool `gorm:"not null;default:false" json:"pinned"`
-	// ReviewPendingAt/ReviewReason: set when a depends_on target's content changes;
-	// advisory nudge surfaced on read, cleared on re-verify. NULL = not pending.
-	ReviewPendingAt *time.Time `json:"review_pending_at,omitempty"`
-	ReviewReason    *string    `gorm:"size:500" json:"review_reason,omitempty"`
 	// ContentHash is hex(sha256(raw markdown)); powers the write-guard exact-dup
 	// short-circuit. Nullable/unbackfilled — pre-migration docs fall to the centroid.
 	ContentHash string `gorm:"size:64;index" json:"-"`

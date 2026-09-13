@@ -333,6 +333,24 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		}
 	}
 
+	// Move #15's doc-level review flag onto the section needs-verification flag,
+	// then drop the doc columns. Guarded/idempotent: skips once the columns are gone.
+	if err := tx.Exec(`
+		DO $$
+		BEGIN
+			IF EXISTS (SELECT 1 FROM information_schema.columns
+					   WHERE table_name = 'documents' AND column_name = 'review_pending_at') THEN
+				UPDATE sections s
+				SET flagged_at = d.review_pending_at, flag_reason = d.review_reason
+				FROM documents d
+				WHERE s.document_id = d.id AND d.review_pending_at IS NOT NULL;
+				ALTER TABLE documents DROP COLUMN review_pending_at;
+				ALTER TABLE documents DROP COLUMN review_reason;
+			END IF;
+		END $$`).Error; err != nil {
+		return fmt.Errorf("migrate review flag to section: %w", err)
+	}
+
 	// Seed the singleton from env bootstrap defaults exactly once: fresh rows are
 	// inserted seeded; a pre-existing row is upgraded to env (guarded by
 	// globals_seeded so admin edits + the history toggle survive).

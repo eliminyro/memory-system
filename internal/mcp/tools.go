@@ -110,6 +110,11 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 	}, s.MarkVerified)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "flag_changed",
+		Description: "Flag sections for re-verification because a referenced path changed. Pass the changed file paths (e.g. a git commit's touched files); every section whose verify_hints reference any of them (prefix match on the file part of a file:symbol / file:line hint) is marked needs_verification. Intended for an external git-hook. Best-effort; returns the count flagged.",
+	}, s.FlagChanged)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "get_cleanup_queue",
 		Description: "Return pending near-duplicate candidates detected by the nightly cleanup scan. Each entry names two documents that collide above threshold; the cleanup agent reads these, merges with merge_documents, and resolves with mark_cleanup_done.",
 	}, s.GetCleanupQueue)
@@ -169,6 +174,11 @@ type MarkVerifiedInput struct {
 	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
+type FlagChangedInput struct {
+	Paths    []string `json:"paths" jsonschema:"Changed file paths (e.g. a git commit's touched files). Flags every section whose verify_hints reference any path, prefix-matched on the file part."`
+	TenantID *string  `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+}
+
 type GetDocumentHistoryInput struct {
 	DocumentID string  `json:"document_id" jsonschema:"Document UUID"`
 	TenantID   *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
@@ -204,23 +214,25 @@ type UpdateMyTenantSettingsInput struct {
 }
 
 type StoreMemoryInput struct {
-	Category    string  `json:"category" jsonschema:"Document category: learnings, preferences, projects"`
-	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory: go, infrastructure, hilo, etc."`
-	Slug        string  `json:"slug" jsonschema:"Document slug/filename without extension"`
-	Content     string  `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
-	Force       bool    `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Only needed for a new path genuinely distinct from the listed candidates; a store to an existing path is an update and never trips the guard."`
-	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force=true. Brief explanation of why this is not a duplicate."`
-	Pin         *bool   `json:"pin,omitempty" jsonschema:"Mark the document a pin (never-evict): exempt from access-recency eviction. On re-store, omit to keep the current pin state, or set true/false to change it."`
-	Scope       *string `json:"scope,omitempty" jsonschema:"Applicability of any document: empty = always applies, or a whitespace-separated list of '/'-delimited glob patterns ('**' crosses segments, '*' within one) gating conditional includes at read time. Omit to keep the current value; empty string clears it."`
-	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+	Category    string   `json:"category" jsonschema:"Document category: learnings, preferences, projects"`
+	Subcategory *string  `json:"subcategory,omitempty" jsonschema:"Document subcategory: go, infrastructure, hilo, etc."`
+	Slug        string   `json:"slug" jsonschema:"Document slug/filename without extension"`
+	Content     string   `json:"content" jsonschema:"Markdown content. Split into sections by ## headings."`
+	Force       bool     `json:"force,omitempty" jsonschema:"Bypass duplicate guard. Requires reason. Audited in override_log. Only needed for a new path genuinely distinct from the listed candidates; a store to an existing path is an update and never trips the guard."`
+	Reason      string   `json:"reason,omitempty" jsonschema:"Required when force=true. Brief explanation of why this is not a duplicate."`
+	Pin         *bool    `json:"pin,omitempty" jsonschema:"Mark the document a pin (never-evict): exempt from access-recency eviction. On re-store, omit to keep the current pin state, or set true/false to change it."`
+	Scope       *string  `json:"scope,omitempty" jsonschema:"Applicability of any document: empty = always applies, or a whitespace-separated list of '/'-delimited glob patterns ('**' crosses segments, '*' within one) gating conditional includes at read time. Omit to keep the current value; empty string clears it."`
+	VerifyHints []string `json:"verify_hints,omitempty" jsonschema:"Optional file/symbol/line references (file:symbol or file:line) for the document's sections; flag_changed marks them needs_verification when a referenced path changes. Applied to every section of the document."`
+	TenantID    *string  `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type UpdateSectionInput struct {
-	SectionID string  `json:"section_id" jsonschema:"the section UUID to update"`
-	Content   *string `json:"content,omitempty" jsonschema:"optional new markdown content for the section; omit to leave content (and its embedding) untouched for a heading-only edit"`
-	Heading   *string `json:"heading,omitempty" jsonschema:"optional new heading for the section; empty string clears it"`
-	Verified  bool    `json:"verified,omitempty" jsonschema:"when true, also stamp verified_at on success (resets the freshness clock) — folds a following mark_verified into this call"`
-	TenantID  *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+	SectionID   string   `json:"section_id" jsonschema:"the section UUID to update"`
+	Content     *string  `json:"content,omitempty" jsonschema:"optional new markdown content for the section; omit to leave content (and its embedding) untouched for a heading-only edit"`
+	Heading     *string  `json:"heading,omitempty" jsonschema:"optional new heading for the section; empty string clears it"`
+	Verified    bool     `json:"verified,omitempty" jsonschema:"when true, also stamp verified_at on success (resets the freshness clock) — folds a following mark_verified into this call"`
+	VerifyHints []string `json:"verify_hints,omitempty" jsonschema:"optional file/symbol/line references (file:symbol or file:line) for this section; replaces its existing hints when provided, omit to leave them unchanged"`
+	TenantID    *string  `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
 type DeleteDocumentInput struct {
@@ -414,6 +426,21 @@ func (s *Server) MarkVerified(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	return jsonResult(map[string]string{"status": "verified", "section_id": id.String()}), nil, nil
 }
 
+func (s *Server) FlagChanged(ctx context.Context, _ *mcpsdk.CallToolRequest, input FlagChangedInput) (*mcpsdk.CallToolResult, any, error) {
+	if len(input.Paths) == 0 {
+		return errorResult("paths is required"), nil, nil
+	}
+	tenantOverride, err := parseTenantOverride(input.TenantID)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+	flagged, err := s.memory.FlagChanged(ctx, input.Paths, tenantOverride)
+	if err != nil {
+		return toolErr("flag changed", err)
+	}
+	return jsonResult(map[string]any{"status": "ok", "flagged": flagged}), nil, nil
+}
+
 func (s *Server) GetCleanupQueue(ctx context.Context, _ *mcpsdk.CallToolRequest, input GetCleanupQueueInput) (*mcpsdk.CallToolResult, any, error) {
 	if input.Limit > service.MaxSearchLimit {
 		input.Limit = service.MaxSearchLimit
@@ -511,7 +538,7 @@ func (s *Server) StoreMemory(ctx context.Context, _ *mcpsdk.CallToolRequest, inp
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	result, err := s.memory.StoreDocumentScoped(ctx, input.Category, input.Subcategory, input.Slug, input.Content, input.Force, input.Reason, tenantOverride, input.Pin, input.Scope)
+	result, err := s.memory.StoreDocumentScoped(ctx, input.Category, input.Subcategory, input.Slug, input.Content, input.Force, input.Reason, tenantOverride, input.Pin, input.Scope, input.VerifyHints...)
 	if err != nil {
 		return toolErr("store", err)
 	}
@@ -536,8 +563,8 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	// Content nil means "heading-only edit, skip re-embedding" (matches HTTP
 	// patchSection); require at least one mutable field so the call isn't a no-op.
-	if input.Content == nil && input.Heading == nil {
-		return errorResult("at least one of content or heading is required"), nil, nil
+	if input.Content == nil && input.Heading == nil && len(input.VerifyHints) == 0 {
+		return errorResult("at least one of content, heading, or verify_hints is required"), nil, nil
 	}
 	if input.Content != nil && len(*input.Content) > maxContentSize {
 		return errorResult("content exceeds 10MB limit"), nil, nil
@@ -550,7 +577,7 @@ func (s *Server) UpdateSection(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return errorResult(err.Error()), nil, nil
 	}
-	section, err := s.memory.UpdateSection(ctx, id, input.Content, input.Heading, input.Verified, tenantOverride)
+	section, err := s.memory.UpdateSection(ctx, id, input.Content, input.Heading, input.Verified, tenantOverride, input.VerifyHints...)
 	if err != nil {
 		return toolErr("update section", err)
 	}

@@ -28,6 +28,9 @@ type SectionView struct {
 	Preview       string     `json:"preview,omitempty"`
 	StaleDays     int        `json:"age_days,omitempty"`
 	ThresholdDays int        `json:"threshold_days,omitempty"`
+	// FlagReason names why this section is content/event-flagged needs-verification
+	// (a changed verify_hints path or a depends_on change). Empty = not flagged.
+	FlagReason string `json:"flag_reason,omitempty"`
 }
 
 // DocumentView is the API-facing projection of a document with filtered sections.
@@ -50,9 +53,9 @@ type DocumentView struct {
 	// (no content); populated on document reads, omitted when the doc has none.
 	Edges []EdgeView `json:"edges,omitempty"`
 
-	// ReviewPending: a depends_on target's content changed since this doc was last
-	// verified. Advisory only (content still served in full); ReviewReason names
-	// the changed dependency. Cleared on re-verify.
+	// ReviewPending: at least one section is flagged needs-verification (a changed
+	// verify_hints path or a depends_on change). Advisory doc-level rollup of the
+	// section flags; ReviewReason carries a flagged section's reason.
 	ReviewPending bool   `json:"review_pending,omitempty"`
 	ReviewReason  string `json:"review_reason,omitempty"`
 
@@ -101,12 +104,6 @@ func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *m
 		CreatedAt:   doc.CreatedAt,
 		UpdatedAt:   doc.UpdatedAt,
 	}
-	if doc.ReviewPendingAt != nil {
-		view.ReviewPending = true
-		if doc.ReviewReason != nil {
-			view.ReviewReason = *doc.ReviewReason
-		}
-	}
 	// Per-doc expiry, prunable types only. Days may be 0/negative (overdue but
 	// unswept) — advisory, so don't clamp.
 	if store != nil {
@@ -123,6 +120,13 @@ func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *m
 		if err != nil {
 			return DocumentView{}, err
 		}
+		// Doc-level rollup of the section flags: first flagged section wins the reason.
+		if sec.FlaggedAt != nil && !view.ReviewPending {
+			view.ReviewPending = true
+			if sec.FlagReason != nil {
+				view.ReviewReason = *sec.FlagReason
+			}
+		}
 		view.Sections = append(view.Sections, sv)
 	}
 	return view, nil
@@ -137,6 +141,14 @@ func sectionViewFromModel(ctx context.Context, store *staleness.PolicyStore, sec
 		VerifiedAt: sec.VerifiedAt,
 		CreatedAt:  sec.CreatedAt,
 		UpdatedAt:  sec.UpdatedAt,
+	}
+	// Content/event flag surfaces regardless of store/mode; age path may reinforce
+	// it below and an expired withhold overrides the status.
+	if sec.FlaggedAt != nil {
+		view.Status = "needs_verification"
+		if sec.FlagReason != nil {
+			view.FlagReason = *sec.FlagReason
+		}
 	}
 	if store == nil {
 		view.Content = sec.Content
@@ -173,11 +185,16 @@ func headingPreview(heading *string, content string) string {
 // owning-tenant mode (modeByTenant, keyed by TenantID; an absent mode is untouched).
 // Hard-mode expired blanks the body to a heading preview unless adminForceRead.
 func applyStalenessToSearchResults(ctx context.Context, store *staleness.PolicyStore, results []repository.SearchResult, modeByTenant map[uuid.UUID]string, adminForceRead bool) ([]repository.SearchResult, error) {
-	if store == nil {
-		return results, nil
-	}
 	for i := range results {
 		r := &results[i]
+		// Content/event flag surfaces regardless of store/mode; FlagReason rides
+		// along from SQL. The age path below may reinforce or override the status.
+		if r.FlaggedAt != nil {
+			r.Status = "needs_verification"
+		}
+		if store == nil {
+			continue
+		}
 		mode := modeByTenant[r.TenantID]
 		if mode == "" {
 			continue

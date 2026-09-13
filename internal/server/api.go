@@ -58,6 +58,7 @@ func (h *apiHandler) mux() *http.ServeMux {
 	m.HandleFunc("PATCH /sections/{id}", h.patchSection)
 	m.HandleFunc("PATCH /documents/{id}", h.patchDocument)
 	m.HandleFunc("POST /sections/{id}/verify", h.verifySection)
+	m.HandleFunc("POST /flag-changed", h.flagChanged)
 	m.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 	m.HandleFunc("DELETE /sections/{id}", h.deleteSection)
 
@@ -556,18 +557,19 @@ func (h *apiHandler) patchSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content  *string `json:"content"`
-		Heading  *string `json:"heading"`
-		Verified bool    `json:"verified"`
+		Content     *string  `json:"content"`
+		Heading     *string  `json:"heading"`
+		Verified    bool     `json:"verified"`
+		VerifyHints []string `json:"verify_hints"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Content == nil && body.Heading == nil {
-		writeError(w, http.StatusBadRequest, "content or heading is required")
+	if body.Content == nil && body.Heading == nil && len(body.VerifyHints) == 0 {
+		writeError(w, http.StatusBadRequest, "content, heading, or verify_hints is required")
 		return
 	}
-	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, body.Heading, body.Verified, nil)
+	section, err := h.memory.UpdateSection(r.Context(), id, body.Content, body.Heading, body.Verified, nil, body.VerifyHints...)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -604,6 +606,34 @@ func (h *apiHandler) verifySection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// flagChanged backs POST /flag-changed, the git-hook contract: it flags every
+// section whose verify_hints reference a changed path (prefix match), scoped to
+// the caller's write tenant. Best-effort; returns the count flagged.
+func (h *apiHandler) flagChanged(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TenantID string   `json:"tenant_id"`
+		Paths    []string `json:"paths"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if len(body.Paths) == 0 {
+		writeError(w, http.StatusBadRequest, "paths is required")
+		return
+	}
+	override, err := parseOptionalTenantID(body.TenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
+		return
+	}
+	flagged, err := h.memory.FlagChanged(r.Context(), body.Paths, override)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "flagged": flagged})
 }
 
 // deleteDocument deletes by id against the doc's OWNING tenant (DeleteDocumentByID),
@@ -643,12 +673,13 @@ func (h *apiHandler) deleteSection(w http.ResponseWriter, r *http.Request) {
 // duplicate guard is honored: a near/exact duplicate returns 409, not a 201.
 func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TenantID    string  `json:"tenant_id"`
-		Category    string  `json:"category"`
-		Subcategory *string `json:"subcategory"`
-		Slug        string  `json:"slug"`
-		Content     string  `json:"content"`
-		Scope       *string `json:"scope"`
+		TenantID    string   `json:"tenant_id"`
+		Category    string   `json:"category"`
+		Subcategory *string  `json:"subcategory"`
+		Slug        string   `json:"slug"`
+		Content     string   `json:"content"`
+		Scope       *string  `json:"scope"`
+		VerifyHints []string `json:"verify_hints"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -687,7 +718,7 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx = auth.WithTenantID(ctx, tenantID)
-	res, err := h.memory.StoreDocumentScoped(ctx, category, subcategory, slug, content, false, "", nil, nil, body.Scope)
+	res, err := h.memory.StoreDocumentScoped(ctx, category, subcategory, slug, content, false, "", nil, nil, body.Scope, body.VerifyHints...)
 	if err != nil {
 		writeErr(w, err)
 		return

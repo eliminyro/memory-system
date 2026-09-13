@@ -15,8 +15,15 @@ type Section struct {
 	Content    string          `gorm:"type:text;not null" json:"content"`
 	Embedding  pgvector.Vector `gorm:"type:vector" json:"-"`
 	VerifiedAt *time.Time      `gorm:"index:idx_sections_verified_at" json:"verified_at,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	// VerifyHints are file/symbol/line references (file:symbol, file:line) a
+	// git-hook matches on change via flag_changed; jsonb array, NULL/[] = none.
+	VerifyHints []string `gorm:"serializer:json;type:jsonb" json:"verify_hints,omitempty"`
+	// FlaggedAt/FlagReason: the content/event-driven needs-verification flag, set
+	// by verify_hints match or a depends_on change, cleared on re-verify.
+	FlaggedAt  *time.Time `json:"flagged_at,omitempty"`
+	FlagReason *string    `gorm:"size:500" json:"flag_reason,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 
 	Document *Document `gorm:"foreignKey:DocumentID" json:"document,omitempty"`
 }

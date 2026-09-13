@@ -1136,8 +1136,8 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	// Verifying is a liveness signal: keep the doc off the access-cold path, and
 	// record a best-effort verify event for opted-in tenants (detached goroutine).
 	s.recordVerify(ctx, tid, section.DocumentID)
-	// Re-verifying clears any depends_on review-pending flag on this doc.
-	s.clearReviewPending(ctx, section.DocumentID)
+	// Re-verifying clears this section's needs-verification flag.
+	s.clearSectionFlag(ctx, sectionID)
 	return nil
 }
 
@@ -1169,11 +1169,11 @@ func (s *MemoryService) recordVerify(ctx context.Context, tenantID, docID uuid.U
 	}()
 }
 
-// flagDependents marks every document that depends_on targetID review-pending,
-// naming targetPath as the reason — a best-effort system side-effect (detached,
-// deadline-bounded, panic-guarded) that never fails or blocks the triggering edit.
+// flagDependents needs-verification-flags all sections of every document that
+// depends_on targetID, naming targetPath as the reason — a best-effort system
+// side-effect (detached, deadline-bounded, panic-guarded) that never blocks the edit.
 func (s *MemoryService) flagDependents(ctx context.Context, targetID uuid.UUID, targetPath string, ownerTID uuid.UUID) {
-	if s.edges == nil || s.docs == nil {
+	if s.edges == nil || s.sections == nil {
 		return
 	}
 	detached := context.WithoutCancel(ctx)
@@ -1186,22 +1186,42 @@ func (s *MemoryService) flagDependents(ctx context.Context, targetID uuid.UUID, 
 			slog.Default().Warn("depends_on lookup failed", "error", err)
 			return
 		}
-		if err := s.docs.SetReviewPending(c, dependents, targetPath, time.Now()); err != nil {
-			slog.Default().Warn("review-pending flag failed", "error", err)
+		if err := s.sections.FlagSectionsByDoc(c, dependents, targetPath, time.Now()); err != nil {
+			slog.Default().Warn("section flag failed", "error", err)
 		}
 	}()
 }
 
-// clearReviewPending clears a doc's review-pending flag after a re-verify.
+// clearSectionFlag clears a section's needs-verification flag after a re-verify.
 // Best-effort inline (observable to the next read) and non-fatal: a clear error
 // is logged, never surfaced, so it can't undo an already-successful verify.
-func (s *MemoryService) clearReviewPending(ctx context.Context, docID uuid.UUID) {
-	if s.docs == nil {
+func (s *MemoryService) clearSectionFlag(ctx context.Context, sectionID uuid.UUID) {
+	if s.sections == nil {
 		return
 	}
-	if err := s.docs.ClearReviewPending(ctx, docID); err != nil {
-		slog.Default().Warn("clear review-pending failed", "error", err)
+	if err := s.sections.ClearSectionFlag(ctx, sectionID); err != nil {
+		slog.Default().Warn("clear section flag failed", "error", err)
 	}
+}
+
+// FlagChanged is the git-hook entry point (contract: an external hook POSTs a
+// commit's changed paths): it flags every section in the caller's write tenant
+// whose verify_hints reference a changed path (prefix match). Best-effort.
+func (s *MemoryService) FlagChanged(ctx context.Context, paths []string, overrideID *uuid.UUID) (int64, error) {
+	tid, err := s.resolveWriteScope(ctx, overrideID, authz.RelMember)
+	if err != nil {
+		return 0, err
+	}
+	clean := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p = strings.TrimSpace(p); p != "" {
+			clean = append(clean, p)
+		}
+	}
+	if len(clean) == 0 || s.sections == nil {
+		return 0, nil
+	}
+	return s.sections.FlagChangedPaths(ctx, tid, clean, "referenced path changed", time.Now())
 }
 
 // StoreResult is the outcome of StoreDocument. Status "similar_exists" means the
@@ -1244,6 +1264,7 @@ func (s *MemoryService) StoreDocumentScoped(
 	overrideID *uuid.UUID,
 	pin *bool,
 	scope *string,
+	verifyHints ...string,
 ) (*StoreResult, error) {
 	if force && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("%w: reason is required when force=true", apperr.ErrInvalidInput)
@@ -1283,6 +1304,10 @@ func (s *MemoryService) StoreDocumentScoped(
 			Heading:   sec.heading,
 			Content:   sec.content,
 			Embedding: embeddings[i],
+		}
+		// verify_hints, when given, apply to every section of the stored doc.
+		if len(verifyHints) > 0 {
+			sectionModels[i].VerifyHints = verifyHints
 		}
 	}
 
@@ -1513,7 +1538,7 @@ func centroid(embs []pgvector.Vector) pgvector.Vector {
 // UpdateSection partially updates a section: content!=nil re-embeds and sets
 // content; heading!=nil sets heading (blank -> NULL). Both nil is a no-op.
 // verified=true also stamps verified_at (like a following mark_verified).
-func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content *string, heading *string, verified bool, overrideID *uuid.UUID) (*models.Section, error) {
+func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, content *string, heading *string, verified bool, overrideID *uuid.UUID, verifyHints ...string) (*models.Section, error) {
 	tid, err := s.resolveWriteScope(ctx, overrideID, authz.RelMember)
 	if err != nil {
 		return nil, err
@@ -1572,6 +1597,11 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 		}
 	}
 
+	// verify_hints provided replaces the section's hints; omitted keeps them.
+	if len(verifyHints) > 0 {
+		section.VerifyHints = verifyHints
+	}
+
 	// embed=false: leave the stored embedding NULL — a full Save would write the
 	// zero-value vector as an invalid '[]'.
 	var updateErr error
@@ -1617,8 +1647,8 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 			Reason:       "section verified on update",
 		})
 		s.recordVerify(ctx, tid, section.DocumentID)
-		// Re-verifying clears any depends_on review-pending flag on this doc.
-		s.clearReviewPending(ctx, section.DocumentID)
+		// Re-verifying clears this section's needs-verification flag.
+		s.clearSectionFlag(ctx, sectionID)
 	}
 
 	// The section row carries the edit, so the document would otherwise look

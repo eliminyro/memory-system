@@ -39,6 +39,10 @@ type SearchResult struct {
 	DocType        string     `json:"doc_type,omitempty"`
 	VerifiedAt     *time.Time `json:"verified_at,omitempty"`
 	SectionCreated time.Time  `json:"-"`
+	// FlaggedAt/FlagReason: the content/event-driven needs-verification flag, from
+	// SQL. FlaggedAt drives the Status overlay; FlagReason is served as-is.
+	FlaggedAt  *time.Time `json:"-"`
+	FlagReason *string    `json:"flag_reason,omitempty"`
 
 	// Owning-tenant label (cross-tenant reads). TenantID comes from SQL; Name and
 	// Type are resolved by the service layer for the distinct result tenants.
@@ -118,6 +122,8 @@ type hybridRow struct {
 	DocType        string     `gorm:"column:doc_type"`
 	TenantID       uuid.UUID  `gorm:"column:tenant_id"`
 	VerifiedAt     *time.Time `gorm:"column:verified_at"`
+	FlaggedAt      *time.Time `gorm:"column:flagged_at"`
+	FlagReason     *string    `gorm:"column:flag_reason"`
 	SectionCreated time.Time  `gorm:"column:section_created"`
 	// Embedding backs MMR re-ranking only; never copied onto SearchResult.
 	Embedding pgvector.Vector `gorm:"column:embedding"`
@@ -242,6 +248,8 @@ func fuseHybridScored(rows []hybridRow, poolSize int, weight float64, thresholds
 				DocType:        r.DocType,
 				TenantID:       r.TenantID,
 				VerifiedAt:     r.VerifiedAt,
+				FlaggedAt:      r.FlaggedAt,
+				FlagReason:     r.FlagReason,
 				SectionCreated: r.SectionCreated,
 			},
 			emb: r.Embedding,
@@ -402,6 +410,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 	sql := `
 		WITH semantic AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
+				   s.flagged_at, s.flag_reason,
 				   s.created_at AS section_created, s.embedding,
 				   1 - (s.embedding <=> ?::vector) AS vec_sim
 			FROM sections s
@@ -418,6 +427,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		),
 		keyword AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
+				   s.flagged_at, s.flag_reason,
 				   s.created_at AS section_created, s.embedding,
 				   ts_rank(s.tsv, plainto_tsquery('english', ?)) AS lex_rank
 			FROM sections s
@@ -443,6 +453,8 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			   d.category, d.subcategory, d.slug, d.title    AS doc_title,
 			   d.doc_type, d.tenant_id,
 			   COALESCE(sem.verified_at, kw.verified_at)     AS verified_at,
+			   COALESCE(sem.flagged_at, kw.flagged_at)       AS flagged_at,
+			   COALESCE(sem.flag_reason, kw.flag_reason)     AS flag_reason,
 			   COALESCE(sem.section_created, kw.section_created) AS section_created,
 			   -- '[0]'::vector fallback: guards the Go-side pgvector.Vector scan
 			   -- against a legacy NULL-embedding row (only sem is filtered
@@ -673,6 +685,59 @@ func (r *SectionRepository) MarkVerified(ctx context.Context, tenantID uuid.UUID
 		return fmt.Errorf("%w: section %s", apperr.ErrNotFound, id)
 	}
 	return nil
+}
+
+// FlagSectionsByDoc sets the needs-verification flag on every section of the
+// given documents (depends_on propagation flags all of a dependent's sections).
+// System side-effect (no tenant predicate); docIDs come from scoped edges.
+func (r *SectionRepository) FlagSectionsByDoc(ctx context.Context, docIDs []uuid.UUID, reason string, at time.Time) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+	const sql = `UPDATE sections SET flagged_at = ?, flag_reason = ? WHERE document_id IN ?`
+	if err := r.db.WithContext(ctx).Exec(sql, at, reason, docIDs).Error; err != nil {
+		return fmt.Errorf("flag sections by doc: %w", err)
+	}
+	return nil
+}
+
+// ClearSectionFlag clears one section's needs-verification flag, after a re-verify.
+func (r *SectionRepository) ClearSectionFlag(ctx context.Context, id uuid.UUID) error {
+	const sql = `UPDATE sections SET flagged_at = NULL, flag_reason = NULL WHERE id = ?`
+	if err := r.db.WithContext(ctx).Exec(sql, id).Error; err != nil {
+		return fmt.Errorf("clear section flag: %w", err)
+	}
+	return nil
+}
+
+// FlagChangedPaths flags each live section (scoped to tenantID) whose verify_hints
+// reference a changed path — prefix match on the file part (before ':') of a hint.
+// CASE coerces non-array hints to []. Best-effort; empty paths is a no-op.
+func (r *SectionRepository) FlagChangedPaths(ctx context.Context, tenantID uuid.UUID, paths []string, reason string, at time.Time) (int64, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	const sql = `
+		UPDATE sections s
+		SET flagged_at = ?, flag_reason = ?
+		FROM documents d
+		WHERE s.document_id = d.id
+		  AND d.tenant_id = ?
+		  AND d.archived_at IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM jsonb_array_elements_text(
+				   CASE WHEN jsonb_typeof(s.verify_hints) = 'array'
+						THEN s.verify_hints ELSE '[]'::jsonb END
+				 ) AS h(hint)
+			JOIN unnest(?::text[]) AS p(path)
+			  ON starts_with(split_part(h.hint, ':', 1), p.path)
+		  )`
+	res := r.db.WithContext(ctx).Exec(sql, at, reason, tenantID, pq.StringArray(paths))
+	if res.Error != nil {
+		return 0, fmt.Errorf("flag changed paths: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // StalenessCount is one gauge cell: the current count of stale (or expired)

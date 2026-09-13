@@ -12,23 +12,24 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
-// docReview reads a document's persisted review-pending flag directly.
+// docReview reads a dependent doc's needs-verification flag from its first
+// section (depends_on flags every section of the dependent).
 func docReview(t *testing.T, f *authzFixture, id uuid.UUID) (*time.Time, *string) {
 	t.Helper()
-	var d models.Document
-	require.NoError(t, f.db.First(&d, id).Error)
-	return d.ReviewPendingAt, d.ReviewReason
+	var s models.Section
+	require.NoError(t, f.db.Where("document_id = ?", id).Order("ordinal ASC").First(&s).Error)
+	return s.FlaggedAt, s.FlagReason
 }
 
 // docReviewErr is the non-failing variant for polled goroutines: it returns the
 // query error instead of require-ing, so a transient/teardown DB error retries
 // rather than failing the test from inside Eventually/Never.
 func docReviewErr(f *authzFixture, id uuid.UUID) (*time.Time, *string, error) {
-	var d models.Document
-	if err := f.db.First(&d, id).Error; err != nil {
+	var s models.Section
+	if err := f.db.Where("document_id = ?", id).Order("ordinal ASC").First(&s).Error; err != nil {
 		return nil, nil, err
 	}
-	return d.ReviewPendingAt, d.ReviewReason, nil
+	return s.FlaggedAt, s.FlagReason, nil
 }
 
 // TestDependsOn_ContentChangeFlagsDependent covers the whole depends_on lifecycle:
