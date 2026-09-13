@@ -10,7 +10,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 )
 
-// RetentionRepository evicts expired, access-cold, unpinned documents, reusing the
+// RetentionRepository evicts expired, unpinned documents, reusing the
 // delete-document purge cascade (sections + embeddings + FTS + edges).
 type RetentionRepository struct {
 	db *gorm.DB
@@ -36,24 +36,21 @@ type RetentionDeletion struct {
 }
 
 // BuildRetentionCutoffs derives the per-doc_type eviction window in days
-// (expiration_age_days + grace) from the effective policy set. A doc_type with
-// expiration disabled (0) or not prunable is omitted, so it is never a candidate.
-func BuildRetentionCutoffs(policies map[string]models.EffectivePolicy, grace int) map[string]int {
-	if grace < 0 {
-		grace = 0
-	}
+// (expiration_age_days) from the effective policy set. A doc_type with expiration
+// disabled (0) or not prunable is omitted, so it is never a candidate.
+func BuildRetentionCutoffs(policies map[string]models.EffectivePolicy) map[string]int {
 	out := make(map[string]int, len(policies))
 	for dt, p := range policies {
 		if p.ExpirationAgeDays > 0 && p.Prunable {
-			out[dt] = p.ExpirationAgeDays + grace
+			out[dt] = p.ExpirationAgeDays
 		}
 	}
 	return out
 }
 
-// candidateSQL selects a tenant's documents whose liveness clock —
-// GREATEST(last access, newest section verification, creation) — is older than the
-// doc_type window, excluding pinned and archived docs.
+// candidateSQL selects a tenant's documents created longer ago than the doc_type
+// window — perishables expire from creation, with no grace and no access reprieve —
+// excluding pinned and archived docs.
 const candidateSQL = `
 	SELECT d.id, d.doc_type, d.category, d.subcategory, d.slug
 	FROM documents d
@@ -61,17 +58,12 @@ const candidateSQL = `
 	  AND d.doc_type = ?
 	  AND d.archived_at IS NULL
 	  AND d.pinned = false
-	  AND GREATEST(
-	        COALESCE(d.last_accessed_at, d.created_at),
-	        d.created_at,
-	        COALESCE((SELECT MAX(COALESCE(s.verified_at, s.created_at))
-	                    FROM sections s WHERE s.document_id = d.id), d.created_at)
-	      ) < NOW() - make_interval(days => ?)
+	  AND d.created_at < NOW() - make_interval(days => ?)
 	ORDER BY d.created_at ASC
 `
 
-// Candidates returns the tenant's eviction candidates per the liveness predicate.
-// cutoffs maps a doc_type to expiration_age_days+grace (see BuildRetentionCutoffs);
+// Candidates returns the tenant's eviction candidates per the created_at predicate.
+// cutoffs maps a doc_type to its expiration_age_days (see BuildRetentionCutoffs);
 // a doc_type absent from the map is skipped, so expiration=0 types are never touched.
 func (r *RetentionRepository) Candidates(ctx context.Context, tenantID uuid.UUID, cutoffs map[string]int) ([]RetentionCandidate, error) {
 	type row struct {
@@ -157,7 +149,7 @@ func (r *RetentionRepository) CandidateFindings(ctx context.Context, tenantID uu
 			Check:        "retention_candidate",
 			Severity:     LintSeverityWarning,
 			DocumentPath: c.Path,
-			Message:      fmt.Sprintf("expired and access-cold past its %d-day retention window (doc_type %s); the sweep would evict it", cutoffs[c.DocType], c.DocType),
+			Message:      fmt.Sprintf("past its %d-day expiration window (doc_type %s); the sweep would evict it", cutoffs[c.DocType], c.DocType),
 		})
 	}
 	return findings, nil

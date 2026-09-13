@@ -36,7 +36,6 @@ type GlobalConfig interface {
 	CleanupIntervalHours() int
 	HistoryRetentionDays() int
 	RetentionSweepEnabled() bool
-	RetentionGraceDays() int
 	MetricsRetentionDays() int
 	WebhookURL() string
 }
@@ -191,13 +190,13 @@ func (s *Scanner) scanTenant(ctx context.Context, tenantID uuid.UUID, stats *Sca
 	return nil
 }
 
-// retentionSweep evicts expired, access-cold, unpinned docs for every
-// non-bootstrap tenant, using per-doc_type windows (expiration + grace).
+// retentionSweep evicts expired, unpinned docs for every non-bootstrap tenant,
+// using each doc_type's expiration_age_days window.
 func (s *Scanner) retentionSweep(ctx context.Context, tenants []models.Tenant, stats *ScanStats) {
 	if s.retention == nil || s.policies == nil {
 		return
 	}
-	cutoffs := repository.BuildRetentionCutoffs(s.policies.All(), s.gc.RetentionGraceDays())
+	cutoffs := repository.BuildRetentionCutoffs(s.policies.All())
 	if len(cutoffs) == 0 {
 		return
 	}

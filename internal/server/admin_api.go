@@ -450,9 +450,6 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 	if p.CleanupIntervalHours != nil {
 		check(config.ValidateCleanupIntervalHours(*p.CleanupIntervalHours))
 	}
-	if p.RetentionGraceDays != nil {
-		check(config.ValidateRetentionGraceDays(*p.RetentionGraceDays))
-	}
 	if p.MetricsRetentionDays != nil {
 		check(config.ValidateMetricsRetentionDays(*p.MetricsRetentionDays))
 	}

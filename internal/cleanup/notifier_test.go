@@ -17,7 +17,6 @@ func (f fakeConfig) CleanupEnabled() bool        { return true }
 func (f fakeConfig) CleanupIntervalHours() int   { return 24 }
 func (f fakeConfig) HistoryRetentionDays() int   { return 90 }
 func (f fakeConfig) RetentionSweepEnabled() bool { return false }
-func (f fakeConfig) RetentionGraceDays() int     { return 30 }
 func (f fakeConfig) MetricsRetentionDays() int   { return 90 }
 func (f fakeConfig) WebhookURL() string          { return f.webhookURL }
 

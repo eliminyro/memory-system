@@ -150,7 +150,6 @@ func globalConfigSeed(cfg *config.Config) database.GlobalConfigDefaults {
 		CleanupEnabled:        cfg.CleanupEnabled,
 		CleanupIntervalHours:  cfg.CleanupIntervalHours,
 		RetentionSweepEnabled: cfg.RetentionSweepEnabled,
-		RetentionGraceDays:    cfg.RetentionGraceDays,
 		MetricsRetentionDays:  cfg.MetricsRetentionDays,
 		RateLimitRPS:          cfg.RateLimitRPS,
 		RateLimitBurst:        cfg.RateLimitBurst,

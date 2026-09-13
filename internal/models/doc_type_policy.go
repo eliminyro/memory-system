@@ -118,13 +118,13 @@ func sfptr(s SlugFormat) *SlugFormat           { return &s }
 func scptr(s SubcategoryRule) *SubcategoryRule { return &s }
 
 // DefaultDocTypePolicies is the seed set (spec "Seeded defaults"). reference sets
-// every column; the rest set only what differs. NULL means inherit;
-// expiration_age_days is NULL (disabled) everywhere — the hard withhold is opt-in.
+// every column; the rest set only what differs. NULL means inherit. Knowledge is
+// non-prunable; journal/handoff are perishable with a fixed expiration_age_days.
 var DefaultDocTypePolicies = []DocTypePolicy{
 	{
 		DocType: DocTypeReference, VerificationAgeDays: iptr(90),
 		DuplicateGuard: bptr(true), CleanupScan: bptr(true), LintStaleCheck: bptr(true),
-		Embed: bptr(true), DefaultSearch: bptr(true), Prunable: bptr(true),
+		Embed: bptr(true), DefaultSearch: bptr(true), Prunable: bptr(false),
 		WriteMode: wmptr(WriteModeReplace), SlugFormat: sfptr(SlugFormatAny), Subcategory: scptr(SubcategoryOptional),
 	},
 	{DocType: DocTypeProjectState, VerificationAgeDays: iptr(14)},
@@ -135,12 +135,13 @@ var DefaultDocTypePolicies = []DocTypePolicy{
 	{
 		DocType: DocTypeJournal, VerificationAgeDays: iptr(0),
 		DuplicateGuard: bptr(false), CleanupScan: bptr(false), LintStaleCheck: bptr(false), DefaultSearch: bptr(false),
+		Prunable: bptr(true), ExpirationAgeDays: iptr(30),
 		WriteMode: wmptr(WriteModeMergeSections), SlugFormat: sfptr(SlugFormatDate), Subcategory: scptr(SubcategoryForbidden),
 	},
 	{
 		DocType: DocTypeHandoff, VerificationAgeDays: iptr(0),
 		DuplicateGuard: bptr(false), CleanupScan: bptr(false), LintStaleCheck: bptr(false), DefaultSearch: bptr(false),
-		Prunable: bptr(false), Subcategory: scptr(SubcategoryRequired),
+		Prunable: bptr(true), ExpirationAgeDays: iptr(90), Subcategory: scptr(SubcategoryRequired),
 		Rules: datatypes.JSON([]byte(`{"chain_previous":{"scope":"subcategory","edge_type":"continues_from"}}`)),
 	},
 	{
@@ -194,11 +195,12 @@ func mustResolveDefaults() map[string]EffectivePolicy {
 }
 
 // DefaultEffectivePolicy is the reference-equivalent fallback used when no policy
-// store is loaded (e.g. import CLI, unit fixtures) — behavior identical to today.
+// store is loaded (e.g. import CLI, unit fixtures) — mirrors the reference seed,
+// so knowledge is non-prunable here too.
 func DefaultEffectivePolicy() EffectivePolicy {
 	return EffectivePolicy{
 		VerificationAgeDays: 90, DuplicateGuard: true, CleanupScan: true, LintStaleCheck: true,
-		Embed: true, DefaultSearch: true, Prunable: true,
+		Embed: true, DefaultSearch: true, Prunable: false,
 		WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional,
 	}
 }

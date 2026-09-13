@@ -38,9 +38,8 @@ type InstanceConfig struct {
 	CleanupEnabled       bool `gorm:"not null;default:true" json:"cleanup_enabled"`
 	CleanupIntervalHours int  `gorm:"not null;default:24" json:"cleanup_interval_hours"`
 
-	// Retention sweep + metrics retention (opt-in; default off / 30d grace / 90d).
-	RetentionSweepEnabled bool `gorm:"not null;default:false" json:"retention_sweep_enabled"`
-	RetentionGraceDays    int  `gorm:"not null;default:30" json:"retention_grace_days"`
+	// Retention sweep + metrics retention (sweep on by default; metrics 90d).
+	RetentionSweepEnabled bool `gorm:"not null;default:true" json:"retention_sweep_enabled"`
 	MetricsRetentionDays  int  `gorm:"not null;default:90" json:"metrics_retention_days"`
 
 	// HTTP hardening.
@@ -91,7 +90,6 @@ type InstanceConfigPatch struct {
 	CleanupEnabled        *bool    `json:"cleanup_enabled"`
 	CleanupIntervalHours  *int     `json:"cleanup_interval_hours"`
 	RetentionSweepEnabled *bool    `json:"retention_sweep_enabled"`
-	RetentionGraceDays    *int     `json:"retention_grace_days"`
 	MetricsRetentionDays  *int     `json:"metrics_retention_days"`
 	RateLimitRPS          *float64 `json:"rate_limit_rps"`
 	RateLimitBurst        *int     `json:"rate_limit_burst"`

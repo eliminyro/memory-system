@@ -37,8 +37,11 @@ func TestResolve_JournalHandoffRules(t *testing.T) {
 	if !j.Embed {
 		t.Error("journal must inherit embed=true")
 	}
+	if !j.Prunable || j.ExpirationAgeDays != 30 {
+		t.Errorf("journal must be prunable with a 30-day expiration, got %+v", j)
+	}
 	h := DefaultEffectivePolicies[DocTypeHandoff]
-	if h.Subcategory != SubcategoryRequired || h.Prunable {
+	if h.Subcategory != SubcategoryRequired || !h.Prunable || h.ExpirationAgeDays != 90 {
 		t.Errorf("handoff rules = %+v", h)
 	}
 	if h.ChainPrevious == nil || h.ChainPrevious.EdgeType != "continues_from" || h.ChainPrevious.Scope != "subcategory" {

@@ -60,10 +60,9 @@ type Config struct {
 	CleanupEnabled       bool `env:"CLEANUP_ENABLED" envDefault:"true"`
 
 	// Retention sweep + metrics retention. These seed instance_config; the runtime
-	// reads them live via the accessor. Grace is a global buffer on top of each
-	// doc_type's expiration_age_days; MetricsRetentionDays bounds metric_events.
-	RetentionSweepEnabled bool `env:"RETENTION_SWEEP_ENABLED" envDefault:"false"`
-	RetentionGraceDays    int  `env:"RETENTION_GRACE_DAYS" envDefault:"30"`
+	// reads them live via the accessor. The sweep hard-deletes perishables at their
+	// doc_type expiration_age_days; MetricsRetentionDays bounds metric_events.
+	RetentionSweepEnabled bool `env:"RETENTION_SWEEP_ENABLED" envDefault:"true"`
 	MetricsRetentionDays  int  `env:"METRICS_RETENTION_DAYS" envDefault:"90"`
 
 	// HistoryRetentionDays bounds mutation_history growth: the sweep prunes rows
@@ -292,9 +291,6 @@ func Load() (*Config, error) {
 	}
 
 	if err := ValidateHistoryRetentionDays(cfg.HistoryRetentionDays); err != nil {
-		return nil, err
-	}
-	if err := ValidateRetentionGraceDays(cfg.RetentionGraceDays); err != nil {
 		return nil, err
 	}
 	if err := ValidateMetricsRetentionDays(cfg.MetricsRetentionDays); err != nil {

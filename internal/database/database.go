@@ -103,7 +103,6 @@ type GlobalConfigDefaults struct {
 	CleanupEnabled        bool
 	CleanupIntervalHours  int
 	RetentionSweepEnabled bool
-	RetentionGraceDays    int
 	MetricsRetentionDays  int
 	RateLimitRPS          float64
 	RateLimitBurst        int
@@ -122,7 +121,7 @@ func BaselineGlobalConfigDefaults() GlobalConfigDefaults {
 		StalenessDefault: models.StalenessModeHard, DuplicateGuardDefault: true, CleanupScanDefault: true,
 		DuplicateThreshold: 0.85, SelfServicePolicy: models.SelfServicePolicyOpen,
 		CleanupEnabled: true, CleanupIntervalHours: 24,
-		RetentionGraceDays: 30, MetricsRetentionDays: 90,
+		RetentionSweepEnabled: true, MetricsRetentionDays: 90,
 		RateLimitRPS: 20, RateLimitBurst: 40, TrustedProxyDepth: 0, MaxRequestBytes: 1048576,
 		LogLevel: "info",
 	}
@@ -319,6 +318,21 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		return fmt.Errorf("seed doc_type_policies: %w", err)
 	}
 
+	// Perishable-retention: the policy seed is insert-only, so flip only rows still
+	// at the OLD shipped default (operator edits survive), and drop the now-dead
+	// retention_grace_days column.
+	retentionMigrations := []string{
+		`UPDATE doc_type_policies SET prunable = false WHERE doc_type = 'reference' AND prunable = true`,
+		`UPDATE doc_type_policies SET prunable = true, expiration_age_days = 30 WHERE doc_type = 'journal' AND prunable IS NULL AND expiration_age_days IS NULL`,
+		`UPDATE doc_type_policies SET prunable = true, expiration_age_days = 90 WHERE doc_type = 'handoff' AND prunable = false AND expiration_age_days IS NULL`,
+		`ALTER TABLE instance_config DROP COLUMN IF EXISTS retention_grace_days`,
+	}
+	for _, m := range retentionMigrations {
+		if err := tx.Exec(m).Error; err != nil {
+			return fmt.Errorf("perishable-retention migration: %w", err)
+		}
+	}
+
 	// Seed the singleton from env bootstrap defaults exactly once: fresh rows are
 	// inserted seeded; a pre-existing row is upgraded to env (guarded by
 	// globals_seeded so admin edits + the history toggle survive).
@@ -329,8 +343,8 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 			 duplicate_threshold, self_service_policy, signup_domains, admin_emails, cleanup_enabled,
 			 cleanup_interval_hours, rate_limit_rps, rate_limit_burst, trusted_proxy_depth,
 			 max_request_bytes, log_level, webhook_url, require_config_listener,
-			 retention_sweep_enabled, retention_grace_days, metrics_retention_days, globals_seeded, updated_at)
-		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
+			 retention_sweep_enabled, metrics_retention_days, globals_seeded, updated_at)
+		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
 		 ON CONFLICT (id) DO UPDATE SET
 			mmr_lambda = EXCLUDED.mmr_lambda, staleness_penalty = EXCLUDED.staleness_penalty,
 			candidate_pool = EXCLUDED.candidate_pool,
@@ -345,7 +359,6 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 			log_level = EXCLUDED.log_level, webhook_url = EXCLUDED.webhook_url,
 			require_config_listener = EXCLUDED.require_config_listener,
 			retention_sweep_enabled = EXCLUDED.retention_sweep_enabled,
-			retention_grace_days = EXCLUDED.retention_grace_days,
 			metrics_retention_days = EXCLUDED.metrics_retention_days,
 			globals_seeded = true, updated_at = now()
 		 WHERE instance_config.globals_seeded = false`,
@@ -355,7 +368,7 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		gc.SelfServicePolicy, gc.SignupDomains, gc.AdminEmails, gc.CleanupEnabled,
 		gc.CleanupIntervalHours, gc.RateLimitRPS, gc.RateLimitBurst, gc.TrustedProxyDepth,
 		gc.MaxRequestBytes, gc.LogLevel, gc.WebhookURL, gc.RequireConfigListener,
-		gc.RetentionSweepEnabled, gc.RetentionGraceDays, gc.MetricsRetentionDays,
+		gc.RetentionSweepEnabled, gc.MetricsRetentionDays,
 	).Error; err != nil {
 		return fmt.Errorf("seed instance config: %w", err)
 	}

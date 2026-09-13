@@ -224,17 +224,13 @@ its content, leaving a lineage-only tombstone — the archived content is not
 recoverable), update it in place, or delete it. The staleness setting above is only
 a **recall-time signal** — `advisory` warns, `hard` withholds — and never deletes.
 
-An operator can additionally enable a **retention sweep** (`retention_sweep_enabled`,
-default off; config page or `RETENTION_SWEEP_ENABLED`). When on, the cleanup scanner
-hard-deletes documents that are both expired past their doc_type age and access-cold.
-A document is eligible only when its liveness clock —
-`GREATEST(last verification, last access, creation)` — is older than the doc_type's
-`expiration_age_days` plus the global `retention_grace_days` (default 30), it is not
-pinned, and its doc_type has `expiration_age_days > 0`. A document read or re-verified
-during the grace window bumps that clock and survives, so the grace window and the
-access gate are the safety net. Two escape hatches keep a document forever: a
-per-document **pin**, and a doc_type's `expiration_age_days = 0` (never-expire, hence
-never eligible — this is how you exempt a whole category).
+A **retention sweep** (`retention_sweep_enabled`, on by default; config page or
+`RETENTION_SWEEP_ENABLED`) hard-deletes perishable documents once past their lifespan.
+A document is eligible only when its doc_type is `prunable`, its age from creation exceeds
+the doc_type's `expiration_age_days`, and it is not pinned — no grace period and no access
+or re-verification reprieve. Knowledge doc_types are non-prunable and never auto-deleted.
+Two escape hatches keep a document forever: a per-document **pin**, and a non-prunable
+doc_type or one with `expiration_age_days = 0` (never-expire, hence never eligible).
 
 The sweep rides the cleanup scanner but is gated independently of the near-duplicate
 cleanup: a cycle runs when `cleanup_enabled` **or** `retention_sweep_enabled` is on.
@@ -370,8 +366,9 @@ matches, and the manifest names what was skipped — see [Document includes](#do
 
 Runtime-tunable globals — retrieval tuning, the new-tenant defaults above,
 self-service, the maintenance schedule, the retention-sweep fields
-(`retention_sweep_enabled`, `retention_grace_days`, `metrics_retention_days`),
-HTTP hardening, log level, the near-duplicate threshold, and the cleanup webhook —
+(`retention_sweep_enabled`, `metrics_retention_days`) and per-doc_type policies
+(`prunable`, `expiration_age_days`), HTTP hardening, log level, the near-duplicate
+threshold, and the cleanup webhook —
 are stored in the `instance_config` singleton and edited **live**, with no restart,
 on the admin config page at **`/ui/admin`** (system admins only). The matching environment
 variables (see [Configuration](../README.md#configuration)) **seed** these
