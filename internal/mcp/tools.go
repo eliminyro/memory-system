@@ -632,15 +632,18 @@ func (s *Server) ListDocuments(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return toolErr("list", err)
 	}
-	// Compact listing; ID lets clients map a doc UUID (e.g. cleanup_queue row) to a path.
+	// Compact listing; ID lets clients map a doc UUID (e.g. cleanup_queue row) to a
+	// path. Flagged/ArchivesInDays are the advisory needs-verification warning.
 	type docEntry struct {
-		ID    string `json:"id"`
-		Path  string `json:"path"`
-		Title string `json:"title"`
+		ID             string `json:"id"`
+		Path           string `json:"path"`
+		Title          string `json:"title"`
+		Flagged        bool   `json:"flagged,omitempty"`
+		ArchivesInDays *int   `json:"archives_in_days,omitempty"`
 	}
 	entries := make([]docEntry, len(docs))
 	for i, d := range docs {
-		entries[i] = docEntry{ID: d.ID.String(), Path: d.Path(), Title: d.Title}
+		entries[i] = docEntry{ID: d.ID.String(), Path: d.Path(), Title: d.Title, Flagged: d.Flagged, ArchivesInDays: d.ArchivesInDays}
 	}
 	return jsonResult(entries), nil, nil
 }

@@ -25,6 +25,13 @@ func ValidateCandidatePool(v int) error {
 	return nil
 }
 
+func ValidateFallbackThreshold(v int) error {
+	if v < 0 {
+		return fmt.Errorf("MEMORY_FALLBACK_THRESHOLD must be >= 0 (0 disables the cold pass), got %d", v)
+	}
+	return nil
+}
+
 func ValidateSnippetChars(v int) error {
 	if v <= 0 {
 		return fmt.Errorf("MEMORY_SNIPPET_CHARS must be > 0, got %d", v)

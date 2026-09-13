@@ -427,6 +427,9 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 	if p.CandidatePool != nil {
 		check(config.ValidateCandidatePool(*p.CandidatePool))
 	}
+	if p.FallbackThreshold != nil {
+		check(config.ValidateFallbackThreshold(*p.FallbackThreshold))
+	}
 	if p.SnippetChars != nil {
 		check(config.ValidateSnippetChars(*p.SnippetChars))
 	}

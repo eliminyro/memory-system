@@ -41,6 +41,9 @@ func (r *InstanceConfigRepository) Update(ctx context.Context, patch models.Inst
 	if patch.CandidatePool != nil {
 		updates["candidate_pool"] = *patch.CandidatePool
 	}
+	if patch.FallbackThreshold != nil {
+		updates["fallback_threshold"] = *patch.FallbackThreshold
+	}
 	if patch.SnippetChars != nil {
 		updates["snippet_chars"] = *patch.SnippetChars
 	}

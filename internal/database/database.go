@@ -89,6 +89,7 @@ type TenantColumnDefaults struct {
 type GlobalConfigDefaults struct {
 	MMRLambda             float64
 	CandidatePool         int
+	FallbackThreshold     int
 	SnippetChars          int
 	HistoryRetentionDays  int
 	DuplicateGuardDefault bool
@@ -358,16 +359,17 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	// globals_seeded so admin edits + the history toggle survive).
 	if err := tx.Exec(
 		`INSERT INTO instance_config
-			(id, history_enabled, mmr_lambda, candidate_pool, snippet_chars,
+			(id, history_enabled, mmr_lambda, candidate_pool, fallback_threshold, snippet_chars,
 			 history_retention_days, duplicate_guard_default, cleanup_scan_default,
 			 duplicate_threshold, self_service_policy, signup_domains, admin_emails, cleanup_enabled,
 			 cleanup_interval_hours, rate_limit_rps, rate_limit_burst, trusted_proxy_depth,
 			 max_request_bytes, log_level, webhook_url, require_config_listener,
 			 retention_sweep_enabled, metrics_retention_days, globals_seeded, updated_at)
-		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
+		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
 		 ON CONFLICT (id) DO UPDATE SET
 			mmr_lambda = EXCLUDED.mmr_lambda,
 			candidate_pool = EXCLUDED.candidate_pool,
+			fallback_threshold = EXCLUDED.fallback_threshold,
 			snippet_chars = EXCLUDED.snippet_chars, history_retention_days = EXCLUDED.history_retention_days,
 			duplicate_guard_default = EXCLUDED.duplicate_guard_default,
 			cleanup_scan_default = EXCLUDED.cleanup_scan_default, duplicate_threshold = EXCLUDED.duplicate_threshold,
@@ -383,7 +385,7 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 			globals_seeded = true, updated_at = now()
 		 WHERE instance_config.globals_seeded = false`,
 		models.InstanceConfigSingletonID,
-		gc.MMRLambda, gc.CandidatePool, gc.SnippetChars, gc.HistoryRetentionDays,
+		gc.MMRLambda, gc.CandidatePool, gc.FallbackThreshold, gc.SnippetChars, gc.HistoryRetentionDays,
 		gc.DuplicateGuardDefault, gc.CleanupScanDefault, gc.DuplicateThreshold,
 		gc.SelfServicePolicy, gc.SignupDomains, gc.AdminEmails, gc.CleanupEnabled,
 		gc.CleanupIntervalHours, gc.RateLimitRPS, gc.RateLimitBurst, gc.TrustedProxyDepth,

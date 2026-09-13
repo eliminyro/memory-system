@@ -125,6 +125,20 @@ func (r *DocumentRepository) ArchiveByID(ctx context.Context, id uuid.UUID, reas
 	return res.RowsAffected, nil
 }
 
+// UnarchiveByID clears a document's archive stamp (revive-on-verify), returning
+// it to the hot pool. The AND archived_at IS NOT NULL guard makes it idempotent:
+// unarchiving a live doc is a 0-row no-op.
+func (r *DocumentRepository) UnarchiveByID(ctx context.Context, id uuid.UUID) (int64, error) {
+	res := r.db.WithContext(ctx).Exec(
+		`UPDATE documents SET archived_at = NULL, archive_reason = NULL WHERE id = ? AND archived_at IS NOT NULL`,
+		id,
+	)
+	if res.Error != nil {
+		return 0, fmt.Errorf("unarchive by id: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // ListOrderColumns maps each allowed order_by value to its SQL column, so a
 // caller string is validated against these keys and nothing caller-controlled
 // reaches the ORDER BY clause; id is appended separately as the tiebreaker.

@@ -137,6 +137,7 @@ func globalConfigSeed(cfg *config.Config) database.GlobalConfigDefaults {
 	return database.GlobalConfigDefaults{
 		MMRLambda:             cfg.MMRLambda,
 		CandidatePool:         cfg.CandidatePool,
+		FallbackThreshold:     cfg.FallbackThreshold,
 		SnippetChars:          cfg.SnippetChars,
 		HistoryRetentionDays:  cfg.HistoryRetentionDays,
 		DuplicateGuardDefault: cfg.TenantDefaults.DuplicateGuard,
@@ -306,7 +307,7 @@ func main() {
 	}
 
 	// Services
-	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, policyStore, overrideRepo, cleanupRepo, instanceConfigRepo, mutationHistoryRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithSnippetChars(cfg.SnippetChars), service.WithCandidatePool(cfg.CandidatePool), service.WithEdgeRepository(edgeRepo), service.WithGlobalConfig(globalCfg), service.WithMetricEventRepository(metricEventRepo))
+	memorySvc := service.NewMemoryService(db, docRepo, sectionRepo, embedder, tenantRepo, keyRepo, lintRepo, policyStore, overrideRepo, cleanupRepo, instanceConfigRepo, mutationHistoryRepo, authzStore, service.WithMMRLambda(cfg.MMRLambda), service.WithSnippetChars(cfg.SnippetChars), service.WithCandidatePool(cfg.CandidatePool), service.WithFallbackThreshold(cfg.FallbackThreshold), service.WithEdgeRepository(edgeRepo), service.WithGlobalConfig(globalCfg), service.WithMetricEventRepository(metricEventRepo))
 	// Admin-email seeding (design D4) is only meaningful when OAuth logins resolve.
 	memorySvc.OAuthConfigured = cfg.AuthletEnabled()
 	// Toggle defaults stamped onto every tenant created through the service.

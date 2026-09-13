@@ -69,6 +69,12 @@ type Document struct {
 	TenantName string `gorm:"-" json:"tenant_name,omitempty"`
 	TenantType string `gorm:"-" json:"tenant_type,omitempty"`
 
+	// Display-only advisory warning (not columns) — set by the service on list
+	// responses: Flagged when any section needs verification, ArchivesInDays the
+	// time-to-archive for a fully-flagged non-prunable doc.
+	Flagged        bool `gorm:"-" json:"flagged,omitempty"`
+	ArchivesInDays *int `gorm:"-" json:"archives_in_days,omitempty"`
+
 	Tenant   *Tenant   `gorm:"foreignKey:TenantID" json:"-"`
 	Sections []Section `gorm:"foreignKey:DocumentID;constraint:OnDelete:CASCADE" json:"sections,omitempty"`
 }

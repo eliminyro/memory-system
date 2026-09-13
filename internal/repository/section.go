@@ -44,6 +44,12 @@ type SearchResult struct {
 	FlaggedAt  *time.Time `json:"-"`
 	FlagReason *string    `json:"flag_reason,omitempty"`
 
+	// Dormant marks a hit that came from the cold (archived) fallback pass; set by
+	// the service layer, never SQL. ArchivesInDays is the advisory time-to-archive
+	// for a flagged, non-prunable hit (nil otherwise); also service-computed.
+	Dormant        bool `json:"dormant,omitempty"`
+	ArchivesInDays *int `json:"archives_in_days,omitempty"`
+
 	// Owning-tenant label (cross-tenant reads). TenantID comes from SQL; Name and
 	// Type are resolved by the service layer for the distinct result tenants.
 	TenantID   uuid.UUID `json:"tenant_id"`
@@ -78,6 +84,26 @@ type SearchParams struct {
 	// HiddenDocTypes are excluded from an unfiltered query (default_search=false),
 	// suppressed when the caller names a Category or DocType filter (design D7).
 	HiddenDocTypes []string
+	// Tier selects the archive dimension: "" / TierAll / TierHot keep today's
+	// non-archived filter; TierCold searches archived-only (the dormant fallback).
+	Tier string
+}
+
+// Search tiers over the archive dimension. TierAll is the default (empty Tier)
+// and reproduces the pre-tier behaviour — archived docs excluded, same as TierHot.
+const (
+	TierAll  = "all"
+	TierHot  = "hot"
+	TierCold = "cold"
+)
+
+// archivedFilter is the CTE predicate for a tier: cold = archived-only, every
+// other value (incl. "" default) = non-archived, preserving legacy behaviour.
+func archivedFilter(tier string) string {
+	if tier == TierCold {
+		return "d.archived_at IS NOT NULL"
+	}
+	return "d.archived_at IS NULL"
 }
 
 // Hybrid retrieval fusion constants (Reciprocal Rank Fusion).
@@ -377,7 +403,8 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		pool = defaultCandidatePool
 	}
 
-	sql := `
+	af := archivedFilter(p.Tier)
+	sql := fmt.Sprintf(`
 		WITH semantic AS (
 			SELECT s.id, s.document_id, s.heading, s.content, s.verified_at,
 				   s.flagged_at, s.flag_reason,
@@ -386,7 +413,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
 			WHERE d.tenant_id IN ?
-			  AND d.archived_at IS NULL
+			  AND %s
 			  AND (?::text IS NULL OR d.category = ?)
 			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND (?::text IS NULL OR d.doc_type = ?)
@@ -403,7 +430,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 			FROM sections s
 			JOIN documents d ON d.id = s.document_id
 			WHERE d.tenant_id IN ?
-			  AND d.archived_at IS NULL
+			  AND %s
 			  AND (?::text IS NULL OR d.category = ?)
 			  AND (?::text IS NULL OR d.subcategory = ?)
 			  AND (?::text IS NULL OR d.doc_type = ?)
@@ -433,7 +460,7 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		FROM semantic sem
 		FULL OUTER JOIN keyword kw ON kw.id = sem.id
 		JOIN documents d ON d.id = COALESCE(sem.document_id, kw.document_id)
-	`
+	`, af, af)
 
 	hidden := nonNilArray(p.HiddenDocTypes)
 	args := []any{
@@ -678,6 +705,39 @@ func (r *SectionRepository) ClearSectionFlag(ctx context.Context, id uuid.UUID) 
 		return fmt.Errorf("clear section flag: %w", err)
 	}
 	return nil
+}
+
+// FlaggedDocSummary rolls up one document's section flags: total sections, how
+// many carry the needs-verification flag, and the latest flag time (the
+// archive-gating section once every section is flagged).
+type FlaggedDocSummary struct {
+	DocumentID   uuid.UUID  `gorm:"column:document_id"`
+	Total        int        `gorm:"column:total"`
+	Flagged      int        `gorm:"column:flagged"`
+	MaxFlaggedAt *time.Time `gorm:"column:max_flagged_at"`
+}
+
+// FlaggedSummaryByDocs returns the flag rollup per document for docIDs, for the
+// advisory list warning. Empty docIDs -> empty map, no query.
+func (r *SectionRepository) FlaggedSummaryByDocs(ctx context.Context, docIDs []uuid.UUID) (map[uuid.UUID]FlaggedDocSummary, error) {
+	out := make(map[uuid.UUID]FlaggedDocSummary, len(docIDs))
+	if len(docIDs) == 0 {
+		return out, nil
+	}
+	const sql = `
+		SELECT document_id, COUNT(*) AS total,
+			   COUNT(flagged_at) AS flagged, MAX(flagged_at) AS max_flagged_at
+		FROM sections
+		WHERE document_id IN ?
+		GROUP BY document_id`
+	var rows []FlaggedDocSummary
+	if err := r.db.WithContext(ctx).Raw(sql, docIDs).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("flagged summary by docs: %w", err)
+	}
+	for _, row := range rows {
+		out[row.DocumentID] = row
+	}
+	return out, nil
 }
 
 // FlagChangedPaths flags each live section (scoped to tenantID) whose verify_hints

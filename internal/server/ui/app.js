@@ -1080,6 +1080,8 @@ function renderSearchResults(results) {
       tenantName: r.tenant_name,
       status: r.status,
       verifiedAt: r.verified_at,
+      dormant: r.dormant,
+      archivesInDays: r.archives_in_days,
       onClick: () => { navStack.push(() => renderSearchResults(results)); showDocument(r.document_id); },
     }));
   }
@@ -1175,6 +1177,8 @@ async function renderCategoryDocs(category, subcategory, tenantId) {
         tenantName: doc.tenant_name,
         status: doc.status,
         verifiedAt: doc.verified_at,
+        flagged: doc.flagged,
+        archivesInDays: doc.archives_in_days,
         metaPill: doc.doc_type || null,
         onClick: () => { navStack.push(() => renderCategoryDocs(category, subcategory)); showDocument(doc.id); },
       }));
@@ -1295,14 +1299,20 @@ function memCard(opts) {
     meta.append(tag);
   }
   meta.append(el("span", { className: "spacer" }));
+  // A dormant (archived-fallback) hit gets its own neutral pill before the status.
+  if (opts.dormant) meta.append(el("span", { className: "pill", textContent: "dormant" }));
   if (opts.status === "expired") {
     meta.append(el("span", { className: "pill pill--danger", textContent: "expired" }));
-  } else if (opts.status === "needs_verification") {
+  } else if (opts.status === "needs_verification" || opts.flagged) {
     meta.append(el("span", { className: "pill pill--warn" }, gDot("--warn"), document.createTextNode("needs verification")));
   } else if (opts.verifiedAt) {
     meta.append(el("span", { className: "pill pill--ok" }, gDot("--ok"), document.createTextNode("verified · " + relAge(opts.verifiedAt))));
   } else if (opts.metaPill) {
     meta.append(el("span", { className: "pill", textContent: opts.metaPill }));
+  }
+  // Advisory time-to-archive for a flagged, non-prunable doc.
+  if (opts.archivesInDays != null) {
+    meta.append(el("span", { className: "pill pill--warn", textContent: `archives in ${opts.archivesInDays}d` }));
   }
   card.append(meta);
   if (opts.onClick) card.addEventListener("click", (e) => { e.preventDefault(); opts.onClick(); });
@@ -1706,6 +1716,7 @@ const CONFIG_SCHEMA = [
   { title: "Retrieval & ranking", tc: "var(--accent)", note: "hybrid search", fields: [
     { key: "mmr_lambda", label: "MMR lambda", env: "MEMORY_MMR_LAMBDA", desc: "Diversity ↔ relevance weight for the re-rank. 1.0 = pure relevance", def: "default 0.5", ctl: "num", type: "float", min: 0, max: 1, exclmin: true },
     { key: "candidate_pool", label: "Candidate pool", env: "MEMORY_CANDIDATE_POOL", desc: "Per-list SQL LIMIT feeding fusion; its half sets the tier cut.", def: "default 20 · max 1000", ctl: "num", type: "int", min: 1, max: 1000, unit: "/ list" },
+    { key: "fallback_threshold", label: "Dormant fallback", env: "MEMORY_FALLBACK_THRESHOLD", desc: "Hot-result count below which a cold pass appends archived (dormant) hits. 0 disables it.", def: "default 3 · 0 = off", ctl: "num", type: "int", min: 0, unit: "hits" },
     { key: "snippet_chars", label: "Snippet window", env: "MEMORY_SNIPPET_CHARS", desc: "Match-centered window returned when snippet=true.", def: "default 400", ctl: "num", type: "int", min: 1, unit: "chars" },
   ] },
   { title: "Instance", tc: "var(--cool)", note: "DB-stored toggles", fields: [
