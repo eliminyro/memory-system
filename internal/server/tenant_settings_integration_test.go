@@ -35,7 +35,7 @@ func TestTenantSettings_ManagerReadAndWrite(t *testing.T) {
 	var got tenantSettingsResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, tenant.ID, got.ID)
-	require.Equal(t, models.StalenessModeOff, got.StalenessMode)
+	require.Equal(t, models.StalenessModeAdvisory, got.StalenessMode)
 	require.Equal(t, models.SelfServicePolicyOpen, got.EffectiveSelfServicePolicy)
 
 	recW := httptest.NewRecorder()

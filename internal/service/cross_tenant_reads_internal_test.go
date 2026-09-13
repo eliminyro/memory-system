@@ -194,23 +194,19 @@ func TestApplyStaleness_NilStorePassthrough(t *testing.T) {
 	require.Empty(t, out[0].Status)
 }
 
-// With a store present, a result whose owning tenant maps to "off" (or is absent
-// from the map) is left untouched — proving staleness is routed PER result
-// tenant, not by a single caller-tenant mode. The nil db never gets touched
-// because off/absent tenants skip staleness.Check entirely.
-func TestApplyStaleness_PerTenantOffLeavesContent(t *testing.T) {
+// With a store present, a result whose owning tenant is absent from the mode map
+// (mode "") is left untouched — proving staleness is routed PER result tenant,
+// not by a single caller-tenant mode. An absent tenant skips staleness.Check.
+func TestApplyStaleness_AbsentTenantLeavesContent(t *testing.T) {
 	store := staleness.NewPolicyStore(nil)
-	tOff, tAbsent := uuid.New(), uuid.New()
+	tAbsent := uuid.New()
 	results := []repository.SearchResult{
-		{SectionID: uuid.New(), TenantID: tOff, Content: "off-body", DocType: models.DocTypeReference},
 		{SectionID: uuid.New(), TenantID: tAbsent, Content: "absent-body", DocType: models.DocTypeReference},
 	}
-	modeByTenant := map[uuid.UUID]string{tOff: models.StalenessModeOff} // tAbsent intentionally missing
+	modeByTenant := map[uuid.UUID]string{} // tAbsent intentionally missing
 
 	out, err := applyStalenessToSearchResults(context.Background(), store, results, modeByTenant, false)
 	require.NoError(t, err)
-	require.Equal(t, "off-body", out[0].Content, "off-mode tenant result untouched")
-	require.Equal(t, "absent-body", out[1].Content, "tenant absent from map untouched")
+	require.Equal(t, "absent-body", out[0].Content, "tenant absent from map untouched")
 	require.Empty(t, out[0].Status)
-	require.Empty(t, out[1].Status)
 }

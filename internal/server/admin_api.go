@@ -437,6 +437,8 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 		check(config.ValidateHistoryRetentionDays(*p.HistoryRetentionDays))
 	}
 	if p.StalenessDefault != nil {
+		// Coerce a legacy off to the advisory floor rather than reject the write.
+		*p.StalenessDefault = models.NormalizeStalenessMode(*p.StalenessDefault)
 		check(config.ValidateStalenessDefault(*p.StalenessDefault))
 	}
 	if p.DuplicateThreshold != nil {

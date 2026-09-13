@@ -32,7 +32,7 @@ type UpdateTenantInput struct {
 	TenantID           string   `json:"tenant_id" jsonschema:"Tenant UUID to update"`
 	Name               *string  `json:"name,omitempty" jsonschema:"New tenant name (max 200 chars)"`
 	Type               *string  `json:"type,omitempty" jsonschema:"Display-only type: personal or shared"`
-	StalenessMode      *string  `json:"staleness_mode,omitempty" jsonschema:"Staleness enforcement: off, advisory, or hard"`
+	StalenessMode      *string  `json:"staleness_mode,omitempty" jsonschema:"Staleness enforcement: advisory or hard"`
 	DuplicateGuard     *bool    `json:"duplicate_guard,omitempty" jsonschema:"Refuse store_memory on near-duplicate content (default false)"`
 	DuplicateThreshold *float64 `json:"duplicate_threshold,omitempty" jsonschema:"Near-duplicate cutoff override, 0<v<=1; omit to inherit the global default"`
 	CleanupScanEnabled *bool    `json:"cleanup_scan_enabled,omitempty" jsonschema:"Include this tenant in the nightly near-duplicate scan (default false)"`

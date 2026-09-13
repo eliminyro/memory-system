@@ -21,9 +21,9 @@ func TestParseTenantDefaults(t *testing.T) {
 			want:  models.TenantDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true},
 		},
 		{
-			name:  "full opt-out overrides every toggle",
+			name:  "legacy staleness=off coerces to advisory",
 			input: "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false",
-			want:  models.TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false},
+			want:  models.TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: false},
 		},
 		{
 			name:  "partial: staleness overrides, other toggles keep bundle",
@@ -347,7 +347,7 @@ func TestLoadTenantDefaultsBundle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		want := models.TenantDefaults{StalenessMode: "off", DuplicateGuard: false, CleanupScanEnabled: false}
+		want := models.TenantDefaults{StalenessMode: "advisory", DuplicateGuard: false, CleanupScanEnabled: false}
 		if cfg.TenantDefaults != want {
 			t.Fatalf("TenantDefaults = %+v, want %+v", cfg.TenantDefaults, want)
 		}

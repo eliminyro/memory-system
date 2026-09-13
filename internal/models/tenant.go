@@ -6,18 +6,29 @@ import (
 	"github.com/google/uuid"
 )
 
-// Staleness mode constants for per-tenant enforcement level.
+// Staleness mode constants for per-tenant enforcement level. StalenessModeOff is
+// legacy: no longer accepted, kept only for migration/normalize of stored rows.
 const (
 	StalenessModeOff      = "off"
 	StalenessModeAdvisory = "advisory"
 	StalenessModeHard     = "hard"
 )
 
-// ValidStalenessModes is the accepted set for Tenant.StalenessMode.
+// ValidStalenessModes is the accepted set for Tenant.StalenessMode. advisory is
+// the floor; off is removed and coerces via NormalizeStalenessMode.
 var ValidStalenessModes = map[string]struct{}{
-	StalenessModeOff:      {},
 	StalenessModeAdvisory: {},
 	StalenessModeHard:     {},
+}
+
+// NormalizeStalenessMode coerces a legacy or unknown mode to the advisory floor:
+// "off", "", or any value not in ValidStalenessModes becomes advisory; a valid
+// mode passes through unchanged.
+func NormalizeStalenessMode(m string) string {
+	if _, ok := ValidStalenessModes[m]; !ok {
+		return StalenessModeAdvisory
+	}
+	return m
 }
 
 // TenantDefaults is the operator-chosen baseline for the three per-tenant
@@ -90,7 +101,7 @@ type Tenant struct {
 
 	// Per-tenant feature toggles. All default to the safest behavior so a tenant
 	// upgrading from pre-tightening infra sees no change unless it opts in.
-	StalenessMode      string `gorm:"size:16;not null;default:'off'" json:"staleness_mode"`
+	StalenessMode      string `gorm:"size:16;not null;default:'advisory'" json:"staleness_mode"`
 	DuplicateGuard     bool   `gorm:"not null;default:false" json:"duplicate_guard"`
 	CleanupScanEnabled bool   `gorm:"not null;default:false" json:"cleanup_scan_enabled"`
 	MetricsEnabled     bool   `gorm:"not null;default:false" json:"metrics_enabled"`

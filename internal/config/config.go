@@ -182,10 +182,14 @@ func ParseTenantDefaults(spec string) (models.TenantDefaults, error) {
 		switch key {
 		case "staleness":
 			switch val {
-			case "off", "advisory", "hard":
+			case "advisory", "hard":
 				out.StalenessMode = val
+			case "off":
+				// off is removed; coerce to the advisory floor rather than fail boot.
+				slog.Default().Warn("MEMORY_DEFAULT_OPTS staleness=off is no longer a mode; coercing to advisory")
+				out.StalenessMode = models.StalenessModeAdvisory
 			default:
-				return models.TenantDefaults{}, fmt.Errorf("invalid staleness value %q (want off|advisory|hard)", val)
+				return models.TenantDefaults{}, fmt.Errorf("invalid staleness value %q (want advisory|hard)", val)
 			}
 		case "duplicate_guard":
 			b, err := parseBool(val)

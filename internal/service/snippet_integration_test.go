@@ -142,16 +142,16 @@ func TestSearchSnippet_SemanticOnlyHitNotCentered(t *testing.T) {
 
 // TestSearchSnippet_WithheldResultNotExpanded (6.4, load-bearing): on a hard-mode
 // tenant an expired result keeps blanked content + heading preview under
-// snippet=true, while a sibling off-mode result in the same response is windowed.
+// snippet=true, while a sibling advisory-mode result in the same response is windowed.
 func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 	f := newAuthzFixture(t)
 	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
 
-	// A = hard, B = off.
+	// A = hard, B = advisory.
 	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantA).
 		Update("staleness_mode", models.StalenessModeHard).Error)
 	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantB).
-		Update("staleness_mode", models.StalenessModeOff).Error)
+		Update("staleness_mode", models.StalenessModeAdvisory).Error)
 
 	// Opt learning into the hard withhold (expiration >= its verification age 180).
 	require.NoError(t, f.svc.SetDocTypePolicy(ctxFor(f.tenantA, f.admin),
@@ -189,7 +189,7 @@ func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 	require.True(t, okA, "hard-mode tenant section present")
-	require.True(t, okB, "off-mode tenant section present")
+	require.True(t, okB, "advisory-mode tenant section present")
 
 	// Withheld result: blanked content + heading preview, never snippet-expanded.
 	require.Equal(t, "expired", ra.Status)
@@ -198,7 +198,7 @@ func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
 	require.NotEmpty(t, ra.Preview, "withheld result keeps its heading preview")
 
 	// Sibling non-withheld result is windowed normally.
-	require.NotEmpty(t, rb.Content, "off-mode sibling is windowed, not blanked")
+	require.NotEmpty(t, rb.Content, "advisory-mode sibling is windowed, not blanked")
 	require.False(t, hasSentinel(rb.Content), "windowed sibling carries no sentinel")
 	require.NotNil(t, rb.SnippetCentered)
 	require.True(t, *rb.SnippetCentered, "sibling matched the token -> centered")

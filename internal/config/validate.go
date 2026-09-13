@@ -82,7 +82,7 @@ func ValidateRateLimit(rps float64, burst int) error {
 
 func ValidateStalenessDefault(v string) error {
 	if _, ok := models.ValidStalenessModes[v]; !ok {
-		return fmt.Errorf("staleness_default must be off, advisory or hard, got %q", v)
+		return fmt.Errorf("staleness_default must be advisory or hard, got %q", v)
 	}
 	return nil
 }

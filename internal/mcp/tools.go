@@ -126,7 +126,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_my_tenant_settings",
-		Description: "Read or update feature toggles on your own tenant: staleness_mode (off|advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool), metrics_enabled (bool). Any field you omit stays unchanged; omit all for a status read. staleness_mode is a recall-time signal only — off = no signal, advisory = warn in the response, hard = withhold a stale record's content until it is re-verified; none delete or archive. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies), so a plain member of a shared tenant is refused.",
+		Description: "Read or update feature toggles on your own tenant: staleness_mode (advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool), metrics_enabled (bool). Any field you omit stays unchanged; omit all for a status read. staleness_mode is a recall-time signal only — advisory = warn in the response, hard = withhold a stale record's content until it is re-verified; neither deletes nor archives. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies), so a plain member of a shared tenant is refused.",
 	}, s.UpdateMyTenantSettings)
 }
 
@@ -196,7 +196,7 @@ type MergeDocumentsInput struct {
 }
 
 type UpdateMyTenantSettingsInput struct {
-	StalenessMode      *string  `json:"staleness_mode,omitempty" jsonschema:"Enforcement level: off | advisory | hard"`
+	StalenessMode      *string  `json:"staleness_mode,omitempty" jsonschema:"Enforcement level: advisory | hard"`
 	DuplicateGuard     *bool    `json:"duplicate_guard,omitempty" jsonschema:"When true, store_memory refuses near-duplicate content"`
 	DuplicateThreshold *float64 `json:"duplicate_threshold,omitempty" jsonschema:"Near-duplicate cutoff override, 0<v<=1; omit to inherit the global default"`
 	CleanupScanEnabled *bool    `json:"cleanup_scan_enabled,omitempty" jsonschema:"When true, this tenant is included in the nightly near-duplicate scan"`

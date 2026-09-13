@@ -43,8 +43,8 @@ func newTenantDefaultsSvc(t *testing.T, defaults models.TenantDefaults) (*servic
 }
 
 // TestCreateTenantAppliesConfiguredDefaults guards the bug where GORM emitted the
-// model's struct-tag defaults ('off'/false/false) on insert, bypassing the DB
-// column default, so every tenant created through the service landed on 'off'
+// model's struct-tag defaults ('advisory'/false/false) on insert, bypassing the DB
+// column default, so every tenant created through the service landed on the default
 // regardless of the operator's configured bundle. All three create paths
 // (CreateTenant, Bootstrap, ProvisionPersonalTenant) funnel through CreateTenant.
 func TestCreateTenantAppliesConfiguredDefaults(t *testing.T) {
@@ -75,7 +75,7 @@ func TestCreateTenantAppliesConfiguredDefaults(t *testing.T) {
 		svc, adminCtx := newTenantDefaultsSvc(t, models.TenantDefaults{}) // zero value: not wired
 		tenant, err := svc.CreateTenant(adminCtx, "unset-"+uuid.NewString(), "", models.TenantTypeShared)
 		require.NoError(t, err)
-		require.Equal(t, models.StalenessModeOff, tenant.StalenessMode)
+		require.Equal(t, models.StalenessModeAdvisory, tenant.StalenessMode)
 		require.False(t, tenant.DuplicateGuard)
 		require.False(t, tenant.CleanupScanEnabled)
 	})

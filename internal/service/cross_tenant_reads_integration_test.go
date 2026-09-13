@@ -168,19 +168,19 @@ func TestCrossTenantReads_LabeledByOwningTenant(t *testing.T) {
 
 // TestCrossTenantReads_PerTenantStaleness proves a mixed result set is treated
 // per owning tenant: a hard-mode tenant's expired section is withheld while an
-// off-mode tenant's identical section passes through, in the same response.
+// advisory-mode tenant's identical section is served with a nudge, same response.
 func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 	f := newAuthzFixture(t)
 	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
 
-	// A = hard, B = off.
+	// A = hard, B = advisory.
 	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantA).
 		Update("staleness_mode", models.StalenessModeHard).Error)
 	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantB).
-		Update("staleness_mode", models.StalenessModeOff).Error)
+		Update("staleness_mode", models.StalenessModeAdvisory).Error)
 
 	// Learning expires at 200d; the sections below are backdated 400d, so the
-	// hard-mode tenant withholds while the off-mode tenant passes through.
+	// hard-mode tenant withholds while the advisory-mode tenant is served (nudged).
 	adminCtx := ctxFor(f.tenantA, f.admin)
 	require.NoError(t, f.svc.SetDocTypePolicy(adminCtx,
 		models.DocTypePolicy{DocType: models.DocTypeLearning, VerificationAgeDays: iptrLocal(180), ExpirationAgeDays: iptrLocal(200)}))
@@ -225,13 +225,13 @@ func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 	require.True(t, okA, "hard-mode tenant section present")
-	require.True(t, okB, "off-mode tenant section present")
+	require.True(t, okB, "advisory-mode tenant section present")
 
 	// Hard-mode tenant: expired past the expiration age — content withheld.
 	require.Equal(t, "expired", ra.Status, "hard-mode tenant result is expired")
 	require.Empty(t, ra.Content, "expired content is withheld")
 
-	// Off-mode tenant: identical section passes through untouched.
-	require.NotEmpty(t, rb.Content, "off-mode tenant result keeps its content")
-	require.Empty(t, rb.Status, "off-mode tenant result is not flagged")
+	// Advisory-mode tenant: identical section served in full with a nudge, never withheld.
+	require.NotEmpty(t, rb.Content, "advisory-mode tenant result keeps its content")
+	require.Equal(t, "needs_verification", rb.Status, "advisory-mode tenant result is nudged, not withheld")
 }
