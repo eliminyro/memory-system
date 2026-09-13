@@ -58,6 +58,40 @@ func TestSectionViewFromModel_Tiering(t *testing.T) {
 	require.Equal(t, "body", adv.Content)
 }
 
+func TestSectionViewFromModel_ContentFlag(t *testing.T) {
+	ctx := context.Background()
+	store := viewStore(30, 60)
+	head := "The Heading"
+	reason := "internal/foo.go"
+	now := time.Now()
+
+	// A fresh (within age) section that carries the content flag reads as
+	// needs_verification with its reason — the flag drives it, not age.
+	sec := sectionAged(5, &head, "body")
+	sec.FlaggedAt, sec.FlagReason = &now, &reason
+	flagged, err := sectionViewFromModel(ctx, store, sec, models.DocTypeLearning, models.StalenessModeHard, false)
+	require.NoError(t, err)
+	require.Equal(t, "needs_verification", flagged.Status)
+	require.Equal(t, reason, flagged.FlagReason)
+	require.Equal(t, "body", flagged.Content, "a flag never withholds content")
+
+	// An unflagged fresh section has no status: age within threshold never flags.
+	clean, err := sectionViewFromModel(ctx, store, sectionAged(5, &head, "body"), models.DocTypeLearning, models.StalenessModeHard, false)
+	require.NoError(t, err)
+	require.Empty(t, clean.Status)
+	require.Empty(t, clean.FlagReason)
+
+	// An expired (hard) section that is also flagged: the expired withhold wins
+	// the status, but the flag reason is still surfaced.
+	exp := sectionAged(90, &head, "body")
+	exp.FlaggedAt, exp.FlagReason = &now, &reason
+	ev, err := sectionViewFromModel(ctx, store, exp, models.DocTypeLearning, models.StalenessModeHard, false)
+	require.NoError(t, err)
+	require.Equal(t, "expired", ev.Status)
+	require.Empty(t, ev.Content)
+	require.Equal(t, reason, ev.FlagReason)
+}
+
 // TestSectionViewFromModel_AdminForceReadPeeks: adminForceRead reveals an expired
 // body; without it the body stays withheld.
 func TestSectionViewFromModel_AdminForceReadPeeks(t *testing.T) {
