@@ -18,7 +18,7 @@ func TestMigrateSeedsGlobalsOnceOnExistingRow(t *testing.T) {
 	// This test mutates the shared instance_config singleton; drop it so the next
 	// package's Migrate reseeds baseline (avoids cross-package pollution).
 	t.Cleanup(func() { db.Exec(`DELETE FROM instance_config WHERE id = ?`, models.InstanceConfigSingletonID) })
-	td := database.TenantColumnDefaults{StalenessMode: "hard", DuplicateGuard: true, CleanupScanEnabled: true}
+	td := database.TenantColumnDefaults{DuplicateGuard: true, CleanupScanEnabled: true}
 	base := database.BaselineGlobalConfigDefaults()
 
 	// Fresh install: the singleton is inserted seeded from env.

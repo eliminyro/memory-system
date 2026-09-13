@@ -39,7 +39,7 @@ func openSwapPG(t *testing.T) *gorm.DB {
 // enforces (an empty corpus always adopts). Returns a cleanup func.
 func seedSwapVector(t *testing.T, db *gorm.DB) func() {
 	t.Helper()
-	tn := &models.Tenant{ID: uuid.New(), Name: "swap-" + uuid.NewString(), StalenessMode: models.StalenessModeOff}
+	tn := &models.Tenant{ID: uuid.New(), Name: "swap-" + uuid.NewString()}
 	require.NoError(t, db.Create(tn).Error)
 	doc := &models.Document{
 		ID:       uuid.New(),
@@ -66,7 +66,7 @@ func seedSwapVector(t *testing.T, db *gorm.DB) func() {
 // while the dimension guard still refuses a dim change.
 func TestMigrateEmbeddingIdentityGuard(t *testing.T) {
 	db := openSwapPG(t)
-	td := database.TenantColumnDefaults{StalenessMode: "off"}
+	td := database.TenantColumnDefaults{}
 	gc := database.BaselineGlobalConfigDefaults()
 
 	// Ensure the schema exists before we manipulate the metadata row.

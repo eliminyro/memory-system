@@ -50,9 +50,6 @@ func (r *InstanceConfigRepository) Update(ctx context.Context, patch models.Inst
 	if patch.HistoryRetentionDays != nil {
 		updates["history_retention_days"] = *patch.HistoryRetentionDays
 	}
-	if patch.StalenessDefault != nil {
-		updates["staleness_default"] = *patch.StalenessDefault
-	}
 	if patch.DuplicateGuardDefault != nil {
 		updates["duplicate_guard_default"] = *patch.DuplicateGuardDefault
 	}

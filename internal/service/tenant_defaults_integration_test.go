@@ -43,39 +43,33 @@ func newTenantDefaultsSvc(t *testing.T, defaults models.TenantDefaults) (*servic
 }
 
 // TestCreateTenantAppliesConfiguredDefaults guards the bug where GORM emitted the
-// model's struct-tag defaults ('advisory'/false/false) on insert, bypassing the DB
-// column default, so every tenant created through the service landed on the default
-// regardless of the operator's configured bundle. All three create paths
-// (CreateTenant, Bootstrap, ProvisionPersonalTenant) funnel through CreateTenant.
+// model's struct-tag defaults on insert, bypassing the operator's configured bundle.
+// All create paths funnel through CreateTenant.
 func TestCreateTenantAppliesConfiguredDefaults(t *testing.T) {
 	t.Run("baseline bundle is stamped onto a new tenant", func(t *testing.T) {
 		svc, adminCtx := newTenantDefaultsSvc(t, models.BaselineTenantDefaults())
 		tenant, err := svc.CreateTenant(adminCtx, "baseline-"+uuid.NewString(), "", models.TenantTypeShared)
 		require.NoError(t, err)
-		require.Equal(t, models.StalenessModeHard, tenant.StalenessMode)
 		require.True(t, tenant.DuplicateGuard)
 		require.True(t, tenant.CleanupScanEnabled)
 	})
 
 	t.Run("operator override passes through verbatim", func(t *testing.T) {
 		want := models.TenantDefaults{
-			StalenessMode:      models.StalenessModeAdvisory,
 			DuplicateGuard:     true,
 			CleanupScanEnabled: false,
 		}
 		svc, adminCtx := newTenantDefaultsSvc(t, want)
 		tenant, err := svc.CreateTenant(adminCtx, "override-"+uuid.NewString(), "", models.TenantTypeShared)
 		require.NoError(t, err)
-		require.Equal(t, want.StalenessMode, tenant.StalenessMode)
 		require.Equal(t, want.DuplicateGuard, tenant.DuplicateGuard)
 		require.Equal(t, want.CleanupScanEnabled, tenant.CleanupScanEnabled)
 	})
 
-	t.Run("unset defaults leave the tenant on the model default (upgrade-safe)", func(t *testing.T) {
+	t.Run("unset defaults leave the tenant on the model default", func(t *testing.T) {
 		svc, adminCtx := newTenantDefaultsSvc(t, models.TenantDefaults{}) // zero value: not wired
 		tenant, err := svc.CreateTenant(adminCtx, "unset-"+uuid.NewString(), "", models.TenantTypeShared)
 		require.NoError(t, err)
-		require.Equal(t, models.StalenessModeAdvisory, tenant.StalenessMode)
 		require.False(t, tenant.DuplicateGuard)
 		require.False(t, tenant.CleanupScanEnabled)
 	})

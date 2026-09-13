@@ -14,7 +14,7 @@ func TestFuseHybrid(t *testing.T) {
 		{SectionID: uuid.New(), Content: "weak-vec", HasVec: true, VecSim: 0.3},
 	}
 
-	got := fuseHybrid(rows, 10, 20, 0, nil)
+	got := fuseHybrid(rows, 10, 20)
 
 	// weak-vec is vector-only below vecOnlyFloor ⇒ gated out.
 	if len(got) != 3 {
@@ -50,7 +50,7 @@ func TestFuseHybridLimit(t *testing.T) {
 		{SectionID: uuid.New(), Content: "b", HasVec: true, VecSim: 0.8},
 		{SectionID: uuid.New(), Content: "c", HasVec: true, VecSim: 0.7},
 	}
-	got := fuseHybrid(rows, 2, 20, 0, nil)
+	got := fuseHybrid(rows, 2, 20)
 	if len(got) != 2 {
 		t.Fatalf("got %d results, want 2 (limit)", len(got))
 	}

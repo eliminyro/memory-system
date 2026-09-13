@@ -1,8 +1,6 @@
 package service
 
 import (
-	"context"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,21 +11,17 @@ import (
 )
 
 // SectionView is the API-facing projection of a section. A needs_verification
-// section keeps its content (a nudge); an expired section (hard mode) has its
-// body withheld and carries a heading-based Preview instead.
+// section (content/event-flagged) keeps its content — the flag is advisory.
 type SectionView struct {
-	ID            uuid.UUID  `json:"id"`
-	DocumentID    uuid.UUID  `json:"document_id"`
-	Ordinal       int        `json:"ordinal"`
-	Heading       *string    `json:"heading,omitempty"`
-	Content       string     `json:"content,omitempty"`
-	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	Status        string     `json:"status,omitempty"`
-	Preview       string     `json:"preview,omitempty"`
-	StaleDays     int        `json:"age_days,omitempty"`
-	ThresholdDays int        `json:"threshold_days,omitempty"`
+	ID         uuid.UUID  `json:"id"`
+	DocumentID uuid.UUID  `json:"document_id"`
+	Ordinal    int        `json:"ordinal"`
+	Heading    *string    `json:"heading,omitempty"`
+	Content    string     `json:"content,omitempty"`
+	VerifiedAt *time.Time `json:"verified_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	Status     string     `json:"status,omitempty"`
 	// FlagReason names why this section is content/event-flagged needs-verification
 	// (a changed verify_hints path or a depends_on change). Empty = not flagged.
 	FlagReason string `json:"flag_reason,omitempty"`
@@ -88,10 +82,10 @@ type EdgeView struct {
 	Archived  bool   `json:"archived,omitempty"`
 }
 
-// buildDocumentView applies the staleness filter to each section per the tenant's
-// mode. A nil store passes content through. adminForceRead reveals an
-// expired body (admin break-glass, no clock reset); non-admins map to false.
-func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *models.Document, mode string, adminForceRead bool) (DocumentView, error) {
+// buildDocumentView projects a document and its sections, surfacing the
+// content/event needs-verification flag and the advisory prunable-expiry signal.
+// A nil store skips the expiry advisory.
+func buildDocumentView(store *staleness.PolicyStore, doc *models.Document) (DocumentView, error) {
 	view := DocumentView{
 		ID:          doc.ID,
 		TenantID:    doc.TenantID,
@@ -116,10 +110,7 @@ func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *m
 	}
 	view.Sections = make([]SectionView, 0, len(doc.Sections))
 	for _, sec := range doc.Sections {
-		sv, err := sectionViewFromModel(ctx, store, sec, doc.DocType, mode, adminForceRead)
-		if err != nil {
-			return DocumentView{}, err
-		}
+		sv := sectionViewFromModel(sec)
 		// Doc-level rollup of the section flags: first flagged section wins the reason.
 		if sec.FlaggedAt != nil && !view.ReviewPending {
 			view.ReviewPending = true
@@ -132,90 +123,34 @@ func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *m
 	return view, nil
 }
 
-func sectionViewFromModel(ctx context.Context, store *staleness.PolicyStore, sec models.Section, docType, mode string, adminForceRead bool) (SectionView, error) {
+// sectionViewFromModel projects a section, surfacing the content/event
+// needs-verification flag (advisory — content is always served).
+func sectionViewFromModel(sec models.Section) SectionView {
 	view := SectionView{
 		ID:         sec.ID,
 		DocumentID: sec.DocumentID,
 		Ordinal:    sec.Ordinal,
 		Heading:    sec.Heading,
+		Content:    sec.Content,
 		VerifiedAt: sec.VerifiedAt,
 		CreatedAt:  sec.CreatedAt,
 		UpdatedAt:  sec.UpdatedAt,
 	}
-	// Content/event flag surfaces regardless of store/mode; age path may reinforce
-	// it below and an expired withhold overrides the status.
 	if sec.FlaggedAt != nil {
 		view.Status = "needs_verification"
 		if sec.FlagReason != nil {
 			view.FlagReason = *sec.FlagReason
 		}
 	}
-	if store == nil {
-		view.Content = sec.Content
-		return view, nil
-	}
-	check := staleness.Check(store, sec, docType, mode)
-	// Expired (hard mode) withholds the body unless an admin peeks; heading preview only.
-	if check.Expired && !adminForceRead {
-		view.Status = "expired"
-		view.StaleDays = int(check.Age / (24 * time.Hour))
-		view.ThresholdDays = check.ExpirationDays
-		view.Preview = headingPreview(sec.Heading, sec.Content)
-		return view, nil
-	}
-	if check.Stale {
-		view.Status = "needs_verification"
-		view.StaleDays = int(check.Age / (24 * time.Hour))
-		view.ThresholdDays = check.VerificationDays
-	}
-	view.Content = sec.Content
-	return view, nil
+	return view
 }
 
-// headingPreview orients a caller on a withheld section: its heading verbatim, or
-// a short bounded leading-text prefix when it has no heading. Query-independent.
-func headingPreview(heading *string, content string) string {
-	if heading != nil && strings.TrimSpace(*heading) != "" {
-		return strings.TrimSpace(*heading)
-	}
-	return staleness.Preview(content, 80)
-}
-
-// applyStalenessToSearchResults overlays staleness metadata per each result's OWN
-// owning-tenant mode (modeByTenant, keyed by TenantID; an absent mode is untouched).
-// Hard-mode expired blanks the body to a heading preview unless adminForceRead.
-func applyStalenessToSearchResults(ctx context.Context, store *staleness.PolicyStore, results []repository.SearchResult, modeByTenant map[uuid.UUID]string, adminForceRead bool) ([]repository.SearchResult, error) {
+// applyFlagStatus overlays the content/event needs-verification status on each
+// result carrying a section flag (FlaggedAt); FlagReason rides along from SQL.
+func applyFlagStatus(results []repository.SearchResult) {
 	for i := range results {
-		r := &results[i]
-		// Content/event flag surfaces regardless of store/mode; FlagReason rides
-		// along from SQL. The age path below may reinforce or override the status.
-		if r.FlaggedAt != nil {
-			r.Status = "needs_verification"
-		}
-		if store == nil {
-			continue
-		}
-		mode := modeByTenant[r.TenantID]
-		if mode == "" {
-			continue
-		}
-		check := staleness.Check(store, models.Section{
-			Content:    r.Content,
-			VerifiedAt: r.VerifiedAt,
-			CreatedAt:  r.SectionCreated,
-		}, r.DocType, mode)
-		r.StaleDays = int(check.Age / (24 * time.Hour))
-		if check.Expired && !adminForceRead {
-			r.Status = "expired"
-			r.ThresholdDays = check.ExpirationDays
-			r.Preview = headingPreview(r.Heading, r.Content)
-			r.Content = ""
-			continue
-		}
-		if check.Stale {
-			r.Status = "needs_verification"
-			r.ThresholdDays = check.VerificationDays
+		if results[i].FlaggedAt != nil {
+			results[i].Status = "needs_verification"
 		}
 	}
-	return results, nil
 }

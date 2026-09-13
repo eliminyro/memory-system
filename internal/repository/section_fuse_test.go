@@ -28,7 +28,7 @@ func TestFuse_BothListOutranksSingle(t *testing.T) {
 		{SectionID: both, HasVec: true, VecSim: 0.8, HasLex: true, LexRank: 0.9}, // vecRank 2 + lexRank 1
 	}
 
-	out := fuseHybrid(rows, 10, 20, 0, nil)
+	out := fuseHybrid(rows, 10, 20)
 	b, s := findByID(out, both), findByID(out, single)
 	if b == nil || s == nil {
 		t.Fatal("expected both candidates retained")
@@ -45,7 +45,7 @@ func TestFuse_BothListOutranksSingle(t *testing.T) {
 // survive fusion (the point of the FULL OUTER JOIN).
 func TestFuse_LexicalOnlyRetained(t *testing.T) {
 	lex := uuid.New()
-	out := fuseHybrid([]hybridRow{{SectionID: lex, HasLex: true, LexRank: 0.5}}, 10, 20, 0, nil)
+	out := fuseHybrid([]hybridRow{{SectionID: lex, HasLex: true, LexRank: 0.5}}, 10, 20)
 	if findByID(out, lex) == nil {
 		t.Fatal("lexical-only candidate must survive fusion")
 	}
@@ -62,7 +62,7 @@ func TestFuse_VectorOnlyFloorGate(t *testing.T) {
 		{SectionID: rescued, HasVec: true, VecSim: vecOnlyFloor - 0.1, HasLex: true, LexRank: 0.5},
 	}
 
-	out := fuseHybrid(rows, 10, 20, 0, nil)
+	out := fuseHybrid(rows, 10, 20)
 	if findByID(out, distant) != nil {
 		t.Error("distant vector-only neighbour below vecOnlyFloor must be dropped")
 	}
@@ -85,8 +85,8 @@ func TestFuse_RankContributionStableAcrossBatches(t *testing.T) {
 		{SectionID: target, HasVec: true, VecSim: 0.5}, // vecRank 2, different neighbours
 	}
 
-	s1 := findByID(fuseHybrid(batch1, 10, 20, 0, nil), target)
-	s2 := findByID(fuseHybrid(batch2, 10, 20, 0, nil), target)
+	s1 := findByID(fuseHybrid(batch1, 10, 20), target)
+	s2 := findByID(fuseHybrid(batch2, 10, 20), target)
 	if s1 == nil || s2 == nil {
 		t.Fatal("target missing from a batch")
 	}
@@ -110,7 +110,7 @@ func TestFuse_TierFromStructure(t *testing.T) {
 		rows = append(rows, hybridRow{SectionID: uuid.New(), HasVec: true, VecSim: 0.8 - float64(i)*0.01})
 	}
 
-	out := fuseHybrid(rows, 100, poolSize, 0, nil)
+	out := fuseHybrid(rows, 100, poolSize)
 	b, d := findByID(out, both), findByID(out, deep)
 	if b == nil || d == nil {
 		t.Fatal("both/deep missing")
@@ -146,7 +146,7 @@ func TestFuse_ResultsAndEmbeddingsAligned(t *testing.T) {
 		{SectionID: uuid.New(), HasVec: true, VecSim: 0.2, Embedding: vec2D(0.5, 0.5)}, // gated
 	}
 
-	results, embs := fuseHybridScored(rows, 20, 0, nil)
+	results, embs := fuseHybridScored(rows, 20)
 	if len(results) != len(embs) {
 		t.Fatalf("results (%d) and embeddings (%d) length mismatch", len(results), len(embs))
 	}

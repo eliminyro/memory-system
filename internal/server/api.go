@@ -739,7 +739,6 @@ func (h *apiHandler) createDocument(w http.ResponseWriter, r *http.Request) {
 // non-adminOnly surface never leaks name/email or other tenant fields.
 type tenantSettingsResponse struct {
 	ID                         uuid.UUID `json:"id"`
-	StalenessMode              string    `json:"staleness_mode"`
 	DuplicateGuard             bool      `json:"duplicate_guard"`
 	DuplicateThreshold         *float64  `json:"duplicate_threshold"`
 	CleanupScanEnabled         bool      `json:"cleanup_scan_enabled"`
@@ -751,7 +750,6 @@ type tenantSettingsResponse struct {
 func settingsResponse(t *models.Tenant) tenantSettingsResponse {
 	return tenantSettingsResponse{
 		ID:                         t.ID,
-		StalenessMode:              t.StalenessMode,
 		DuplicateGuard:             t.DuplicateGuard,
 		DuplicateThreshold:         t.DuplicateThreshold,
 		CleanupScanEnabled:         t.CleanupScanEnabled,
@@ -770,7 +768,7 @@ func (h *apiHandler) getTenantSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	t, err := h.memory.UpdateTenantSettings(r.Context(), id, nil, nil, nil, false, nil, nil)
+	t, err := h.memory.UpdateTenantSettings(r.Context(), id, nil, nil, false, nil, nil)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -787,7 +785,6 @@ func (h *apiHandler) patchTenantSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var body struct {
-		StalenessMode      *string  `json:"staleness_mode"`
 		DuplicateGuard     *bool    `json:"duplicate_guard"`
 		DuplicateThreshold optFloat `json:"duplicate_threshold"`
 		CleanupScanEnabled *bool    `json:"cleanup_scan_enabled"`
@@ -798,7 +795,7 @@ func (h *apiHandler) patchTenantSettings(w http.ResponseWriter, r *http.Request)
 	}
 	// Presence-aware: omitted = unchanged, explicit null = clear to inherit global.
 	clearThreshold := body.DuplicateThreshold.Present && body.DuplicateThreshold.Value == nil
-	t, err := h.memory.UpdateTenantSettings(r.Context(), id, body.StalenessMode, body.DuplicateGuard, body.DuplicateThreshold.Value, clearThreshold, body.CleanupScanEnabled, body.MetricsEnabled)
+	t, err := h.memory.UpdateTenantSettings(r.Context(), id, body.DuplicateGuard, body.DuplicateThreshold.Value, clearThreshold, body.CleanupScanEnabled, body.MetricsEnabled)
 	if err != nil {
 		writeErr(w, err)
 		return

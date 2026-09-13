@@ -36,8 +36,7 @@ func TestInferDocType(t *testing.T) {
 }
 
 // TestEpisodicRules asserts the seeded rules reproduce the curation exemptions:
-// journal, handoff, and prompt have staleness off and every curation flag false;
-// no other doc_type does.
+// journal, handoff, and prompt have every curation flag false; no other doc_type does.
 func TestEpisodicRules(t *testing.T) {
 	exempt := map[string]bool{DocTypeJournal: true, DocTypeHandoff: true, DocTypePrompt: true}
 	for dt := range ValidDocTypes {
@@ -45,7 +44,7 @@ func TestEpisodicRules(t *testing.T) {
 		if !ok {
 			t.Fatalf("no default policy for %q", dt)
 		}
-		curationOff := p.VerificationAgeDays == 0 && !p.DuplicateGuard && !p.CleanupScan && !p.LintStaleCheck
+		curationOff := !p.DuplicateGuard && !p.CleanupScan && !p.LintStaleCheck
 		if curationOff != exempt[dt] {
 			t.Errorf("%q: curation-off=%v, want %v", dt, curationOff, exempt[dt])
 		}

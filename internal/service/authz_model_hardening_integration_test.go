@@ -18,10 +18,8 @@ import (
 )
 
 // TestUpdateMyTenantSettingsRequiresManager locks the F1 hardening: the ctx-only
-// self-service toggle path requires MANAGE rights, not bare membership. A plain
-// member of a SHARED tenant can no longer arm the destructive retention sweep
-// (staleness_mode="hard"); a manager can; and a personal tenant's owner keeps
-// self-service (owner ⇒ manager) so the fix does not regress personal use.
+// self-service toggle path requires MANAGE rights, not bare membership. A shared
+// tenant's plain member is refused a toggle edit; a manager and a personal owner pass.
 func TestUpdateMyTenantSettingsRequiresManager(t *testing.T) {
 	db := openServicePG(t)
 	store := authz.NewPostgresStore(db)
@@ -34,30 +32,30 @@ func TestUpdateMyTenantSettingsRequiresManager(t *testing.T) {
 	// A plain member of a shared tenant is refused.
 	memberTU, err := svc.GrantTenantUser(adminCtx, "mem-"+uuid.NewString()+"@example.com", shared.ID, models.TenantUserRoleMember)
 	require.NoError(t, err)
-	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, memberTU.ID.String()), strPtr(models.StalenessModeHard), nil, nil, false, nil, nil)
+	_, err = svc.UpdateMyTenantSettings(ctxFor(shared.ID, memberTU.ID.String()), bptrLocal(true), nil, false, nil, nil)
 	require.ErrorIs(t, err, apperr.ErrInvalidInput, "a shared tenant's plain member must be refused")
 
-	// The refused edit left staleness_mode unchanged — the sweep was NOT armed.
+	// The refused edit left the duplicate guard unchanged (not armed).
 	adminRead := auth.WithTenantID(auth.WithLocalAdmin(context.Background()), shared.ID)
-	cur, err := svc.UpdateMyTenantSettings(adminRead, nil, nil, nil, false, nil, nil)
+	cur, err := svc.UpdateMyTenantSettings(adminRead, nil, nil, false, nil, nil)
 	require.NoError(t, err)
-	require.NotEqual(t, models.StalenessModeHard, cur.StalenessMode, "a refused member edit must not arm hard retention")
+	require.False(t, cur.DuplicateGuard, "a refused member edit must not arm the duplicate guard")
 
 	// A manager (direct tenant#manager tuple) may edit.
 	managerSubj := "mgr-" + uuid.NewString()
 	require.NoError(t, store.Write(context.Background(), authzseed.TenantManager(shared.ID, managerSubj)))
-	got, err := svc.UpdateMyTenantSettings(ctxFor(shared.ID, managerSubj), strPtr(models.StalenessModeHard), nil, nil, false, nil, nil)
+	got, err := svc.UpdateMyTenantSettings(ctxFor(shared.ID, managerSubj), bptrLocal(true), nil, false, nil, nil)
 	require.NoError(t, err, "a manager may edit toggles")
-	require.Equal(t, models.StalenessModeHard, got.StalenessMode)
+	require.True(t, got.DuplicateGuard)
 
 	// Regression: a personal tenant's owner keeps self-service (owner ⇒ manager).
 	personal, err := svc.CreateTenant(adminCtx, "harden-personal-"+uuid.NewString(), "", models.TenantTypePersonal)
 	require.NoError(t, err)
 	ownerTU, err := svc.GrantTenantUser(adminCtx, "own-"+uuid.NewString()+"@example.com", personal.ID, models.TenantUserRoleOwner)
 	require.NoError(t, err)
-	pgot, err := svc.UpdateMyTenantSettings(ctxFor(personal.ID, ownerTU.ID.String()), strPtr(models.StalenessModeHard), nil, nil, false, nil, nil)
+	pgot, err := svc.UpdateMyTenantSettings(ctxFor(personal.ID, ownerTU.ID.String()), bptrLocal(true), nil, false, nil, nil)
 	require.NoError(t, err, "a personal tenant's owner keeps self-service")
-	require.Equal(t, models.StalenessModeHard, pgot.StalenessMode)
+	require.True(t, pgot.DuplicateGuard)
 }
 
 // TestCreateAPIKeyRejectsWildcardSubject locks the F2b hardening: the only

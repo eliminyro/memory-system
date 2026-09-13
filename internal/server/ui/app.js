@@ -1707,14 +1707,12 @@ const CONFIG_SCHEMA = [
     { key: "mmr_lambda", label: "MMR lambda", env: "MEMORY_MMR_LAMBDA", desc: "Diversity ↔ relevance weight for the re-rank. 1.0 = pure relevance", def: "default 0.5", ctl: "num", type: "float", min: 0, max: 1, exclmin: true },
     { key: "candidate_pool", label: "Candidate pool", env: "MEMORY_CANDIDATE_POOL", desc: "Per-list SQL LIMIT feeding fusion; its half sets the tier cut.", def: "default 20 · max 1000", ctl: "num", type: "int", min: 1, max: 1000, unit: "/ list" },
     { key: "snippet_chars", label: "Snippet window", env: "MEMORY_SNIPPET_CHARS", desc: "Match-centered window returned when snippet=true.", def: "default 400", ctl: "num", type: "int", min: 1, unit: "chars" },
-    { key: "staleness_penalty", label: "Staleness penalty", env: "MEMORY_STALENESS_PENALTY", desc: "Down-weights stale docs in ranking (0 = off; 1 = strongest).", def: "default 0.2", ctl: "num", type: "float", min: 0, max: 1 },
   ] },
   { title: "Instance", tc: "var(--cool)", note: "DB-stored toggles", fields: [
     { key: "history_enabled", label: "Mutation history", desc: "Record edit/overwrite history for every document section. Shared tenants only.", ctl: "seg", options: ["off", "on"], bool: true },
     { key: "history_retention_days", label: "History retention", env: "MEMORY_HISTORY_RETENTION_DAYS", desc: "Sweep prunes mutation_history rows older than this. 0 = keep full history.", def: "default 90 · 0 = keep all", ctl: "num", type: "int", min: 0, unit: "days", depends: "history_enabled" },
   ] },
   { title: "New-tenant defaults", tc: "var(--violet)", note: "MEMORY_DEFAULT_OPTS", fields: [
-    { key: "staleness_default", label: "Staleness mode", desc: "Withhold-on-stale behavior for freshly provisioned tenants.", def: "default hard", ctl: "seg", options: ["advisory", "hard"] },
     { key: "duplicate_guard_default", label: "Duplicate guard", desc: "Refuse near-duplicate writes above the similarity threshold.", ctl: "seg", options: ["off", "on"], bool: true },
     { key: "duplicate_threshold", label: "Duplicate threshold", env: "MEMORY_DUPLICATE_THRESHOLD", desc: "Cosine similarity above which a write is rejected (global write-guard threshold).", def: "default 0.85", ctl: "num", type: "float", min: 0, max: 1, exclmin: true },
     { key: "cleanup_scan_default", label: "Cleanup scan", desc: "Run the nightly near-duplicate scan populating cleanup_queue.", ctl: "seg", options: ["off", "on"], bool: true },
@@ -1982,7 +1980,7 @@ async function renderConfig() {
 }
 
 // ── Metrics dashboard ─────────────────────────────────────────────────────────
-// Admin-only page over GET /api/admin/metrics: event counts + live stale/expired
+// Admin-only page over GET /api/admin/metrics: event counts + live flagged/archived
 // gauges + top-accessed docs over a selectable window. Read-only, no external libs.
 
 // mShortId renders a UUID as a short {text,title} cell (full id on hover).
@@ -2045,13 +2043,13 @@ async function renderMetrics(days = 30) {
   const countRows = (m.counts || []).map((c) => [mShortId(c.tenant_id), c.doc_type, c.event_type, c.count]);
   const gauges = new Map();
   const gkey = (g) => g.tenant_id + "|" + g.doc_type;
-  for (const g of (m.stale_sections || [])) gauges.set(gkey(g), { t: g.tenant_id, dt: g.doc_type, stale: g.count, expired: 0 });
-  for (const g of (m.expired_sections || [])) {
-    const e = gauges.get(gkey(g)) || { t: g.tenant_id, dt: g.doc_type, stale: 0, expired: 0 };
-    e.expired = g.count;
+  for (const g of (m.flagged_sections || [])) gauges.set(gkey(g), { t: g.tenant_id, dt: g.doc_type, flagged: g.count, archived: 0 });
+  for (const g of (m.archived_documents || [])) {
+    const e = gauges.get(gkey(g)) || { t: g.tenant_id, dt: g.doc_type, flagged: 0, archived: 0 };
+    e.archived = g.count;
     gauges.set(gkey(g), e);
   }
-  const gaugeRows = [...gauges.values()].map((g) => [mShortId(g.t), g.dt, g.stale, g.expired]);
+  const gaugeRows = [...gauges.values()].map((g) => [mShortId(g.t), g.dt, g.flagged, g.archived]);
   const topRows = (m.top_accessed || []).map((d) => [
     { text: d.title || d.path || String(d.doc_id).slice(0, 8), title: d.path || String(d.doc_id) },
     d.doc_type, mShortId(d.tenant_id), d.count,
@@ -2060,7 +2058,7 @@ async function renderMetrics(days = 30) {
   const panels = el("div", { className: "config-panels" });
   panels.append(
     panel("Event counts", "var(--accent)", "over the window", mTable(["Tenant", "Doc type", "Event", "Count"], countRows, "No events recorded in this window.")),
-    panel("Liveness gauges", "var(--warn)", "live", mTable(["Tenant", "Doc type", "Stale", "Expired"], gaugeRows, "No stale or expired sections.")),
+    panel("Liveness gauges", "var(--warn)", "live", mTable(["Tenant", "Doc type", "Flagged", "Archived"], gaugeRows, "No flagged sections or archived documents.")),
     panel("Top accessed", "var(--cool)", "from the event log", mTable(["Document", "Doc type", "Tenant", "Accesses"], topRows, "No access events in this window.")),
   );
   view.append(panels);
@@ -2582,13 +2580,9 @@ function pollImportJob(container, id, tenantID, onDone) {
 
 // ── Tenant membership grants (used by tenantMembersSection) ───────────────────
 
-// tenantSettingsSection renders the enforcement toggles as segmented rockers:
-// the self-service lock (its own lock-glyph row) plus staleness / duplicate-
-// guard / cleanup. These persist on toggle: the three enforcement toggles
-// (staleness_mode / duplicate_guard / cleanup_scan_enabled) via
-// PATCH /tenants/{id}/settings (manager-level, honoring the self-service lock),
-// and the self-service lock via PATCH /admin/tenants/{id} (admin-only). Returns a
-// fragment of .section blocks; the caller's initRockers wires the thumbs.
+// tenantSettingsSection renders the enforcement toggles as segmented rockers: the
+// self-service lock (admin-only, PATCH /admin/tenants/{id}) plus duplicate_guard /
+// cleanup_scan_enabled / metrics (manager-level, PATCH /tenants/{id}/settings).
 function tenantSettingsSection(t) {
   const shared = t.type === "shared";
   const frag = document.createDocumentFragment();
@@ -2611,12 +2605,6 @@ function tenantSettingsSection(t) {
   const enf = el("div", { className: "section" });
   enf.hidden = true;
   enf.append(el("span", { className: "eyebrow", textContent: "enforcement" }));
-  const staleSeg = el("div", { className: "segmented seg-inline" },
-    el("button", { type: "button", textContent: "advisory" }),
-    el("button", { type: "button", textContent: "hard" }));
-  enf.append(el("div", { className: "toggle-row" },
-    el("div", { className: "lbl" }, document.createTextNode("Staleness mode "), el("small", { textContent: "advisory flags stale reads · hard withholds guarded content" })),
-    staleSeg));
   const dupSeg = el("div", { className: "segmented seg-inline" },
     el("button", { type: "button", textContent: "off" }),
     el("button", { type: "button", textContent: "on" }));
@@ -2649,7 +2637,6 @@ function tenantSettingsSection(t) {
   function applyState(s) {
     if (!s) return;
     setActive(lockSeg, s.effective_self_service_policy === "admin_only" ? "admin-only" : "open");
-    setActive(staleSeg, s.staleness_mode || "advisory");
     setActive(dupSeg, s.duplicate_guard ? "on" : "off");
     setActive(cleanSeg, s.cleanup_scan_enabled ? "on" : "off");
     setActive(metricsSeg, s.metrics_enabled ? "on" : "off");
@@ -2671,8 +2658,7 @@ function tenantSettingsSection(t) {
   // rockers ready, so the panel's later global initRockers(view) skips them.
   initRockers(frag, (btn, seg) => {
     const val = btn.textContent.trim().toLowerCase();
-    if (seg === staleSeg) save(`/tenants/${t.id}/settings`, { staleness_mode: val });
-    else if (seg === dupSeg) save(`/tenants/${t.id}/settings`, { duplicate_guard: val === "on" });
+    if (seg === dupSeg) save(`/tenants/${t.id}/settings`, { duplicate_guard: val === "on" });
     else if (seg === cleanSeg) save(`/tenants/${t.id}/settings`, { cleanup_scan_enabled: val === "on" });
     else if (seg === metricsSeg) save(`/tenants/${t.id}/settings`, { metrics_enabled: val === "on" });
     else if (seg === lockSeg) save(`/admin/tenants/${t.id}`, { self_service_policy: val === "admin-only" ? "admin_only" : "open" });

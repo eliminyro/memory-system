@@ -1,34 +1,19 @@
-// Package staleness decides a section's read-time freshness from age alone: two
-// per-doc_type clocks (a verification-age nudge and an expiration-age withhold)
-// under the tenant staleness mode. No content inspection — withholding is age-based.
+// Package staleness holds the effective doc_type policy store. Read-time
+// needs-verification is content/event-driven (the section flag), not age-based;
+// this package no longer computes freshness from a clock.
 package staleness
 
 import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"sync/atomic"
-	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/eliminyro/memory-system/internal/models"
 )
-
-// Preview returns a short leading-text prefix of content (default 200 chars),
-// used as the headingless fallback for a withheld section.
-func Preview(content string, max int) string {
-	if max <= 0 {
-		max = 200
-	}
-	content = strings.TrimSpace(content)
-	if len(content) <= max {
-		return content
-	}
-	return content[:max] + "…"
-}
 
 // PolicyStore holds the effective doc_type policy set behind an atomic snapshot,
 // loaded once at boot and recomputed on admin write (no TTL, no per-request DB
@@ -131,17 +116,6 @@ func (s *PolicyStore) All() map[string]models.EffectivePolicy {
 	return out
 }
 
-// DaysByDocType maps each known doc_type to its verification age, for the search
-// re-rank's per-doc_type penalty (ranking rides the verification clock, not expiration).
-func (s *PolicyStore) DaysByDocType() map[string]int {
-	m := *s.snap.Load()
-	out := make(map[string]int, len(m))
-	for dt, p := range m {
-		out[dt] = p.VerificationAgeDays
-	}
-	return out
-}
-
 // DocTypesWhere returns the doc_types whose effective policy satisfies pred, as a
 // sorted slice — the SQL-array inputs (default_search, cleanup_scan, lint) that
 // replace the old compiled-in EpisodicDocTypes bindings.
@@ -155,38 +129,4 @@ func (s *PolicyStore) DocTypesWhere(pred func(models.EffectivePolicy) bool) []st
 	}
 	sort.Strings(out)
 	return out
-}
-
-// CheckResult describes a section's freshness against its two doc_type clocks.
-// Stale = past the verification age (nudge). Expired = past the expiration age
-// under hard mode (withhold). Age is measured from verified_at, else created_at.
-type CheckResult struct {
-	Stale            bool
-	Expired          bool
-	Age              time.Duration
-	VerificationDays int
-	ExpirationDays   int
-}
-
-// Check evaluates a section under mode. verification_age 0 disables the nudge;
-// expiration_age 0, a non-hard mode, or a prunable type disables the withhold.
-// NULL verified_at is treated as verified at creation.
-func Check(store *PolicyStore, section models.Section, docType, mode string) CheckResult {
-	pol := store.EffectiveFor(docType)
-	verifiedAt := section.CreatedAt
-	if section.VerifiedAt != nil {
-		verifiedAt = *section.VerifiedAt
-	}
-	age := time.Since(verifiedAt)
-	res := CheckResult{Age: age, VerificationDays: pol.VerificationAgeDays, ExpirationDays: pol.ExpirationAgeDays}
-	if pol.VerificationAgeDays > 0 && age > time.Duration(pol.VerificationAgeDays)*24*time.Hour {
-		res.Stale = true
-	}
-	// Prunable types expire via the retention sweep (delete), not the withhold:
-	// their expiration_age is a lifespan, not a staleness clock, so never guard them.
-	if mode == models.StalenessModeHard && pol.ExpirationAgeDays > 0 && !pol.Prunable &&
-		age > time.Duration(pol.ExpirationAgeDays)*24*time.Hour {
-		res.Expired = true
-	}
-	return res
 }

@@ -33,7 +33,7 @@ func openScanPG(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if err := database.Migrate(db, "fake", "fake", scanTestDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()); err != nil {
+	if err := database.Migrate(db, "fake", "fake", scanTestDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {
@@ -89,7 +89,7 @@ func seedScanTenant(t *testing.T, db *gorm.DB) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	require.NoError(t, db.Create(&models.Tenant{
-		ID: id, Name: "scan-" + uuid.NewString(), StalenessMode: models.StalenessModeOff,
+		ID: id, Name: "scan-" + uuid.NewString(),
 	}).Error)
 	return id
 }
@@ -198,7 +198,7 @@ func TestScannerMetrics_PruneAndCleanupEmit(t *testing.T) {
 	tenantID := uuid.New()
 	require.NoError(t, db.Create(&models.Tenant{
 		ID: tenantID, Name: "scanm-" + uuid.NewString(),
-		StalenessMode: models.StalenessModeOff, MetricsEnabled: true,
+		MetricsEnabled: true,
 	}).Error)
 	t.Cleanup(func() {
 		db.Exec("DELETE FROM metric_events WHERE tenant_id = ?", tenantID)

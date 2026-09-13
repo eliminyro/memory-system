@@ -171,7 +171,7 @@ func TestListTenants_ProjectionOmitsSettings(t *testing.T) {
 	if len(raw) != 1 {
 		t.Fatalf("want 1 item, got %d", len(raw))
 	}
-	for _, leaked := range []string{"email", "staleness_mode", "tenant"} {
+	for _, leaked := range []string{"email", "tenant"} {
 		if _, ok := raw[0][leaked]; ok {
 			t.Errorf("field %q leaked into the tenant list projection: %v", leaked, raw[0])
 		}

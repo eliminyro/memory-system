@@ -32,7 +32,6 @@ type UpdateTenantInput struct {
 	TenantID           string   `json:"tenant_id" jsonschema:"Tenant UUID to update"`
 	Name               *string  `json:"name,omitempty" jsonschema:"New tenant name (max 200 chars)"`
 	Type               *string  `json:"type,omitempty" jsonschema:"Display-only type: personal or shared"`
-	StalenessMode      *string  `json:"staleness_mode,omitempty" jsonschema:"Staleness enforcement: advisory or hard"`
 	DuplicateGuard     *bool    `json:"duplicate_guard,omitempty" jsonschema:"Refuse store_memory on near-duplicate content (default false)"`
 	DuplicateThreshold *float64 `json:"duplicate_threshold,omitempty" jsonschema:"Near-duplicate cutoff override, 0<v<=1; omit to inherit the global default"`
 	CleanupScanEnabled *bool    `json:"cleanup_scan_enabled,omitempty" jsonschema:"Include this tenant in the nightly near-duplicate scan (default false)"`
@@ -85,19 +84,18 @@ type RevokeUserInput struct {
 type GetDocTypePoliciesInput struct{}
 
 type SetDocTypePolicyInput struct {
-	DocType             string          `json:"doc_type" jsonschema:"doc_type to edit (one of the fixed set: reference, project_state, audit, learning, preference, tool, journal, handoff)"`
-	VerificationAgeDays *int            `json:"verification_age_days,omitempty" jsonschema:"Soft nudge threshold in days; 0 = never nudge; null inherits reference"`
-	ExpirationAgeDays   *int            `json:"expiration_age_days,omitempty" jsonschema:"Hard withhold threshold in days (hard mode only); 0/null disables; must be >= verification_age_days"`
-	DuplicateGuard      *bool           `json:"duplicate_guard,omitempty" jsonschema:"Write-time near-duplicate check (requires write_mode=replace)"`
-	CleanupScan         *bool           `json:"cleanup_scan,omitempty" jsonschema:"Include in the near-duplicate scanner"`
-	LintStaleCheck      *bool           `json:"lint_stale_check,omitempty" jsonschema:"Report as stale in lint_memory"`
-	Embed               *bool           `json:"embed,omitempty" jsonschema:"Generate embeddings on write"`
-	DefaultSearch       *bool           `json:"default_search,omitempty" jsonschema:"Appear in unfiltered search (requires embed)"`
-	Prunable            *bool           `json:"prunable,omitempty" jsonschema:"Retention may remove documents of this type"`
-	WriteMode           *string         `json:"write_mode,omitempty" jsonschema:"replace | merge_sections | append_only"`
-	SlugFormat          *string         `json:"slug_format,omitempty" jsonschema:"any | date | datetime | kebab"`
-	Subcategory         *string         `json:"subcategory,omitempty" jsonschema:"optional | required | forbidden"`
-	Rules               json.RawMessage `json:"rules,omitempty" jsonschema:"Structured/experimental rules as a JSON object (e.g. chain_previous)"`
+	DocType           string          `json:"doc_type" jsonschema:"doc_type to edit (one of the fixed set: reference, project_state, audit, learning, preference, tool, journal, handoff)"`
+	ExpirationAgeDays *int            `json:"expiration_age_days,omitempty" jsonschema:"Grace window in days before a prunable doc is swept (or a flagged doc archived); 0/null disables"`
+	DuplicateGuard    *bool           `json:"duplicate_guard,omitempty" jsonschema:"Write-time near-duplicate check (requires write_mode=replace)"`
+	CleanupScan       *bool           `json:"cleanup_scan,omitempty" jsonschema:"Include in the near-duplicate scanner"`
+	LintStaleCheck    *bool           `json:"lint_stale_check,omitempty" jsonschema:"Report as stale in lint_memory"`
+	Embed             *bool           `json:"embed,omitempty" jsonschema:"Generate embeddings on write"`
+	DefaultSearch     *bool           `json:"default_search,omitempty" jsonschema:"Appear in unfiltered search (requires embed)"`
+	Prunable          *bool           `json:"prunable,omitempty" jsonschema:"Retention may remove documents of this type"`
+	WriteMode         *string         `json:"write_mode,omitempty" jsonschema:"replace | merge_sections | append_only"`
+	SlugFormat        *string         `json:"slug_format,omitempty" jsonschema:"any | date | datetime | kebab"`
+	Subcategory       *string         `json:"subcategory,omitempty" jsonschema:"optional | required | forbidden"`
+	Rules             json.RawMessage `json:"rules,omitempty" jsonschema:"Structured/experimental rules as a JSON object (e.g. chain_previous)"`
 }
 
 // --- Registration ---
@@ -115,7 +113,7 @@ func (s *Server) registerAdminTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_tenant",
-		Description: "Update an existing tenant: name, type (personal/shared), the feature toggles (staleness_mode, duplicate_guard, cleanup_scan_enabled), and self_service_policy (open/admin_only/inherit). Admin only.",
+		Description: "Update an existing tenant: name, type (personal/shared), the feature toggles (duplicate_guard, cleanup_scan_enabled), and self_service_policy (open/admin_only/inherit). Admin only.",
 	}, s.UpdateTenant)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -211,7 +209,6 @@ func (s *Server) UpdateTenant(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	tenant, err := s.memory.UpdateTenant(ctx, id, service.UpdateTenantFields{
 		Name:               input.Name,
 		Type:               input.Type,
-		StalenessMode:      input.StalenessMode,
 		DuplicateGuard:     input.DuplicateGuard,
 		DuplicateThreshold: input.DuplicateThreshold,
 		CleanupScanEnabled: input.CleanupScanEnabled,
@@ -376,18 +373,17 @@ func (s *Server) GetDocTypePolicies(ctx context.Context, _ *mcpsdk.CallToolReque
 
 func (s *Server) SetDocTypePolicy(ctx context.Context, _ *mcpsdk.CallToolRequest, input SetDocTypePolicyInput) (*mcpsdk.CallToolResult, any, error) {
 	row := models.DocTypePolicy{
-		DocType:             input.DocType,
-		VerificationAgeDays: input.VerificationAgeDays,
-		ExpirationAgeDays:   input.ExpirationAgeDays,
-		DuplicateGuard:      input.DuplicateGuard,
-		CleanupScan:         input.CleanupScan,
-		LintStaleCheck:      input.LintStaleCheck,
-		Embed:               input.Embed,
-		DefaultSearch:       input.DefaultSearch,
-		Prunable:            input.Prunable,
-		WriteMode:           writeModePtr(input.WriteMode),
-		SlugFormat:          slugFormatPtr(input.SlugFormat),
-		Subcategory:         subcategoryPtr(input.Subcategory),
+		DocType:           input.DocType,
+		ExpirationAgeDays: input.ExpirationAgeDays,
+		DuplicateGuard:    input.DuplicateGuard,
+		CleanupScan:       input.CleanupScan,
+		LintStaleCheck:    input.LintStaleCheck,
+		Embed:             input.Embed,
+		DefaultSearch:     input.DefaultSearch,
+		Prunable:          input.Prunable,
+		WriteMode:         writeModePtr(input.WriteMode),
+		SlugFormat:        slugFormatPtr(input.SlugFormat),
+		Subcategory:       subcategoryPtr(input.Subcategory),
 	}
 	if len(input.Rules) > 0 {
 		row.Rules = datatypes.JSON(input.Rules)

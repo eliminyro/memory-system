@@ -140,10 +140,6 @@ type Config struct {
 	// Default 0.5 = LongMemEval-tuned optimum (peak full-recall); 1.0 disables (pure relevance).
 	MMRLambda float64 `env:"MEMORY_MMR_LAMBDA" envDefault:"0.5"`
 
-	// StalenessPenalty down-weights stale docs in HybridSearch's re-rank
-	// (repository.SearchParams). 0 = off (identity); 1 = strongest demotion.
-	StalenessPenalty float64 `env:"MEMORY_STALENESS_PENALTY" envDefault:"0.2"`
-
 	// SnippetChars caps the match-centered window search_memory returns when
 	// snippet=true (approximate on the low end — ts_headline windows by words).
 	SnippetChars int `env:"MEMORY_SNIPPET_CHARS" envDefault:"400"`
@@ -157,10 +153,9 @@ type Config struct {
 // absurd value is rejected at boot rather than silently melting search latency.
 const maxCandidatePool = 1000
 
-// ParseTenantDefaults parses "staleness=off,duplicate_guard=false,cleanup_scan_enabled=false"
-// into a models.TenantDefaults, overlaying set keys on top of the built-in safe
-// bundle (models.BaselineTenantDefaults). Empty = the safe bundle;
-// whitespace-tolerant, case-insensitive; unknown keys or invalid values error.
+// ParseTenantDefaults parses "duplicate_guard=false,cleanup_scan_enabled=false"
+// into a models.TenantDefaults, overlaying set keys on top of the safe bundle
+// (models.BaselineTenantDefaults). Unknown keys or invalid values error.
 func ParseTenantDefaults(spec string) (models.TenantDefaults, error) {
 	out := models.BaselineTenantDefaults()
 	spec = strings.TrimSpace(spec)
@@ -179,17 +174,6 @@ func ParseTenantDefaults(spec string) (models.TenantDefaults, error) {
 			return models.TenantDefaults{}, fmt.Errorf("expected key=value, got %q", strings.TrimSpace(pair))
 		}
 		switch key {
-		case "staleness":
-			switch val {
-			case "advisory", "hard":
-				out.StalenessMode = val
-			case "off":
-				// off is removed; coerce to the advisory floor rather than fail boot.
-				slog.Default().Warn("MEMORY_DEFAULT_OPTS staleness=off is no longer a mode; coercing to advisory")
-				out.StalenessMode = models.StalenessModeAdvisory
-			default:
-				return models.TenantDefaults{}, fmt.Errorf("invalid staleness value %q (want advisory|hard)", val)
-			}
 		case "duplicate_guard":
 			b, err := parseBool(val)
 			if err != nil {
@@ -203,7 +187,7 @@ func ParseTenantDefaults(spec string) (models.TenantDefaults, error) {
 			}
 			out.CleanupScanEnabled = b
 		default:
-			return models.TenantDefaults{}, fmt.Errorf("unknown key %q (want staleness|duplicate_guard|cleanup_scan_enabled)", key)
+			return models.TenantDefaults{}, fmt.Errorf("unknown key %q (want duplicate_guard|cleanup_scan_enabled)", key)
 		}
 	}
 	return out, nil
@@ -310,11 +294,6 @@ func Load() (*Config, error) {
 
 	// MMR lambda must stay in (0, 1] — fail fast rather than silently clamp a bad value.
 	if err := ValidateMMRLambda(cfg.MMRLambda); err != nil {
-		return nil, err
-	}
-
-	// Staleness penalty in [0, 1] — 0 disables, 1 is the strongest demotion.
-	if err := ValidateStalenessPenalty(cfg.StalenessPenalty); err != nil {
 		return nil, err
 	}
 

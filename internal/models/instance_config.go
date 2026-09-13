@@ -17,13 +17,11 @@ type InstanceConfig struct {
 
 	// Retrieval tuning.
 	MMRLambda            float64 `gorm:"not null;default:0.5" json:"mmr_lambda"`
-	StalenessPenalty     float64 `gorm:"not null;default:0.2" json:"staleness_penalty"`
 	CandidatePool        int     `gorm:"not null;default:20" json:"candidate_pool"`
 	SnippetChars         int     `gorm:"not null;default:400" json:"snippet_chars"`
 	HistoryRetentionDays int     `gorm:"not null;default:90" json:"history_retention_days"`
 
 	// New-tenant toggle defaults + the global near-duplicate cutoff.
-	StalenessDefault      string  `gorm:"size:16;not null;default:'hard'" json:"staleness_default"`
 	DuplicateGuardDefault bool    `gorm:"not null;default:true" json:"duplicate_guard_default"`
 	CleanupScanDefault    bool    `gorm:"not null;default:true" json:"cleanup_scan_default"`
 	DuplicateThreshold    float64 `gorm:"not null;default:0.85" json:"duplicate_threshold"`
@@ -75,12 +73,10 @@ func (InstanceConfig) TableName() string { return "instance_config" }
 // body and consumed by InstanceConfigRepository.Update.
 type InstanceConfigPatch struct {
 	MMRLambda             *float64 `json:"mmr_lambda"`
-	StalenessPenalty      *float64 `json:"staleness_penalty"`
 	CandidatePool         *int     `json:"candidate_pool"`
 	SnippetChars          *int     `json:"snippet_chars"`
 	HistoryEnabled        *bool    `json:"history_enabled"`
 	HistoryRetentionDays  *int     `json:"history_retention_days"`
-	StalenessDefault      *string  `json:"staleness_default"`
 	DuplicateGuardDefault *bool    `json:"duplicate_guard_default"`
 	CleanupScanDefault    *bool    `json:"cleanup_scan_default"`
 	DuplicateThreshold    *float64 `json:"duplicate_threshold"`

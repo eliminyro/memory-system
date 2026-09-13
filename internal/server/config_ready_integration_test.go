@@ -71,7 +71,7 @@ func TestRequireConfigListener_SeedOnceAndPatchSurvives(t *testing.T) {
 	seed.RequireConfigListener = true
 	migrate := func() {
 		require.NoError(t, database.Migrate(db, "fake", "fake", apiTestDim,
-			database.TenantColumnDefaults{StalenessMode: "off"}, seed))
+			database.TenantColumnDefaults{}, seed))
 	}
 	migrate()
 	cfg, err := repo.Get(context.Background())

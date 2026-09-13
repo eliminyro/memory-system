@@ -39,38 +39,6 @@ func TestIsValidSelfServicePolicy(t *testing.T) {
 	}
 }
 
-func TestNormalizeStalenessMode(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"off coerces to advisory", StalenessModeOff, StalenessModeAdvisory},
-		{"empty coerces to advisory", "", StalenessModeAdvisory},
-		{"unknown coerces to advisory", "bogus", StalenessModeAdvisory},
-		{"advisory passes through", StalenessModeAdvisory, StalenessModeAdvisory},
-		{"hard passes through", StalenessModeHard, StalenessModeHard},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := NormalizeStalenessMode(tc.in); got != tc.want {
-				t.Fatalf("NormalizeStalenessMode(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestValidStalenessModesHasNoOff(t *testing.T) {
-	if _, ok := ValidStalenessModes[StalenessModeOff]; ok {
-		t.Fatal("ValidStalenessModes must not contain off")
-	}
-	for _, m := range []string{StalenessModeAdvisory, StalenessModeHard} {
-		if _, ok := ValidStalenessModes[m]; !ok {
-			t.Fatalf("ValidStalenessModes must contain %q", m)
-		}
-	}
-}
-
 func TestIsValidTenantType(t *testing.T) {
 	tests := []struct {
 		name  string

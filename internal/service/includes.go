@@ -199,8 +199,8 @@ func (r *includeResolver) resolveOne(id uuid.UUID) (*DocumentView, string) {
 	if doc.Scope != nil && strings.TrimSpace(*doc.Scope) != "" && !scopeMatches(*doc.Scope, r.condScope) {
 		return nil, IncludeSkippedScope
 	}
-	mode, name, typ := r.s.tenantModeAndLabel(r.ctx, doc.TenantID)
-	view, err := buildDocumentView(r.ctx, r.s.thresholds, doc, mode, false)
+	name, typ := r.s.tenantLabel(r.ctx, doc.TenantID)
+	view, err := buildDocumentView(r.s.thresholds, doc)
 	if err != nil {
 		return nil, IncludeSkippedMissing
 	}

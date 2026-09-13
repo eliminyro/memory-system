@@ -96,7 +96,6 @@ func main() {
 	}
 
 	if err := database.Migrate(db, cfg.EmbeddingProvider, cfg.EmbeddingModel(), cfg.EmbeddingDimensions, database.TenantColumnDefaults{
-		StalenessMode:      cfg.TenantDefaults.StalenessMode,
 		DuplicateGuard:     cfg.TenantDefaults.DuplicateGuard,
 		CleanupScanEnabled: cfg.TenantDefaults.CleanupScanEnabled,
 	}, database.BaselineGlobalConfigDefaults()); err != nil {

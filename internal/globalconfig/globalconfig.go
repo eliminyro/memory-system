@@ -19,12 +19,10 @@ type Loader interface {
 // Snapshot is an immutable typed view of the globals, swapped atomically on refresh.
 type Snapshot struct {
 	MMRLambda             float64
-	StalenessPenalty      float64
 	CandidatePool         int
 	SnippetChars          int
 	HistoryRetentionDays  int
 	HistoryEnabled        bool
-	StalenessDefault      string
 	DuplicateGuardDefault bool
 	CleanupScanDefault    bool
 	DuplicateThreshold    float64
@@ -76,12 +74,10 @@ func (a *Accessor) Snapshot() *Snapshot { return a.snap.Load() }
 func snapshotFrom(c *models.InstanceConfig) *Snapshot {
 	return &Snapshot{
 		MMRLambda:             c.MMRLambda,
-		StalenessPenalty:      c.StalenessPenalty,
 		CandidatePool:         c.CandidatePool,
 		SnippetChars:          c.SnippetChars,
 		HistoryRetentionDays:  c.HistoryRetentionDays,
 		HistoryEnabled:        c.HistoryEnabled,
-		StalenessDefault:      c.StalenessDefault,
 		DuplicateGuardDefault: c.DuplicateGuardDefault,
 		CleanupScanDefault:    c.CleanupScanDefault,
 		DuplicateThreshold:    c.DuplicateThreshold,
@@ -104,12 +100,10 @@ func snapshotFrom(c *models.InstanceConfig) *Snapshot {
 
 // Typed getters — each reads the live snapshot lock-free.
 func (a *Accessor) MMRLambda() float64          { return a.Snapshot().MMRLambda }
-func (a *Accessor) StalenessPenalty() float64   { return a.Snapshot().StalenessPenalty }
 func (a *Accessor) CandidatePool() int          { return a.Snapshot().CandidatePool }
 func (a *Accessor) SnippetChars() int           { return a.Snapshot().SnippetChars }
 func (a *Accessor) HistoryRetentionDays() int   { return a.Snapshot().HistoryRetentionDays }
 func (a *Accessor) HistoryEnabled() bool        { return a.Snapshot().HistoryEnabled }
-func (a *Accessor) StalenessDefault() string    { return a.Snapshot().StalenessDefault }
 func (a *Accessor) DuplicateGuardDefault() bool { return a.Snapshot().DuplicateGuardDefault }
 func (a *Accessor) CleanupScanDefault() bool    { return a.Snapshot().CleanupScanDefault }
 func (a *Accessor) DuplicateThreshold() float64 { return a.Snapshot().DuplicateThreshold }

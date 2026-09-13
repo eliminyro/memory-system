@@ -6,45 +6,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// Staleness mode constants for per-tenant enforcement level. StalenessModeOff is
-// legacy: no longer accepted, kept only for migration/normalize of stored rows.
-const (
-	StalenessModeOff      = "off"
-	StalenessModeAdvisory = "advisory"
-	StalenessModeHard     = "hard"
-)
-
-// ValidStalenessModes is the accepted set for Tenant.StalenessMode. advisory is
-// the floor; off is removed and coerces via NormalizeStalenessMode.
-var ValidStalenessModes = map[string]struct{}{
-	StalenessModeAdvisory: {},
-	StalenessModeHard:     {},
-}
-
-// NormalizeStalenessMode coerces a legacy or unknown mode to the advisory floor:
-// "off", "", or any value not in ValidStalenessModes becomes advisory; a valid
-// mode passes through unchanged.
-func NormalizeStalenessMode(m string) string {
-	if _, ok := ValidStalenessModes[m]; !ok {
-		return StalenessModeAdvisory
-	}
-	return m
-}
-
-// TenantDefaults is the operator-chosen baseline for the three per-tenant
-// toggles. It is the single shared shape for these values across config parsing
-// and the service create-path.
+// TenantDefaults is the operator-chosen baseline for the per-tenant toggles. It
+// is the single shared shape for these values across config parsing and the
+// service create-path.
 type TenantDefaults struct {
-	StalenessMode      string
 	DuplicateGuard     bool
 	CleanupScanEnabled bool
 }
 
 // BaselineTenantDefaults is the built-in safe-retention bundle used when the
-// operator sets no MEMORY_DEFAULT_OPTS override: staleness_mode=hard,
-// duplicate_guard=true, cleanup_scan_enabled=true.
+// operator sets no MEMORY_DEFAULT_OPTS override: duplicate_guard=true,
+// cleanup_scan_enabled=true.
 func BaselineTenantDefaults() TenantDefaults {
-	return TenantDefaults{StalenessMode: StalenessModeHard, DuplicateGuard: true, CleanupScanEnabled: true}
+	return TenantDefaults{DuplicateGuard: true, CleanupScanEnabled: true}
 }
 
 // Tenant type constants. A display/visibility classifier only — see Tenant.Type.
@@ -101,10 +75,9 @@ type Tenant struct {
 
 	// Per-tenant feature toggles. All default to the safest behavior so a tenant
 	// upgrading from pre-tightening infra sees no change unless it opts in.
-	StalenessMode      string `gorm:"size:16;not null;default:'advisory'" json:"staleness_mode"`
-	DuplicateGuard     bool   `gorm:"not null;default:false" json:"duplicate_guard"`
-	CleanupScanEnabled bool   `gorm:"not null;default:false" json:"cleanup_scan_enabled"`
-	MetricsEnabled     bool   `gorm:"not null;default:false" json:"metrics_enabled"`
+	DuplicateGuard     bool `gorm:"not null;default:false" json:"duplicate_guard"`
+	CleanupScanEnabled bool `gorm:"not null;default:false" json:"cleanup_scan_enabled"`
+	MetricsEnabled     bool `gorm:"not null;default:false" json:"metrics_enabled"`
 
 	// DuplicateThreshold is the per-tenant near-duplicate cutoff OVERRIDE for the
 	// write guard (0<v<=1); NULL inherits the global instance_config default.

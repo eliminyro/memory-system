@@ -340,12 +340,10 @@ func TestAuthzEscalationRegression(t *testing.T) {
 	// Admin flips every remaining field of tenant T (email is no longer a tenant
 	// attribute — the escalation-via-tenant.Email vector is gone by construction).
 	name := "renamed-" + uuid.NewString()
-	mode := models.StalenessModeHard
 	dg := true
 	cs := true
 	_, err = f.svc.UpdateTenant(admin, f.tenantT, service.UpdateTenantFields{
 		Name:               &name,
-		StalenessMode:      &mode,
 		DuplicateGuard:     &dg,
 		CleanupScanEnabled: &cs,
 	})

@@ -32,7 +32,7 @@ func openBoundaryPG(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if err := database.Migrate(db, "fake", "fake", boundaryDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()); err != nil {
+	if err := database.Migrate(db, "fake", "fake", boundaryDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {

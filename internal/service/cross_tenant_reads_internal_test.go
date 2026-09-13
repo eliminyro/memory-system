@@ -11,8 +11,6 @@ import (
 	"github.com/eliminyro/memory-system/internal/authz"
 	"github.com/eliminyro/memory-system/internal/authzseed"
 	"github.com/eliminyro/memory-system/internal/models"
-	"github.com/eliminyro/memory-system/internal/repository"
-	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 // ctReadSvc wires a MemoryService with ONLY an in-memory authz store — no DB —
@@ -177,36 +175,4 @@ func TestReadScope_AdminFilterAnyTenant(t *testing.T) {
 	got, err := ctReadSvc(store).readScope(ctCtx(home, subj), &t2)
 	require.NoError(t, err)
 	require.Equal(t, []uuid.UUID{t2}, got, "admin may filter to a tenant they are not a member of")
-}
-
-// --- per-tenant staleness routing (DB-free branches) ---
-
-func TestApplyStaleness_NilStorePassthrough(t *testing.T) {
-	tA := uuid.New()
-	results := []repository.SearchResult{
-		{SectionID: uuid.New(), TenantID: tA, Content: "hello", DocType: models.DocTypeReference},
-	}
-	modeByTenant := map[uuid.UUID]string{tA: models.StalenessModeHard}
-
-	out, err := applyStalenessToSearchResults(context.Background(), nil, results, modeByTenant, false)
-	require.NoError(t, err)
-	require.Equal(t, "hello", out[0].Content, "nil store is an overall no-op")
-	require.Empty(t, out[0].Status)
-}
-
-// With a store present, a result whose owning tenant is absent from the mode map
-// (mode "") is left untouched — proving staleness is routed PER result tenant,
-// not by a single caller-tenant mode. An absent tenant skips staleness.Check.
-func TestApplyStaleness_AbsentTenantLeavesContent(t *testing.T) {
-	store := staleness.NewPolicyStore(nil)
-	tAbsent := uuid.New()
-	results := []repository.SearchResult{
-		{SectionID: uuid.New(), TenantID: tAbsent, Content: "absent-body", DocType: models.DocTypeReference},
-	}
-	modeByTenant := map[uuid.UUID]string{} // tAbsent intentionally missing
-
-	out, err := applyStalenessToSearchResults(context.Background(), store, results, modeByTenant, false)
-	require.NoError(t, err)
-	require.Equal(t, "absent-body", out[0].Content, "tenant absent from map untouched")
-	require.Empty(t, out[0].Status)
 }

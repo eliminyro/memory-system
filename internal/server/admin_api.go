@@ -424,9 +424,6 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 	if p.MMRLambda != nil {
 		check(config.ValidateMMRLambda(*p.MMRLambda))
 	}
-	if p.StalenessPenalty != nil {
-		check(config.ValidateStalenessPenalty(*p.StalenessPenalty))
-	}
 	if p.CandidatePool != nil {
 		check(config.ValidateCandidatePool(*p.CandidatePool))
 	}
@@ -435,11 +432,6 @@ func validateConfigPatch(p models.InstanceConfigPatch) []string {
 	}
 	if p.HistoryRetentionDays != nil {
 		check(config.ValidateHistoryRetentionDays(*p.HistoryRetentionDays))
-	}
-	if p.StalenessDefault != nil {
-		// Coerce a legacy off to the advisory floor rather than reject the write.
-		*p.StalenessDefault = models.NormalizeStalenessMode(*p.StalenessDefault)
-		check(config.ValidateStalenessDefault(*p.StalenessDefault))
 	}
 	if p.DuplicateThreshold != nil {
 		check(config.ValidateDuplicateThreshold(*p.DuplicateThreshold))

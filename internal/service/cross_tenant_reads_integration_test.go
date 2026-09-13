@@ -5,7 +5,6 @@ package service_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -14,7 +13,6 @@ import (
 	"github.com/eliminyro/memory-system/internal/authzseed"
 	apperr "github.com/eliminyro/memory-system/internal/errors"
 	"github.com/eliminyro/memory-system/internal/models"
-	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
 )
 
@@ -164,74 +162,4 @@ func TestCrossTenantReads_LabeledByOwningTenant(t *testing.T) {
 	require.Equal(t, f.tenantB, view.TenantID)
 	require.Equal(t, tenB.Name, view.TenantName)
 	require.Equal(t, tenB.Type, view.TenantType)
-}
-
-// TestCrossTenantReads_PerTenantStaleness proves a mixed result set is treated
-// per owning tenant: a hard-mode tenant's expired section is withheld while an
-// advisory-mode tenant's identical section is served with a nudge, same response.
-func TestCrossTenantReads_PerTenantStaleness(t *testing.T) {
-	f := newAuthzFixture(t)
-	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
-
-	// A = hard, B = advisory.
-	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantA).
-		Update("staleness_mode", models.StalenessModeHard).Error)
-	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantB).
-		Update("staleness_mode", models.StalenessModeAdvisory).Error)
-
-	// Learning expires at 200d; the sections below are backdated 400d, so the
-	// hard-mode tenant withholds while the advisory-mode tenant is served (nudged).
-	adminCtx := ctxFor(f.tenantA, f.admin)
-	require.NoError(t, f.svc.SetDocTypePolicy(adminCtx,
-		models.DocTypePolicy{DocType: models.DocTypeLearning, VerificationAgeDays: iptrLocal(180), ExpirationAgeDays: iptrLocal(200)}))
-	t.Cleanup(func() {
-		require.NoError(t, f.svc.SetDocTypePolicy(adminCtx,
-			models.DocTypePolicy{DocType: models.DocTypeLearning, ExpirationAgeDays: iptrLocal(0)}))
-	})
-
-	token := "staletok" + uuid.NewString()[:8]
-	body := "the section body " + token
-	resA, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", nil,
-		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
-	require.NoError(t, err)
-	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
-		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
-	require.NoError(t, err)
-
-	// Backdate both sections' verified_at well past the reference threshold.
-	secA := resA.Document.Sections[0].ID
-	secB := resB.Document.Sections[0].ID
-	old := time.Now().Add(-400 * 24 * time.Hour)
-	require.NoError(t, f.db.Model(&models.Section{}).
-		Where("id IN ?", []uuid.UUID{secA, secB}).Update("verified_at", old).Error)
-
-	// Key by section id, not tenant id: subjA can read other A/B docs the semantic
-	// arm may surface, so tenant-keyed last-write-wins could latch a non-target.
-	// secA/secB are backdated; the retry absorbs a rare keyword under-return.
-	var ra, rb repository.SearchResult
-	var okA, okB bool
-	for attempt := 0; attempt < 5; attempt++ {
-		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, nil, 20, false, "", nil, false)
-		require.NoError(t, err)
-		bySection := map[uuid.UUID]repository.SearchResult{}
-		for _, r := range results {
-			bySection[r.SectionID] = r
-		}
-		ra, okA = bySection[secA]
-		rb, okB = bySection[secB]
-		if okA && okB {
-			break
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	require.True(t, okA, "hard-mode tenant section present")
-	require.True(t, okB, "advisory-mode tenant section present")
-
-	// Hard-mode tenant: expired past the expiration age — content withheld.
-	require.Equal(t, "expired", ra.Status, "hard-mode tenant result is expired")
-	require.Empty(t, ra.Content, "expired content is withheld")
-
-	// Advisory-mode tenant: identical section served in full with a nudge, never withheld.
-	require.NotEmpty(t, rb.Content, "advisory-mode tenant result keeps its content")
-	require.Equal(t, "needs_verification", rb.Status, "advisory-mode tenant result is nudged, not withheld")
 }
