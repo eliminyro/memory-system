@@ -48,7 +48,6 @@ func openScanPG(t *testing.T) *gorm.DB {
 type scanGC struct {
 	cleanup     bool
 	retention   bool
-	grace       int
 	historyDays int
 	metricsDays int
 }
@@ -57,7 +56,6 @@ func (g scanGC) CleanupEnabled() bool        { return g.cleanup }
 func (g scanGC) CleanupIntervalHours() int   { return 24 }
 func (g scanGC) HistoryRetentionDays() int   { return g.historyDays }
 func (g scanGC) RetentionSweepEnabled() bool { return g.retention }
-func (g scanGC) RetentionGraceDays() int     { return g.grace }
 func (g scanGC) MetricsRetentionDays() int   { return g.metricsDays }
 func (g scanGC) WebhookURL() string          { return "" }
 

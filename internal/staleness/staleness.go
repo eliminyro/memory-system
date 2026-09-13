@@ -169,8 +169,8 @@ type CheckResult struct {
 }
 
 // Check evaluates a section under mode. verification_age 0 disables the nudge;
-// expiration_age 0 (and any non-hard mode) disables the withhold. NULL verified_at
-// is treated as verified at creation (spec "Age is measured from last verification").
+// expiration_age 0, a non-hard mode, or a prunable type disables the withhold.
+// NULL verified_at is treated as verified at creation.
 func Check(store *PolicyStore, section models.Section, docType, mode string) CheckResult {
 	pol := store.EffectiveFor(docType)
 	verifiedAt := section.CreatedAt
@@ -182,7 +182,9 @@ func Check(store *PolicyStore, section models.Section, docType, mode string) Che
 	if pol.VerificationAgeDays > 0 && age > time.Duration(pol.VerificationAgeDays)*24*time.Hour {
 		res.Stale = true
 	}
-	if mode == models.StalenessModeHard && pol.ExpirationAgeDays > 0 &&
+	// Prunable types expire via the retention sweep (delete), not the withhold:
+	// their expiration_age is a lifespan, not a staleness clock, so never guard them.
+	if mode == models.StalenessModeHard && pol.ExpirationAgeDays > 0 && !pol.Prunable &&
 		age > time.Duration(pol.ExpirationAgeDays)*24*time.Hour {
 		res.Expired = true
 	}

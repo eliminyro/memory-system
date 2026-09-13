@@ -258,7 +258,6 @@ type GlobalConfig interface {
 	HistoryEnabled() bool
 	DuplicateThreshold() float64
 	SelfServicePolicy() string
-	RetentionGraceDays() int
 }
 
 // defaultSnippetChars mirrors config MEMORY_SNIPPET_CHARS default so a service
@@ -272,10 +271,6 @@ const defaultCandidatePool = 20
 // defaultDuplicateThreshold mirrors the global instance_config default so the
 // write guard still has a sane cutoff when no globalCfg is wired (offline CLI / tests).
 const defaultDuplicateThreshold = 0.85
-
-// defaultRetentionGraceDays mirrors the instance_config default so the retention
-// dry-run has a sane grace window when no globalCfg is wired (offline CLI / tests).
-const defaultRetentionGraceDays = 30
 
 // Option configures optional MemoryService behavior at construction time.
 type Option func(*MemoryService)
@@ -3817,11 +3812,7 @@ func (s *MemoryService) LintMemory(ctx context.Context, checks []string, thresho
 	}
 	// Retention dry-run: preview would-be-evicted docs; never deletes, toggle-independent.
 	if _, ok := requested["retention"]; len(checks) == 0 || ok {
-		grace := defaultRetentionGraceDays
-		if s.globalCfg != nil {
-			grace = s.globalCfg.RetentionGraceDays()
-		}
-		cutoffs := repository.BuildRetentionCutoffs(s.policyAll(), grace)
+		cutoffs := repository.BuildRetentionCutoffs(s.policyAll())
 		retFindings, err := repository.NewRetentionRepository(s.db).CandidateFindings(ctx, tid, cutoffs)
 		if err != nil {
 			return nil, err

@@ -65,9 +65,9 @@ upstream IdP). Data is tenant-scoped with an optional shared "common" pool; a ca
 - **Agent-driven retirement, plus an opt-in sweep** — by default nothing deletes on a
   timer. Agents retire knowledge deliberately: supersede an entry (a `supersedes` edge
   archives its target and purges its content into a lineage-only tombstone; the content is
-  not recoverable), update it in place, or delete it. An **opt-in retention sweep**
-  (`retention_sweep_enabled`, default off) additionally hard-deletes documents that are both
-  expired past their doc_type age *and* access-cold — see [Retention sweep](#retention-sweep).
+  not recoverable), update it in place, or delete it. A **retention sweep** (`retention_sweep_enabled`, on by
+  default) additionally hard-deletes perishable doc_types (journal, handoff) once past their
+  `expiration_age_days` from creation; knowledge is never auto-deleted — see [Retention sweep](#retention-sweep).
 - **Live global configuration** — an admin-only config page at `/ui/admin` (system admins
   only) edits runtime globals in the database with no restart: retrieval tuning, rate
   limits, new-tenant defaults, the near-duplicate threshold, and the cleanup webhook.
@@ -261,8 +261,7 @@ stored value always wins over the env default — see
 | `RATE_LIMIT_TRUSTED_PROXY_DEPTH` | `0` | **seed** — number of trusted reverse-proxy/CDN hops in front for client-IP rate-limit keying. `0` (default) trusts none: `X-Forwarded-For` is ignored and the key is `RemoteAddr` (unspoofable). Behind a proxy/CDN, set it to your trusted-hop count so the client IP is read from the right `X-Forwarded-For` entry; leaving it `0` there makes all traffic share one bucket. |
 | `CLEANUP_ENABLED` | `true` | **seed** — enable the nightly near-duplicate cleanup scanner. |
 | `CLEANUP_INTERVAL_HOURS` | `24` | **seed** — scan interval (shared by the dead-key sweep); a change takes effect at the next scheduler fire. |
-| `RETENTION_SWEEP_ENABLED` | `false` | **seed** — opt-in expired-document retention sweep. When on, the cleanup scanner hard-deletes documents expired past their doc_type age *and* access-cold; default off. See [Retention sweep](#retention-sweep). |
-| `RETENTION_GRACE_DAYS` | `30` | **seed** — extra days added to a doc_type's `expiration_age_days` before an access-cold document is eligible for the sweep; `>= 0`, `0` = none. |
+| `RETENTION_SWEEP_ENABLED` | `true` | **seed** — retention sweep for perishable doc_types. When on, the cleanup scanner hard-deletes unpinned documents older than their doc_type's `expiration_age_days` (measured from creation); knowledge is never auto-deleted. On by default. See [Retention sweep](#retention-sweep). |
 | `METRICS_RETENTION_DAYS` | `90` | **seed** — prune horizon for the `metric_events` usage log; the cleanup scanner drops rows older than this. `>= 1`. |
 | `REQUIRE_CONFIG_LISTENER` | `false` | **seed** — when `true`, a dead config-invalidation listener fails `/~/ready` (never `/~/health`). Off by default: a single replica gets every change write-through and has no peers to fall behind. Turn it on for multi-replica deployments. See [Architecture](#architecture). |
 | `MEMORY_MMR_LAMBDA` | `0.5` | **seed** — MMR diversity re-rank lambda for hybrid search; range `(0, 1]`. `0.5` is the LongMemEval-tuned optimum; `1.0` disables (pure relevance). |
@@ -304,8 +303,9 @@ database and edited — without a restart — on the admin config page at **`/ui
 (system admins only). A stored value always wins over the env default. Most changes apply
 immediately (retrieval tuning, toggles, new-tenant defaults, self-service, log level, rate
 limits, request-size cap); `CLEANUP_INTERVAL_HOURS` takes effect at the next scheduler fire.
-The retention-sweep fields (`retention_sweep_enabled`, `retention_grace_days`,
-`metrics_retention_days`) are edited here too, alongside `cleanup_enabled`.
+The retention-sweep fields (`retention_sweep_enabled`, `metrics_retention_days`) and the
+per-doc_type policies (`prunable`, `expiration_age_days`) are edited here too, alongside
+`cleanup_enabled`.
 
 Two globals have **no env var** and are set only on the page:
 
@@ -382,27 +382,24 @@ break-glass reset, document import, user-management, and key-lifecycle runbook.
 
 ### Retention sweep
 
-By default the server never deletes on a timer — retirement is agent-driven (supersede,
-update, delete). An **opt-in** sweep can additionally remove documents that have outlived
-their usefulness. Turn it on with `retention_sweep_enabled` (default off, on the config
-page or `RETENTION_SWEEP_ENABLED`); it then rides the cleanup scanner, gated independently
-of the near-duplicate cleanup (`cleanup_enabled`).
+Knowledge is never auto-deleted; retirement of knowledge is agent-driven (supersede,
+update, delete). Perishable doc_types (journal, handoff) instead have a fixed lifespan and
+are swept once past it. The sweep is on by default (`retention_sweep_enabled`, on the config
+page or `RETENTION_SWEEP_ENABLED`); it rides the cleanup scanner, gated independently of the
+near-duplicate cleanup (`cleanup_enabled`).
 
-A document is deleted only when **all** hold: its liveness clock —
-`GREATEST(last verification, last access, creation)` — is older than its doc_type's
-`expiration_age_days` **plus** `retention_grace_days`; it is not pinned; and its doc_type
-has `expiration_age_days > 0`. A document read or re-verified during the grace window bumps
-that clock and survives — the grace window and the access gate are the safety net. Two
-escape hatches keep a document forever: a per-document **pin**, and setting its doc_type's
-`expiration_age_days = 0` (never-expire, so never eligible — this is how you exempt a whole
-category).
+A document is deleted only when **all** hold: its doc_type is `prunable`; its age from
+creation exceeds that doc_type's `expiration_age_days`; and it is not pinned. There is no
+grace period and no access or re-verification reprieve — a perishable expires from creation.
+Two escape hatches keep a document forever: a per-document **pin**, and a non-prunable
+doc_type or one with `expiration_age_days = 0` (never-expire, so never eligible — knowledge
+types ship this way).
 
 The delete is a **hard delete** — the supersede purge cascade (sections, embeddings, FTS
 rows, edges) plus a `deletion_events` audit row (reason `retention_sweep`). It is **not
-recoverable**; the grace window, the access gate, and the dry-run are the safety net, not an
-archive tier. Preview the blast radius before enabling with the `lint_memory`
-`retention_candidate` finding, which runs the candidate query without deleting, regardless
-of toggle state.
+recoverable**; pins, non-prunable doc_types, and the dry-run are the safety net, not an
+archive tier. Preview the blast radius with the `lint_memory` `retention_candidate` finding,
+which runs the candidate query without deleting, regardless of toggle state.
 
 ### Usage metrics
 
@@ -540,13 +537,13 @@ Honest about what it is and isn't:
   contract — a different product from memory systems that rewrite your notes on ingest.
 - **History is an audit trail, not rollback.** Mutation history is append-only, shared-tenant,
   and toggle-gated; `update_section` overwrites — there is no per-edit version restore.
-- **Opt-in by default.** Mutation history and the retention sweep are each off until an
-  operator enables their global toggle; the duplicate guard, staleness signal, and usage
-  metrics are per-tenant opt-in.
-- **Retention deletes are irreversible.** When the sweep is enabled it hard-deletes — no
-  recoverable archive tier. The grace window, the access-recency gate, per-doc pins, a
-  doc_type's `expiration_age_days=0`, and the `lint_memory` dry-run are the safety net, and
-  a `deletion_events` audit row records each delete.
+- **Knowledge is never auto-deleted.** Only perishable doc_types (journal, handoff) expire.
+  Mutation history is off until an operator enables it; the duplicate guard, staleness
+  signal, and usage metrics are per-tenant opt-in.
+- **Retention deletes are irreversible.** The sweep hard-deletes perishables — no
+  recoverable archive tier. Non-prunable doc_types, per-doc pins, a doc_type's
+  `expiration_age_days=0`, and the `lint_memory` dry-run are the safety net, and a
+  `deletion_events` audit row records each delete.
 
 ## References
 

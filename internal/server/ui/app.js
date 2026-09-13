@@ -1700,8 +1700,7 @@ const CONFIG_SCHEMA = [
   { title: "Maintenance sweeps", tc: "var(--warn)", note: "nightly", fields: [
     { key: "cleanup_enabled", label: "Cleanup pipeline", env: "CLEANUP_ENABLED", desc: "Nightly lint scan populating cleanup_queue with near-duplicate candidates.", ctl: "seg", options: ["off", "on"], bool: true },
     { key: "cleanup_interval_hours", label: "Cleanup interval", env: "CLEANUP_INTERVAL_HOURS", def: "default 24", ctl: "num", type: "int", min: 1, unit: "hours" },
-    { key: "retention_sweep_enabled", label: "Retention sweep", env: "RETENTION_SWEEP_ENABLED", desc: "Hard-delete expired, cold, unpinned documents on the sweep. Off leaves staleness intact.", ctl: "seg", options: ["off", "on"], bool: true },
-    { key: "retention_grace_days", label: "Retention grace", env: "RETENTION_GRACE_DAYS", desc: "Extra days past expiry before a cold document is eligible for eviction.", def: "default 30 · 0 = none", ctl: "num", type: "int", min: 0, unit: "days", depends: "retention_sweep_enabled" },
+    { key: "retention_sweep_enabled", label: "Retention sweep", env: "RETENTION_SWEEP_ENABLED", desc: "Hard-delete expired, unpinned perishables at their doc_type expiration age. Off leaves staleness intact.", def: "default on", ctl: "seg", options: ["off", "on"], bool: true },
     { key: "metrics_retention_days", label: "Metrics retention", env: "METRICS_RETENTION_DAYS", desc: "Sweep prunes metric_events older than this.", def: "default 90 · min 1", ctl: "num", type: "int", min: 1, unit: "days" },
   ] },
   { title: "HTTP hardening", tc: "var(--cool)", fields: [
@@ -1810,6 +1809,89 @@ async function renderConfig() {
   });
   placeThumbsIn(view, false);
   syncDeps();
+
+  // Per-doc_type policy editor over GET/PATCH /admin/doc-type-policies: view/edit
+  // prunable + expiration_age_days, reusing the panel/rocker/infield patterns.
+  const policyHintText = (prunable) => prunable ? "perishable — auto-deleted at its expiration age" : "never auto-deleted";
+  const policyPatch = (docType, body) => {
+    beginSave();
+    return apiFetch("/admin/doc-type-policies", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ doc_type: docType, ...body }) })
+      .then(() => { endSave(true); }).catch((err) => { endSave(false); throw err; });
+  };
+  let pol = null;
+  try {
+    pol = await apiFetch("/admin/doc-type-policies");
+  } catch (_err) {
+    pol = null; // non-fatal: the global-config page still stands without the editor
+  }
+  if (seq !== _renderSeq) return;
+  if (pol && Array.isArray(pol.rows)) {
+    const eff = pol.effective || {};
+    const panel = el("div", { className: "panel" });
+    panel.style.setProperty("--tc", "var(--violet)");
+    const phead = el("div", { className: "panel-head" }, el("span", { className: "dot" }), el("h2", { textContent: "Document type policies" }));
+    phead.append(el("span", { className: "eyebrow ph-note", textContent: "prunable + expiration" }));
+    panel.append(phead);
+    const psec = el("div", { className: "section" });
+    for (const r of pol.rows) psec.append(policyRow(r.doc_type, eff[r.doc_type] || {}));
+    panel.append(psec);
+    view.append(panel);
+    initRockers(panel, (btn, seg) => {
+      const prow = seg.closest(".toggle-row");
+      const flash = prow.querySelector(".flash");
+      const label = btn.textContent.trim();
+      policyPatch(seg.dataset.docType, { prunable: label === "on" })
+        .then(() => { seg.dataset.val = label; if (prow._hint) prow._hint.textContent = policyHintText(label === "on"); showFlash(flash, true); })
+        .catch((err) => { setSegActive(seg, seg.dataset.val); showFlash(flash, false, errMsg(err)); });
+    });
+    placeThumbsIn(panel, false);
+  }
+
+  function policyRow(dt, eff) {
+    const prunable = !!eff.Prunable;
+    const k = el("span", { className: "k" }, document.createTextNode(dt));
+    const hint = el("small", { textContent: policyHintText(prunable) });
+    const lbl = el("div", { className: "lbl" }, k, hint);
+    const flash = el("span", { className: "flash", textContent: "saved" });
+    const ctl = el("div", { className: "ctl" }, flash);
+    const row = el("div", { className: "toggle-row" }, lbl, ctl);
+    row._hint = hint;
+
+    const inp = el("input", {});
+    inp.inputMode = "numeric";
+    inp.value = String(eff.ExpirationAgeDays == null ? 0 : eff.ExpirationAgeDays);
+    const box = el("div", { className: "infield" }, inp, el("span", { className: "unit", textContent: "days" }));
+
+    const seg = el("div", { className: "segmented seg-inline" });
+    seg.dataset.docType = dt;
+    seg.dataset.val = prunable ? "on" : "off";
+    for (const opt of ["off", "on"]) {
+      const b = el("button", { type: "button", textContent: opt });
+      if ((opt === "on") === prunable) b.classList.add("active");
+      seg.append(b);
+    }
+    ctl.append(box, seg);
+
+    let last = inp.value;
+    const commit = () => {
+      if (inp.value === last) return;
+      const raw = String(inp.value).trim();
+      if (!/^\d+$/.test(raw)) { box.classList.add("err"); showFlash(flash, false, "not a number"); return; }
+      box.classList.remove("err");
+      policyPatch(dt, { expiration_age_days: parseInt(raw, 10) }).then(() => {
+        last = inp.value;
+        box.classList.add("saved"); setTimeout(() => box.classList.remove("saved"), 900); showFlash(flash, true);
+      }).catch((err) => { inp.value = last; box.classList.add("err"); showFlash(flash, false, errMsg(err)); });
+    };
+    inp.addEventListener("change", commit);
+    inp.addEventListener("blur", commit);
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); inp.blur(); }
+      else if (e.key === "Escape") { inp.value = last; box.classList.remove("err"); flash.classList.remove("show", "err"); inp.blur(); }
+    });
+    inp.addEventListener("input", () => { box.classList.remove("err"); flash.classList.remove("show", "err"); });
+    return row;
+  }
 
   function configRow(f) {
     const value = cfg ? cfg[f.key] : undefined;

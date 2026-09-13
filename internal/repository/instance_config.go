@@ -80,9 +80,6 @@ func (r *InstanceConfigRepository) Update(ctx context.Context, patch models.Inst
 	if patch.RetentionSweepEnabled != nil {
 		updates["retention_sweep_enabled"] = *patch.RetentionSweepEnabled
 	}
-	if patch.RetentionGraceDays != nil {
-		updates["retention_grace_days"] = *patch.RetentionGraceDays
-	}
 	if patch.MetricsRetentionDays != nil {
 		updates["metrics_retention_days"] = *patch.MetricsRetentionDays
 	}

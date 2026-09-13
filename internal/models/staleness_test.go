@@ -52,16 +52,22 @@ func TestEpisodicRules(t *testing.T) {
 	}
 }
 
-// TestPrunableRule asserts handoff is never pruned while journal inherits prunable.
+// TestPrunableRule asserts knowledge is never pruned while journal and handoff are
+// perishable with a fixed expiration age.
 func TestPrunableRule(t *testing.T) {
-	if DefaultEffectivePolicies[DocTypeHandoff].Prunable {
-		t.Error("handoff must be prunable=false")
+	if DefaultEffectivePolicies[DocTypeReference].Prunable {
+		t.Error("reference (knowledge base) must be prunable=false")
 	}
-	if !DefaultEffectivePolicies[DocTypeJournal].Prunable {
-		t.Error("journal must inherit prunable=true")
+	if DefaultEffectivePolicies[DocTypePrompt].Prunable {
+		t.Error("prompt must be prunable=false")
 	}
-	if !DefaultEffectivePolicies[DocTypeReference].Prunable {
-		t.Error("reference must be prunable=true")
+	j := DefaultEffectivePolicies[DocTypeJournal]
+	if !j.Prunable || j.ExpirationAgeDays != 30 {
+		t.Errorf("journal must be prunable with a 30-day expiration, got prunable=%v exp=%d", j.Prunable, j.ExpirationAgeDays)
+	}
+	h := DefaultEffectivePolicies[DocTypeHandoff]
+	if !h.Prunable || h.ExpirationAgeDays != 90 {
+		t.Errorf("handoff must be prunable with a 90-day expiration, got prunable=%v exp=%d", h.Prunable, h.ExpirationAgeDays)
 	}
 }
 

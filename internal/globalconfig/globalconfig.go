@@ -34,7 +34,6 @@ type Snapshot struct {
 	CleanupEnabled        bool
 	CleanupIntervalHours  int
 	RetentionSweepEnabled bool
-	RetentionGraceDays    int
 	MetricsRetentionDays  int
 	RateLimitRPS          float64
 	RateLimitBurst        int
@@ -92,7 +91,6 @@ func snapshotFrom(c *models.InstanceConfig) *Snapshot {
 		CleanupEnabled:        c.CleanupEnabled,
 		CleanupIntervalHours:  c.CleanupIntervalHours,
 		RetentionSweepEnabled: c.RetentionSweepEnabled,
-		RetentionGraceDays:    c.RetentionGraceDays,
 		MetricsRetentionDays:  c.MetricsRetentionDays,
 		RateLimitRPS:          c.RateLimitRPS,
 		RateLimitBurst:        c.RateLimitBurst,
@@ -121,7 +119,6 @@ func (a *Accessor) AdminEmails() string         { return a.Snapshot().AdminEmail
 func (a *Accessor) CleanupEnabled() bool        { return a.Snapshot().CleanupEnabled }
 func (a *Accessor) CleanupIntervalHours() int   { return a.Snapshot().CleanupIntervalHours }
 func (a *Accessor) RetentionSweepEnabled() bool { return a.Snapshot().RetentionSweepEnabled }
-func (a *Accessor) RetentionGraceDays() int     { return a.Snapshot().RetentionGraceDays }
 func (a *Accessor) MetricsRetentionDays() int   { return a.Snapshot().MetricsRetentionDays }
 func (a *Accessor) RateLimitRPS() float64       { return a.Snapshot().RateLimitRPS }
 func (a *Accessor) RateLimitBurst() int         { return a.Snapshot().RateLimitBurst }

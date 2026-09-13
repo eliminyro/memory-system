@@ -53,6 +53,22 @@ func TestCheck_Tiering(t *testing.T) {
 	}
 }
 
+// TestCheck_PrunableNeverWithheld: a prunable type's expiration_age drives the
+// retention sweep (delete), not the withhold — Check never marks it Expired.
+func TestCheck_PrunableNeverWithheld(t *testing.T) {
+	const dt = models.DocTypeJournal
+	store := NewPolicyStoreFromEffective(map[string]models.EffectivePolicy{
+		dt: {VerificationAgeDays: 0, ExpirationAgeDays: 30, Prunable: true},
+	})
+	got := Check(store, aged(400), dt, models.StalenessModeHard)
+	if got.Expired {
+		t.Error("a prunable type must never be withheld (it expires via the sweep)")
+	}
+	if got.Stale {
+		t.Error("verification_age 0 must not nudge")
+	}
+}
+
 // TestCheck_NeverVerifiedUsesCreatedAt confirms the clock falls back to CreatedAt.
 func TestCheck_NeverVerifiedUsesCreatedAt(t *testing.T) {
 	store := storeWith(models.DocTypeLearning, 30, 0)

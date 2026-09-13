@@ -32,8 +32,8 @@ func seedRetDoc(t *testing.T, db *gorm.DB, tenantID uuid.UUID, slug, docType str
 	return doc.ID
 }
 
-// coldenDoc backdates a doc and its sections by `days` so its whole liveness clock
-// (creation + section verification) sits in the past.
+// coldenDoc backdates a doc and its sections by `days` so its creation sits `days`
+// in the past (the sole retention clock now — no access/verify reprieve).
 func coldenDoc(t *testing.T, db *gorm.DB, docID uuid.UUID, days int) {
 	t.Helper()
 	require.NoError(t, db.Exec(
@@ -51,8 +51,8 @@ func docExists(t *testing.T, db *gorm.DB, id uuid.UUID) bool {
 	return n > 0
 }
 
-// TestRetentionCandidates_Selection covers task 2.1: the liveness predicate and
-// the pinned / expiration-disabled / long-window exclusions.
+// TestRetentionCandidates_Selection covers the created_at predicate: no access or
+// verify reprieve, plus the pinned / expiration-disabled / long-window exclusions.
 func TestRetentionCandidates_Selection(t *testing.T) {
 	db := openLintPG(t)
 	rng := rand.New(rand.NewSource(7))
@@ -95,9 +95,9 @@ func TestRetentionCandidates_Selection(t *testing.T) {
 	for _, c := range got {
 		ids[c.ID] = true
 	}
-	require.True(t, ids[cold], "cold-past-window learning doc should be a candidate")
-	require.False(t, ids[accessed], "recently accessed doc must be excluded")
-	require.False(t, ids[verified], "recently verified doc must be excluded")
+	require.True(t, ids[cold], "doc created past its window should be a candidate")
+	require.True(t, ids[accessed], "recent access no longer reprieves a perishable")
+	require.True(t, ids[verified], "recent re-verification no longer reprieves a perishable")
 	require.False(t, ids[pinned], "pinned doc must be excluded")
 	require.False(t, ids[pref], "expiration-disabled doc_type must be excluded")
 	require.False(t, ids[ref], "doc within its long window must be excluded")
@@ -172,4 +172,74 @@ func TestRetentionCandidateFindings_DryRun(t *testing.T) {
 	require.Equal(t, models.BuildPath("learnings", nil, "wouldevict"), findings[0].DocumentPath)
 
 	require.True(t, docExists(t, db, cold), "dry-run must not delete anything")
+}
+
+// TestPerishableRetention_MigratedDefaults covers task 6.2: Migrate flips the
+// prunable/expiration defaults, drops the grace column, and the resulting cutoffs
+// evict an old journal while sparing knowledge of any age (and pinned journals).
+func TestPerishableRetention_MigratedDefaults(t *testing.T) {
+	db := openLintPG(t)
+	rng := rand.New(rand.NewSource(23))
+	ctx := context.Background()
+
+	get := func(dt string) models.DocTypePolicy {
+		var row models.DocTypePolicy
+		require.NoError(t, db.Where("doc_type = ?", dt).First(&row).Error)
+		return row
+	}
+	ref := get(models.DocTypeReference)
+	require.NotNil(t, ref.Prunable)
+	require.False(t, *ref.Prunable, "reference must be non-prunable after migrate")
+
+	jr := get(models.DocTypeJournal)
+	require.NotNil(t, jr.Prunable)
+	require.True(t, *jr.Prunable)
+	require.NotNil(t, jr.ExpirationAgeDays)
+	require.Equal(t, 30, *jr.ExpirationAgeDays)
+
+	hf := get(models.DocTypeHandoff)
+	require.NotNil(t, hf.Prunable)
+	require.True(t, *hf.Prunable)
+	require.NotNil(t, hf.ExpirationAgeDays)
+	require.Equal(t, 90, *hf.ExpirationAgeDays)
+
+	// The now-dead grace column must be gone.
+	var graceCols int64
+	require.NoError(t, db.Raw(
+		`SELECT count(*) FROM information_schema.columns WHERE table_name = 'instance_config' AND column_name = 'retention_grace_days'`,
+	).Scan(&graceCols).Error)
+	require.Zero(t, graceCols, "retention_grace_days column must be dropped")
+
+	var rows []models.DocTypePolicy
+	require.NoError(t, db.Find(&rows).Error)
+	eff, err := models.ResolveDocTypePolicies(rows)
+	require.NoError(t, err)
+	cutoffs := repository.BuildRetentionCutoffs(eff)
+	require.Equal(t, 30, cutoffs[models.DocTypeJournal])
+	require.Equal(t, 90, cutoffs[models.DocTypeHandoff])
+	_, refIn := cutoffs[models.DocTypeReference]
+	require.False(t, refIn, "non-prunable reference must not be a retention target")
+
+	tenantID := seedTenant(t, db)
+	t.Cleanup(func() { cleanupTenant(db, tenantID) })
+
+	oldJournal := seedRetDoc(t, db, tenantID, "2020-01-01", models.DocTypeJournal, rng)
+	coldenDoc(t, db, oldJournal, 40)
+
+	pinnedJournal := seedRetDoc(t, db, tenantID, "2020-02-02", models.DocTypeJournal, rng)
+	coldenDoc(t, db, pinnedJournal, 40)
+	require.NoError(t, db.Exec(`UPDATE documents SET pinned = true WHERE id = ?`, pinnedJournal).Error)
+
+	oldKnowledge := seedRetDoc(t, db, tenantID, "ancient", models.DocTypeLearning, rng)
+	coldenDoc(t, db, oldKnowledge, 900)
+
+	got, err := repository.NewRetentionRepository(db).Candidates(ctx, tenantID, cutoffs)
+	require.NoError(t, err)
+	ids := map[uuid.UUID]bool{}
+	for _, c := range got {
+		ids[c.ID] = true
+	}
+	require.True(t, ids[oldJournal], "journal older than 30d is a candidate")
+	require.False(t, ids[pinnedJournal], "pinned journal is never a candidate")
+	require.False(t, ids[oldKnowledge], "knowledge is never a candidate at any age")
 }
