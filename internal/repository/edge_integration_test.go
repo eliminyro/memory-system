@@ -167,7 +167,7 @@ func TestEdge_ArchiveByIDIdempotent(t *testing.T) {
 func TestEdge_MigrationIdempotent(t *testing.T) {
 	db := openLintPG(t)
 
-	require.NoError(t, database.Migrate(db, "fake", "fake", dupTestDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()))
+	require.NoError(t, database.Migrate(db, "fake", "fake", dupTestDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()))
 
 	var idx int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_document_edges_triple'`).Scan(&idx).Error)

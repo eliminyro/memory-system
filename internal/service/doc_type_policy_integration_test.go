@@ -122,13 +122,13 @@ func TestAdminPolicyWrite(t *testing.T) {
 	memberCtx := ctxFor(f.tenantA, f.subjA)
 
 	// A non-admin is refused.
-	require.Error(t, f.svc.SetDocTypePolicy(memberCtx, models.DocTypePolicy{DocType: models.DocTypeLearning, VerificationAgeDays: iptrLocal(5)}))
+	require.Error(t, f.svc.SetDocTypePolicy(memberCtx, models.DocTypePolicy{DocType: models.DocTypeLearning, ExpirationAgeDays: iptrLocal(5)}))
 
 	// Admin write takes effect immediately (visible in the read).
-	require.NoError(t, f.svc.SetDocTypePolicy(adminCtx, models.DocTypePolicy{DocType: models.DocTypeLearning, VerificationAgeDays: iptrLocal(5)}))
+	require.NoError(t, f.svc.SetDocTypePolicy(adminCtx, models.DocTypePolicy{DocType: models.DocTypeLearning, ExpirationAgeDays: iptrLocal(5)}))
 	_, eff, err := f.svc.ListDocTypePolicies(adminCtx)
 	require.NoError(t, err)
-	require.Equal(t, 5, eff[models.DocTypeLearning].VerificationAgeDays)
+	require.Equal(t, 5, eff[models.DocTypeLearning].ExpirationAgeDays)
 
 	// Audited to override_log.
 	var n int64

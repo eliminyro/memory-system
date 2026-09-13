@@ -12,17 +12,15 @@ func TestDefaultPolicies_EveryDocTypeHasRow(t *testing.T) {
 
 func TestResolve_NullInheritsZeroDoesNot(t *testing.T) {
 	ps := DefaultEffectivePolicies[DocTypeProjectState]
-	if ps.VerificationAgeDays != 14 {
-		t.Errorf("project_state verification_age_days = %d, want 14", ps.VerificationAgeDays)
-	}
 	if ps.ExpirationAgeDays != 0 {
-		t.Errorf("project_state expiration_age_days = %d, want 0 (disabled by default)", ps.ExpirationAgeDays)
+		t.Errorf("project_state expiration_age_days = %d, want 0 (inherited default)", ps.ExpirationAgeDays)
 	}
 	if !ps.Embed || !ps.DuplicateGuard {
 		t.Error("project_state must inherit reference's embed/duplicate_guard = true")
 	}
-	if j := DefaultEffectivePolicies[DocTypeJournal]; j.VerificationAgeDays != 0 {
-		t.Errorf("journal verification_age_days = %d, want 0 (never), not the inherited 90", j.VerificationAgeDays)
+	// journal sets its own expiration (30); it isn't the inherited default (0).
+	if j := DefaultEffectivePolicies[DocTypeJournal]; j.ExpirationAgeDays != 30 {
+		t.Errorf("journal expiration_age_days = %d, want 30 (set, not inherited)", j.ExpirationAgeDays)
 	}
 }
 
@@ -50,23 +48,21 @@ func TestResolve_JournalHandoffRules(t *testing.T) {
 }
 
 func TestResolve_NoReferenceRowErrors(t *testing.T) {
-	_, err := ResolveDocTypePolicies([]DocTypePolicy{{DocType: DocTypeLearning, VerificationAgeDays: iptr(1)}})
+	_, err := ResolveDocTypePolicies([]DocTypePolicy{{DocType: DocTypeLearning, ExpirationAgeDays: iptr(1)}})
 	if err == nil {
 		t.Error("resolving without a reference row must error")
 	}
 }
 
 func TestValidateEffective_Rejections(t *testing.T) {
-	base := EffectivePolicy{VerificationAgeDays: 1, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional, Embed: true, DefaultSearch: true}
+	base := EffectivePolicy{WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional, Embed: true, DefaultSearch: true}
 	ok := func(p EffectivePolicy) EffectivePolicy { return p }
 
 	cases := map[string]EffectivePolicy{
-		"default_search without embed":  ok(EffectivePolicy{WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional, DefaultSearch: true, Embed: false}),
-		"duplicate_guard with merge":    ok(EffectivePolicy{WriteMode: WriteModeMergeSections, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional, DuplicateGuard: true, Embed: true}),
-		"bad write_mode":                ok(EffectivePolicy{WriteMode: "bogus", SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}),
-		"negative verification age":     ok(EffectivePolicy{VerificationAgeDays: -1, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}),
-		"negative expiration age":       ok(EffectivePolicy{ExpirationAgeDays: -1, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}),
-		"expiration below verification": ok(EffectivePolicy{VerificationAgeDays: 30, ExpirationAgeDays: 10, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}),
+		"default_search without embed": ok(EffectivePolicy{WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional, DefaultSearch: true, Embed: false}),
+		"duplicate_guard with merge":   ok(EffectivePolicy{WriteMode: WriteModeMergeSections, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional, DuplicateGuard: true, Embed: true}),
+		"bad write_mode":               ok(EffectivePolicy{WriteMode: "bogus", SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}),
+		"negative expiration age":      ok(EffectivePolicy{ExpirationAgeDays: -1, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}),
 	}
 	for name, p := range cases {
 		if err := ValidateEffective("x", p); err == nil {
@@ -76,14 +72,14 @@ func TestValidateEffective_Rejections(t *testing.T) {
 	if err := ValidateEffective("x", base); err != nil {
 		t.Errorf("valid policy rejected: %v", err)
 	}
-	// expiration 0 disables the tier; expiration >= verification is accepted.
-	disabled := EffectivePolicy{VerificationAgeDays: 30, ExpirationAgeDays: 0, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}
+	// expiration 0 disables the grace; a positive expiration is accepted.
+	disabled := EffectivePolicy{ExpirationAgeDays: 0, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}
 	if err := ValidateEffective("x", disabled); err != nil {
 		t.Errorf("expiration 0 (disabled) must pass: %v", err)
 	}
-	atOrAbove := EffectivePolicy{VerificationAgeDays: 30, ExpirationAgeDays: 30, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}
-	if err := ValidateEffective("x", atOrAbove); err != nil {
-		t.Errorf("expiration == verification must pass: %v", err)
+	positive := EffectivePolicy{ExpirationAgeDays: 30, WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional}
+	if err := ValidateEffective("x", positive); err != nil {
+		t.Errorf("positive expiration must pass: %v", err)
 	}
 }
 

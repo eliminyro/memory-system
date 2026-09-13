@@ -66,12 +66,10 @@ func TestHandoff_DocTypeAndDupGuardExempt(t *testing.T) {
 	require.Equal(t, "similar_exists", dup.Status, "curated near-dup must still be guarded")
 }
 
-// TestHandoff_NotStaleWithheld proves a stale, code-path-mentioning handoff
-// section is returned in full on a hard-mode tenant (episodic ⇒ never withheld).
+// TestHandoff_NotStaleWithheld proves an unflagged handoff section is returned in
+// full with no needs-verification status (age no longer drives read-time gating).
 func TestHandoff_NotStaleWithheld(t *testing.T) {
 	f := newAuthzFixture(t)
-	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantA).
-		Update("staleness_mode", models.StalenessModeHard).Error)
 	ctx := ctxFor(f.tenantA, f.subjA)
 	project := "proj-" + uuid.NewString()[:8]
 
@@ -176,23 +174,23 @@ func TestHandoff_ResumeAuthzNoLeak(t *testing.T) {
 	require.Empty(t, res.Chain)
 }
 
-// TestHandoff_SeedIdempotent proves the handoff staleness-threshold seed exists
-// after migration and that re-running it changes nothing (ON CONFLICT DO NOTHING).
+// TestHandoff_SeedIdempotent proves the handoff policy seed exists after migration
+// and that re-running it changes nothing (ON CONFLICT DO NOTHING).
 func TestHandoff_SeedIdempotent(t *testing.T) {
 	f := newAuthzFixture(t)
 
 	var days *int
-	require.NoError(t, f.db.Raw(`SELECT verification_age_days FROM doc_type_policies WHERE doc_type = ?`, models.DocTypeHandoff).Scan(&days).Error)
+	require.NoError(t, f.db.Raw(`SELECT expiration_age_days FROM doc_type_policies WHERE doc_type = ?`, models.DocTypeHandoff).Scan(&days).Error)
 	require.NotNil(t, days)
-	require.Equal(t, 0, *days, "handoff seeded with verification_age_days 0 (never), not the old 3650")
+	require.Equal(t, 90, *days, "handoff seeded with expiration_age_days 90")
 
 	for i := 0; i < 2; i++ {
 		require.NoError(t, f.db.Exec(
-			`INSERT INTO doc_type_policies (doc_type, verification_age_days, rules) VALUES (?, ?, '{}') ON CONFLICT (doc_type) DO NOTHING`,
+			`INSERT INTO doc_type_policies (doc_type, expiration_age_days, rules) VALUES (?, ?, '{}') ON CONFLICT (doc_type) DO NOTHING`,
 			models.DocTypeHandoff, 9999).Error)
 	}
-	require.NoError(t, f.db.Raw(`SELECT verification_age_days FROM doc_type_policies WHERE doc_type = ?`, models.DocTypeHandoff).Scan(&days).Error)
-	require.Equal(t, 0, *days, "re-running the seed is idempotent")
+	require.NoError(t, f.db.Raw(`SELECT expiration_age_days FROM doc_type_policies WHERE doc_type = ?`, models.DocTypeHandoff).Scan(&days).Error)
+	require.Equal(t, 90, *days, "re-running the seed is idempotent")
 }
 
 // TestHandoff_AutoChainProjectScoped proves auto-chain matches the exact project:

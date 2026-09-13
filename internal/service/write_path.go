@@ -213,9 +213,6 @@ func (s *MemoryService) SetDocTypePolicy(ctx context.Context, patch models.DocTy
 
 // applyPolicyPatch overlays a patch's supplied (non-nil) fields onto base.
 func applyPolicyPatch(base *models.DocTypePolicy, p models.DocTypePolicy) {
-	if p.VerificationAgeDays != nil {
-		base.VerificationAgeDays = p.VerificationAgeDays
-	}
 	if p.ExpirationAgeDays != nil {
 		base.ExpirationAgeDays = p.ExpirationAgeDays
 	}
@@ -281,12 +278,12 @@ func (s *MemoryService) policyLintFindings() []repository.LintFinding {
 				})
 			}
 		}
-		if p.VerificationAgeDays == 0 && !p.DuplicateGuard && !p.CleanupScan && !p.LintStaleCheck {
+		if !p.DuplicateGuard && !p.CleanupScan && !p.LintStaleCheck {
 			out = append(out, repository.LintFinding{
 				Check:        "policy",
 				Severity:     repository.LintSeverityInfo,
 				DocumentPath: "doc_type_policies/" + dt,
-				Message:      "all maintenance signals (verification_age, duplicate_guard, cleanup_scan, lint_stale_check) are disabled for this doc_type",
+				Message:      "all maintenance signals (duplicate_guard, cleanup_scan, lint_stale_check) are disabled for this doc_type",
 			})
 		}
 	}

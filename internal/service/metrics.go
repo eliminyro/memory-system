@@ -5,27 +5,25 @@ import (
 	"time"
 
 	"github.com/eliminyro/memory-system/internal/repository"
-	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
-// MetricsService turns the metric_events log and live section state into bounded,
+// MetricsService turns the metric_events log and live corpus state into bounded,
 // Prometheus-shaped aggregates for the admin dashboard and a later /metrics
 // endpoint. Read-only — it records nothing.
 type MetricsService struct {
 	events   *repository.MetricEventRepository
 	sections *repository.SectionRepository
-	policies *staleness.PolicyStore
 }
 
-func NewMetricsService(events *repository.MetricEventRepository, sections *repository.SectionRepository, policies *staleness.PolicyStore) *MetricsService {
-	return &MetricsService{events: events, sections: sections, policies: policies}
+func NewMetricsService(events *repository.MetricEventRepository, sections *repository.SectionRepository) *MetricsService {
+	return &MetricsService{events: events, sections: sections}
 }
 
 // Prometheus metric names + series types for the exposed series.
 const (
-	MetricEventsTotal     = "memory_events_total"
-	MetricStaleSections   = "memory_stale_sections"
-	MetricExpiredSections = "memory_expired_sections"
+	MetricEventsTotal       = "memory_events_total"
+	MetricFlaggedSections   = "memory_flagged_sections"
+	MetricArchivedDocuments = "memory_archived_documents"
 
 	seriesTypeCounter = "counter"
 	seriesTypeGauge   = "gauge"
@@ -42,7 +40,7 @@ type Series struct {
 }
 
 // PrometheusSeries returns the counters (from the event log over window) plus the
-// live stale/expired gauges, with label cardinality bounded to tenant × doc_type
+// live flagged/archived gauges, with label cardinality bounded to tenant × doc_type
 // (× event_type for counters).
 func (m *MetricsService) PrometheusSeries(ctx context.Context, window time.Duration) ([]Series, error) {
 	since := time.Now().Add(-window)
@@ -50,11 +48,11 @@ func (m *MetricsService) PrometheusSeries(ctx context.Context, window time.Durat
 	if err != nil {
 		return nil, err
 	}
-	stale, expired, err := m.gauges(ctx)
+	flagged, archived, err := m.gauges(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Series, 0, len(counters)+len(stale)+len(expired))
+	out := make([]Series, 0, len(counters)+len(flagged)+len(archived))
 	for _, c := range counters {
 		out = append(out, Series{
 			Name: MetricEventsTotal, Type: seriesTypeCounter,
@@ -62,12 +60,12 @@ func (m *MetricsService) PrometheusSeries(ctx context.Context, window time.Durat
 			Value:  float64(c.Count),
 		})
 	}
-	out = append(out, gaugeSeries(MetricStaleSections, stale)...)
-	out = append(out, gaugeSeries(MetricExpiredSections, expired)...)
+	out = append(out, gaugeSeries(MetricFlaggedSections, flagged)...)
+	out = append(out, gaugeSeries(MetricArchivedDocuments, archived)...)
 	return out, nil
 }
 
-func gaugeSeries(name string, counts []repository.StalenessCount) []Series {
+func gaugeSeries(name string, counts []repository.GaugeCount) []Series {
 	out := make([]Series, 0, len(counts))
 	for _, g := range counts {
 		out = append(out, Series{
@@ -79,35 +77,29 @@ func gaugeSeries(name string, counts []repository.StalenessCount) []Series {
 	return out
 }
 
-// gauges computes current stale and expired section counts (tenant × doc_type) from
-// the effective policy windows. Stale is raw corpus health (all tenants, past the
-// verification age); expired is hard-mode tenants only, matching read-gating.
-func (m *MetricsService) gauges(ctx context.Context) (stale, expired []repository.StalenessCount, err error) {
-	verificationDays := make(map[string]int)
-	expirationDays := make(map[string]int)
-	for dt, p := range m.policies.All() {
-		verificationDays[dt] = p.VerificationAgeDays
-		expirationDays[dt] = p.ExpirationAgeDays
-	}
-	if stale, err = m.sections.CountStaleByTenant(ctx, verificationDays); err != nil {
+// gauges computes current flagged section and archived document counts
+// (tenant × doc_type): flagged = live sections carrying the needs-verification
+// flag; archived = documents past their grace and archived.
+func (m *MetricsService) gauges(ctx context.Context) (flagged, archived []repository.GaugeCount, err error) {
+	if flagged, err = m.sections.CountFlaggedByTenant(ctx); err != nil {
 		return nil, nil, err
 	}
-	if expired, err = m.sections.CountExpiredByTenant(ctx, expirationDays); err != nil {
+	if archived, err = m.sections.CountArchivedByTenant(ctx); err != nil {
 		return nil, nil, err
 	}
-	return stale, expired, nil
+	return flagged, archived, nil
 }
 
 // DashboardSummary is the admin dashboard payload: event counts over a window, the
-// live stale/expired gauges, and the top-accessed documents (per-doc detail from
+// live flagged/archived gauges, and the top-accessed documents (per-doc detail from
 // the event log, allowed here since it is not a Prometheus label).
 type DashboardSummary struct {
-	WindowDays   int                         `json:"window_days"`
-	Since        time.Time                   `json:"since"`
-	Counts       []repository.MetricCounter  `json:"counts"`
-	StaleGauge   []repository.StalenessCount `json:"stale_sections"`
-	ExpiredGauge []repository.StalenessCount `json:"expired_sections"`
-	TopAccessed  []repository.TopAccessedDoc `json:"top_accessed"`
+	WindowDays    int                         `json:"window_days"`
+	Since         time.Time                   `json:"since"`
+	Counts        []repository.MetricCounter  `json:"counts"`
+	FlaggedGauge  []repository.GaugeCount     `json:"flagged_sections"`
+	ArchivedGauge []repository.GaugeCount     `json:"archived_documents"`
+	TopAccessed   []repository.TopAccessedDoc `json:"top_accessed"`
 }
 
 // DashboardSummary assembles the admin summary over window, listing the topN
@@ -118,7 +110,7 @@ func (m *MetricsService) DashboardSummary(ctx context.Context, window time.Durat
 	if err != nil {
 		return nil, err
 	}
-	stale, expired, err := m.gauges(ctx)
+	flagged, archived, err := m.gauges(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -127,11 +119,11 @@ func (m *MetricsService) DashboardSummary(ctx context.Context, window time.Durat
 		return nil, err
 	}
 	return &DashboardSummary{
-		WindowDays:   int(window.Hours() / 24),
-		Since:        since,
-		Counts:       counts,
-		StaleGauge:   stale,
-		ExpiredGauge: expired,
-		TopAccessed:  top,
+		WindowDays:    int(window.Hours() / 24),
+		Since:         since,
+		Counts:        counts,
+		FlaggedGauge:  flagged,
+		ArchivedGauge: archived,
+		TopAccessed:   top,
 	}, nil
 }

@@ -97,7 +97,7 @@ func TestMetricEvents_AppendAggregatePrune(t *testing.T) {
 	require.Equal(t, int64(8), accessRemaining, "recent access events kept")
 }
 
-func gaugeMap(counts []repository.StalenessCount) map[uuid.UUID]int64 {
+func gaugeMap(counts []repository.GaugeCount) map[uuid.UUID]int64 {
 	m := map[uuid.UUID]int64{}
 	for _, c := range counts {
 		m[c.TenantID] += c.Count
@@ -105,39 +105,28 @@ func gaugeMap(counts []repository.StalenessCount) map[uuid.UUID]int64 {
 	return m
 }
 
-// TestMetricEvents_Gauges covers task 6.1's data layer: stale counts regardless of
-// mode; expired counts only for hard-mode tenants (matching read-gating).
+// TestMetricEvents_Gauges covers the metrics data layer: flagged counts live
+// sections carrying the needs-verification flag; archived counts archived docs.
 func TestMetricEvents_Gauges(t *testing.T) {
 	db := openLintPG(t)
 	ctx := context.Background()
 	rng := rand.New(rand.NewSource(23))
 	sections := repository.NewSectionRepository(db)
 
-	offTenant := seedTenant(t, db) // seedTenant defaults staleness off
-	t.Cleanup(func() { cleanupTenant(db, offTenant) })
-	offDoc := seedRetDoc(t, db, offTenant, "offstale", models.DocTypeLearning, rng)
-	coldenDoc(t, db, offDoc, 200)
+	tenantA := seedTenant(t, db)
+	t.Cleanup(func() { cleanupTenant(db, tenantA) })
+	flaggedDoc := seedRetDoc(t, db, tenantA, "flagged", models.DocTypeLearning, rng)
+	require.NoError(t, db.Exec(`UPDATE sections SET flagged_at = NOW(), flag_reason = 'x' WHERE document_id = ?`, flaggedDoc).Error)
+	archivedDoc := seedRetDoc(t, db, tenantA, "archived", models.DocTypeLearning, rng)
+	require.NoError(t, db.Exec(`UPDATE documents SET archived_at = NOW() WHERE id = ?`, archivedDoc).Error)
+	// A clean doc counts in neither gauge.
+	seedRetDoc(t, db, tenantA, "clean", models.DocTypeLearning, rng)
 
-	hardTenant := seedTenant(t, db)
-	require.NoError(t, db.Exec(`UPDATE tenants SET staleness_mode = ? WHERE id = ?`, models.StalenessModeHard, hardTenant).Error)
-	t.Cleanup(func() { cleanupTenant(db, hardTenant) })
-	hardDoc := seedRetDoc(t, db, hardTenant, "hardexp", models.DocTypeLearning, rng)
-	coldenDoc(t, db, hardDoc, 200)
-	fresh := seedRetDoc(t, db, hardTenant, "fresh", models.DocTypeLearning, rng)
-	require.NoError(t, db.Exec(`UPDATE sections SET verified_at = NOW() WHERE document_id = ?`, fresh).Error)
-
-	verificationDays := map[string]int{models.DocTypeLearning: 30}
-	expirationDays := map[string]int{models.DocTypeLearning: 90}
-
-	stale, err := sections.CountStaleByTenant(ctx, verificationDays)
+	flagged, err := sections.CountFlaggedByTenant(ctx)
 	require.NoError(t, err)
-	staleBy := gaugeMap(stale)
-	require.Equal(t, int64(1), staleBy[offTenant], "off-mode stale section counted")
-	require.Equal(t, int64(1), staleBy[hardTenant], "hard-mode stale section counted")
+	require.Equal(t, int64(1), gaugeMap(flagged)[tenantA], "one flagged section counted")
 
-	expired, err := sections.CountExpiredByTenant(ctx, expirationDays)
+	archived, err := sections.CountArchivedByTenant(ctx)
 	require.NoError(t, err)
-	expBy := gaugeMap(expired)
-	require.Zero(t, expBy[offTenant], "off-mode tenant is never expired")
-	require.Equal(t, int64(1), expBy[hardTenant], "hard-mode expired section counted")
+	require.Equal(t, int64(1), gaugeMap(archived)[tenantA], "one archived document counted")
 }

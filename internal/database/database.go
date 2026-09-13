@@ -79,7 +79,6 @@ const migrateAdvisoryLock int64 = 0x4D49475241544531 // "MIGRATE1"
 // per-tenant toggles. Migrate applies them via ALTER COLUMN SET DEFAULT after
 // AutoMigrate, so raw INSERTs into tenants pick up the deploy-time choice.
 type TenantColumnDefaults struct {
-	StalenessMode      string
 	DuplicateGuard     bool
 	CleanupScanEnabled bool
 }
@@ -89,11 +88,9 @@ type TenantColumnDefaults struct {
 // wins (seed is ON CONFLICT DO NOTHING).
 type GlobalConfigDefaults struct {
 	MMRLambda             float64
-	StalenessPenalty      float64
 	CandidatePool         int
 	SnippetChars          int
 	HistoryRetentionDays  int
-	StalenessDefault      string
 	DuplicateGuardDefault bool
 	CleanupScanDefault    bool
 	DuplicateThreshold    float64
@@ -117,8 +114,8 @@ type GlobalConfigDefaults struct {
 // InstanceConfig column defaults) for callers that don't source them from env.
 func BaselineGlobalConfigDefaults() GlobalConfigDefaults {
 	return GlobalConfigDefaults{
-		MMRLambda: 0.5, StalenessPenalty: 0.2, CandidatePool: 20, SnippetChars: 400, HistoryRetentionDays: 90,
-		StalenessDefault: models.StalenessModeHard, DuplicateGuardDefault: true, CleanupScanDefault: true,
+		MMRLambda: 0.5, CandidatePool: 20, SnippetChars: 400, HistoryRetentionDays: 90,
+		DuplicateGuardDefault: true, CleanupScanDefault: true,
 		DuplicateThreshold: 0.85, SelfServicePolicy: models.SelfServicePolicyOpen,
 		CleanupEnabled: true, CleanupIntervalHours: 24,
 		RetentionSweepEnabled: true, MetricsRetentionDays: 90,
@@ -196,20 +193,14 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		return err
 	}
 
-	// Bootstrap tenant: insert the default tenant for existing data, carrying the
-	// operator-chosen toggle defaults (td). This insert runs before the ALTER COLUMN
-	// SET DEFAULT block below, so it must set the toggles explicitly or the default
-	// pool would fall to the static off/false/false column defaults and diverge from
-	// every tenant created via CreateTenant. td is pre-validated by
-	// config.ParseTenantDefaults, so interpolation is safe (DDL rejects bind params).
-	// off is removed; coerce any legacy default so no bootstrap row, column
-	// default, or instance seed below carries off forward.
-	stalenessDefault := models.NormalizeStalenessMode(td.StalenessMode)
+	// Bootstrap tenant: insert the default tenant for existing data with the
+	// operator-chosen toggle defaults (td) set explicitly (it runs before the
+	// ALTER COLUMN SET DEFAULT block). td is pre-validated (DDL rejects bind params).
 	bootstrapSQL := fmt.Sprintf(`
-		INSERT INTO tenants (id, name, staleness_mode, duplicate_guard, cleanup_scan_enabled, created_at, updated_at)
-		VALUES ('00000000-0000-0000-0000-000000000001', 'default', '%s', %t, %t, NOW(), NOW())
+		INSERT INTO tenants (id, name, duplicate_guard, cleanup_scan_enabled, created_at, updated_at)
+		VALUES ('00000000-0000-0000-0000-000000000001', 'default', %t, %t, NOW(), NOW())
 		ON CONFLICT (id) DO NOTHING
-	`, stalenessDefault, td.DuplicateGuard, td.CleanupScanEnabled)
+	`, td.DuplicateGuard, td.CleanupScanEnabled)
 	if err := tx.Exec(bootstrapSQL).Error; err != nil {
 		return fmt.Errorf("bootstrap tenant: %w", err)
 	}
@@ -264,13 +255,12 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	// doc_type_policies: named CHECKs (defense-in-depth; Go validates first) plus
 	// its own notify trigger. DROP+ADD keeps each constraint idempotent per boot.
 	policyConstraints := map[string]string{
-		"chk_verification_age_days_range": "verification_age_days IS NULL OR verification_age_days >= 0",
-		"chk_expiration_age_days_range":   "expiration_age_days IS NULL OR expiration_age_days >= 0",
-		"chk_write_mode_enum":             "write_mode IS NULL OR write_mode IN ('replace','merge_sections','append_only')",
-		"chk_slug_format_enum":            "slug_format IS NULL OR slug_format IN ('any','date','datetime','kebab')",
-		"chk_subcategory_enum":            "subcategory IS NULL OR subcategory IN ('optional','required','forbidden')",
-		"chk_default_search_needs_embed":  "default_search IS NOT TRUE OR embed IS NOT FALSE",
-		"chk_rules_is_object":             "jsonb_typeof(rules) = 'object'",
+		"chk_expiration_age_days_range":  "expiration_age_days IS NULL OR expiration_age_days >= 0",
+		"chk_write_mode_enum":            "write_mode IS NULL OR write_mode IN ('replace','merge_sections','append_only')",
+		"chk_slug_format_enum":           "slug_format IS NULL OR slug_format IN ('any','date','datetime','kebab')",
+		"chk_subcategory_enum":           "subcategory IS NULL OR subcategory IN ('optional','required','forbidden')",
+		"chk_default_search_needs_embed": "default_search IS NOT TRUE OR embed IS NOT FALSE",
+		"chk_rules_is_object":            "jsonb_typeof(rules) = 'object'",
 	}
 	for name, expr := range policyConstraints {
 		schemaDDL = append(schemaDDL,
@@ -295,7 +285,6 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	// pre-validated by config.ParseTenantDefaults, so interpolation is safe (DDL
 	// rejects bind params).
 	tenantDefaultMigrations := []string{
-		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN staleness_mode SET DEFAULT '%s'`, stalenessDefault),
 		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN duplicate_guard SET DEFAULT %t`, td.DuplicateGuard),
 		fmt.Sprintf(`ALTER TABLE tenants ALTER COLUMN cleanup_scan_enabled SET DEFAULT %t`, td.CleanupScanEnabled),
 	}
@@ -356,18 +345,18 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 	// globals_seeded so admin edits + the history toggle survive).
 	if err := tx.Exec(
 		`INSERT INTO instance_config
-			(id, history_enabled, mmr_lambda, staleness_penalty, candidate_pool, snippet_chars,
-			 history_retention_days, staleness_default, duplicate_guard_default, cleanup_scan_default,
+			(id, history_enabled, mmr_lambda, candidate_pool, snippet_chars,
+			 history_retention_days, duplicate_guard_default, cleanup_scan_default,
 			 duplicate_threshold, self_service_policy, signup_domains, admin_emails, cleanup_enabled,
 			 cleanup_interval_hours, rate_limit_rps, rate_limit_burst, trusted_proxy_depth,
 			 max_request_bytes, log_level, webhook_url, require_config_listener,
 			 retention_sweep_enabled, metrics_retention_days, globals_seeded, updated_at)
-		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
+		 VALUES (?, false, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, now())
 		 ON CONFLICT (id) DO UPDATE SET
-			mmr_lambda = EXCLUDED.mmr_lambda, staleness_penalty = EXCLUDED.staleness_penalty,
+			mmr_lambda = EXCLUDED.mmr_lambda,
 			candidate_pool = EXCLUDED.candidate_pool,
 			snippet_chars = EXCLUDED.snippet_chars, history_retention_days = EXCLUDED.history_retention_days,
-			staleness_default = EXCLUDED.staleness_default, duplicate_guard_default = EXCLUDED.duplicate_guard_default,
+			duplicate_guard_default = EXCLUDED.duplicate_guard_default,
 			cleanup_scan_default = EXCLUDED.cleanup_scan_default, duplicate_threshold = EXCLUDED.duplicate_threshold,
 			self_service_policy = EXCLUDED.self_service_policy, signup_domains = EXCLUDED.signup_domains,
 			admin_emails = EXCLUDED.admin_emails,
@@ -381,8 +370,8 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 			globals_seeded = true, updated_at = now()
 		 WHERE instance_config.globals_seeded = false`,
 		models.InstanceConfigSingletonID,
-		gc.MMRLambda, gc.StalenessPenalty, gc.CandidatePool, gc.SnippetChars, gc.HistoryRetentionDays,
-		gc.StalenessDefault, gc.DuplicateGuardDefault, gc.CleanupScanDefault, gc.DuplicateThreshold,
+		gc.MMRLambda, gc.CandidatePool, gc.SnippetChars, gc.HistoryRetentionDays,
+		gc.DuplicateGuardDefault, gc.CleanupScanDefault, gc.DuplicateThreshold,
 		gc.SelfServicePolicy, gc.SignupDomains, gc.AdminEmails, gc.CleanupEnabled,
 		gc.CleanupIntervalHours, gc.RateLimitRPS, gc.RateLimitBurst, gc.TrustedProxyDepth,
 		gc.MaxRequestBytes, gc.LogLevel, gc.WebhookURL, gc.RequireConfigListener,
@@ -391,13 +380,18 @@ func migrateInTx(tx *gorm.DB, provider, model string, dimensions int, corpusPopu
 		return fmt.Errorf("seed instance config: %w", err)
 	}
 
-	// Two-mode staleness: off is removed. Coerce legacy off rows to the advisory
-	// floor (idempotent) so no tenant or instance default carries off forward.
-	if err := tx.Exec(`UPDATE tenants SET staleness_mode = 'advisory' WHERE staleness_mode = 'off'`).Error; err != nil {
-		return fmt.Errorf("migrate off staleness (tenants): %w", err)
+	// Retire the calendar-staleness machinery: drop the age/mode columns (and their
+	// dependent CHECKs). Idempotent — a re-run finds nothing to drop.
+	stalenessRetireMigrations := []string{
+		`ALTER TABLE doc_type_policies DROP COLUMN IF EXISTS verification_age_days`,
+		`ALTER TABLE tenants DROP COLUMN IF EXISTS staleness_mode`,
+		`ALTER TABLE instance_config DROP COLUMN IF EXISTS staleness_penalty`,
+		`ALTER TABLE instance_config DROP COLUMN IF EXISTS staleness_default`,
 	}
-	if err := tx.Exec(`UPDATE instance_config SET staleness_default = 'advisory' WHERE staleness_default = 'off'`).Error; err != nil {
-		return fmt.Errorf("migrate off staleness (instance_config): %w", err)
+	for _, m := range stalenessRetireMigrations {
+		if err := tx.Exec(m).Error; err != nil {
+			return fmt.Errorf("retire calendar staleness: %w", err)
+		}
 	}
 
 	// Personal tenants use the owner relation instead of admin (personal-owner-role).

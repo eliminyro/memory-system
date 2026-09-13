@@ -27,7 +27,7 @@ func TestMMR_DefaultAndEscapeHatchMatchPreChangeFuse(t *testing.T) {
 	}
 	limit := 10
 
-	want := fuseHybrid(rows, limit, 20, 0, nil) // RRF reference order; below-floor row gated
+	want := fuseHybrid(rows, limit, 20) // RRF reference order; below-floor row gated
 	wantOrder := []string{"both", "vec-only-high", "lex-only"}
 	for i, w := range wantOrder {
 		if want[i].Content != w {
@@ -36,11 +36,11 @@ func TestMMR_DefaultAndEscapeHatchMatchPreChangeFuse(t *testing.T) {
 	}
 
 	// (a) MMRLambda == nil: HybridSearch's nil branch is `return fuseHybrid(rows, p.Limit), nil` verbatim.
-	gotDefault := fuseHybrid(rows, limit, 20, 0, nil)
+	gotDefault := fuseHybrid(rows, limit, 20)
 	assertSameSectionOrder(t, want, gotDefault)
 
 	// (b) MMRLambda == 0.999 escape hatch via applyMMR.
-	scored, embs := fuseHybridScored(rows, 20, 0, nil)
+	scored, embs := fuseHybridScored(rows, 20)
 	gotEscape := applyMMR(scored, embs, 0.999, limit, 20)
 	assertSameSectionOrder(t, want, gotEscape)
 }

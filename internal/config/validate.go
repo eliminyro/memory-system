@@ -18,14 +18,6 @@ func ValidateMMRLambda(v float64) error {
 	return nil
 }
 
-// ValidateStalenessPenalty allows [0, 1]; 0 is valid (off), unlike MMR lambda.
-func ValidateStalenessPenalty(v float64) error {
-	if v < 0 || v > 1 {
-		return fmt.Errorf("MEMORY_STALENESS_PENALTY must be in [0, 1], got %v", v)
-	}
-	return nil
-}
-
 func ValidateCandidatePool(v int) error {
 	if v < 1 || v > maxCandidatePool {
 		return fmt.Errorf("MEMORY_CANDIDATE_POOL must be in [1, %d], got %d", maxCandidatePool, v)
@@ -76,13 +68,6 @@ func ValidateMaxRequestBytes(v int64) error {
 func ValidateRateLimit(rps float64, burst int) error {
 	if rps > 0 && burst < 1 {
 		return fmt.Errorf("RATE_LIMIT_BURST must be >= 1 when RATE_LIMIT_RPS > 0, got %d", burst)
-	}
-	return nil
-}
-
-func ValidateStalenessDefault(v string) error {
-	if _, ok := models.ValidStalenessModes[v]; !ok {
-		return fmt.Errorf("staleness_default must be advisory or hard, got %q", v)
 	}
 	return nil
 }

@@ -34,7 +34,7 @@ func openLintPG(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	if err := database.Migrate(db, "fake", "fake", dupTestDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()); err != nil {
+	if err := database.Migrate(db, "fake", "fake", dupTestDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {
@@ -86,7 +86,6 @@ func seedTenant(t *testing.T, db *gorm.DB) uuid.UUID {
 		ID:                 uuid.New(),
 		Name:               "lint-dup-" + uuid.NewString(),
 		CleanupScanEnabled: true,
-		StalenessMode:      models.StalenessModeOff,
 	}
 	if err := db.Create(tn).Error; err != nil {
 		t.Fatalf("create tenant: %v", err)

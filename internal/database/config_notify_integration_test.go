@@ -28,7 +28,7 @@ func openNotifyPG(t *testing.T) *gorm.DB {
 	db, err := database.Connect(dsn)
 	require.NoError(t, err)
 	require.NoError(t, database.Migrate(db, "fake", "fake", notifyDim,
-		database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()))
+		database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()))
 	t.Cleanup(func() {
 		if sqlDB, err := db.DB(); err == nil {
 			_ = sqlDB.Close()

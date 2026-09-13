@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/eliminyro/memory-system/internal/authzseed"
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
@@ -138,70 +137,6 @@ func TestSearchSnippet_SemanticOnlyHitNotCentered(t *testing.T) {
 	require.NotEmpty(t, r.Content, "leading-text window is non-empty")
 	require.False(t, hasSentinel(r.Content), "returned text carries no PUA sentinel")
 	require.NotContains(t, r.Content, token, "the query term is not in the body")
-}
-
-// TestSearchSnippet_WithheldResultNotExpanded (6.4, load-bearing): on a hard-mode
-// tenant an expired result keeps blanked content + heading preview under
-// snippet=true, while a sibling advisory-mode result in the same response is windowed.
-func TestSearchSnippet_WithheldResultNotExpanded(t *testing.T) {
-	f := newAuthzFixture(t)
-	require.NoError(t, f.store.Write(context.Background(), authzseed.TenantMember(f.tenantB, f.subjA)))
-
-	// A = hard, B = advisory.
-	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantA).
-		Update("staleness_mode", models.StalenessModeHard).Error)
-	require.NoError(t, f.db.Model(&models.Tenant{}).Where("id = ?", f.tenantB).
-		Update("staleness_mode", models.StalenessModeAdvisory).Error)
-
-	// Opt learning into the hard withhold (expiration >= its verification age 180).
-	require.NoError(t, f.svc.SetDocTypePolicy(ctxFor(f.tenantA, f.admin),
-		models.DocTypePolicy{DocType: models.DocTypeLearning, ExpirationAgeDays: iptrLocal(200)}))
-
-	token := "snip" + uuid.NewString()[:8]
-	body := "some durable knowledge worth keeping " + token
-	resA, err := f.svc.StoreDocument(ctxFor(f.tenantA, f.subjA), "learnings", nil,
-		"sa-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
-	require.NoError(t, err)
-	resB, err := f.svc.StoreDocument(ctxFor(f.tenantB, f.subjB), "learnings", nil,
-		"sb-"+uuid.NewString(), "# T\n\n## H\n"+body, true, "seed", nil, nil)
-	require.NoError(t, err)
-
-	secA := resA.Document.Sections[0].ID
-	secB := resB.Document.Sections[0].ID
-	old := time.Now().Add(-400 * 24 * time.Hour)
-	require.NoError(t, f.db.Model(&models.Section{}).
-		Where("id IN ?", []uuid.UUID{secA, secB}).Update("verified_at", old).Error)
-
-	var ra, rb repository.SearchResult
-	var okA, okB bool
-	for attempt := 0; attempt < 5; attempt++ {
-		results, err := f.svc.Search(ctxFor(f.tenantA, f.subjA), token, nil, nil, nil, 20, false, "", nil, true)
-		require.NoError(t, err)
-		bySection := map[uuid.UUID]repository.SearchResult{}
-		for _, r := range results {
-			bySection[r.SectionID] = r
-		}
-		ra, okA = bySection[secA]
-		rb, okB = bySection[secB]
-		if okA && okB {
-			break
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	require.True(t, okA, "hard-mode tenant section present")
-	require.True(t, okB, "advisory-mode tenant section present")
-
-	// Withheld result: blanked content + heading preview, never snippet-expanded.
-	require.Equal(t, "expired", ra.Status)
-	require.Empty(t, ra.Content, "withheld content is not snippet-expanded")
-	require.Nil(t, ra.SnippetCentered, "withheld result carries no snippet flag")
-	require.NotEmpty(t, ra.Preview, "withheld result keeps its heading preview")
-
-	// Sibling non-withheld result is windowed normally.
-	require.NotEmpty(t, rb.Content, "advisory-mode sibling is windowed, not blanked")
-	require.False(t, hasSentinel(rb.Content), "windowed sibling carries no sentinel")
-	require.NotNil(t, rb.SnippetCentered)
-	require.True(t, *rb.SnippetCentered, "sibling matched the token -> centered")
 }
 
 // TestSearchSnippet_GetDocumentStillFull (6.5): get_document on a snippet-returned

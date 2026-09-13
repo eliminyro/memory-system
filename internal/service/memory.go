@@ -215,10 +215,9 @@ type MemoryService struct {
 	// useful when logins can actually resolve via OAuth. The offline CLI, which
 	// skips config.Load, leaves it false.
 	OAuthConfigured bool
-	// TenantDefaults are the operator-chosen toggle defaults (staleness_mode,
-	// duplicate_guard, cleanup_scan_enabled) stamped onto every tenant created
-	// through the service. Set once at startup from config.TenantDefaults; a zero
-	// value (unset — offline CLI / tests) leaves creation to the model/DB default.
+	// TenantDefaults are the operator-chosen toggle defaults (duplicate_guard,
+	// cleanup_scan_enabled) stamped onto every tenant created through the service.
+	// Set once at startup from config.TenantDefaults; a zero value applies false/false.
 	TenantDefaults models.TenantDefaults
 	// SelfServicePolicyDefault is the operator-chosen global default self-service
 	// policy ("open" | "admin_only"); a per-tenant override resolves against it.
@@ -249,10 +248,8 @@ type MemoryService struct {
 // reads live; *globalconfig.Accessor satisfies it.
 type GlobalConfig interface {
 	MMRLambda() float64
-	StalenessPenalty() float64
 	CandidatePool() int
 	SnippetChars() int
-	StalenessDefault() string
 	DuplicateGuardDefault() bool
 	CleanupScanDefault() bool
 	HistoryEnabled() bool
@@ -513,23 +510,21 @@ func (s *MemoryService) requireSelfService(ctx context.Context, tenant *models.T
 }
 
 // tenantSettings holds per-tenant feature toggles. When the tenants repo is
-// unwired (e.g. import CLI), safe defaults apply: staleness advisory, guard off.
+// unwired (e.g. import CLI), safe defaults apply: guard off.
 type tenantSettings struct {
-	StalenessMode      string
 	DuplicateGuard     bool
 	DuplicateThreshold float64
 }
 
 func (s *MemoryService) tenantSettings(ctx context.Context, tid uuid.UUID) tenantSettings {
 	if s.tenants == nil {
-		return tenantSettings{StalenessMode: models.StalenessModeAdvisory}
+		return tenantSettings{}
 	}
 	t, err := s.tenants.GetByID(ctx, tid)
 	if err != nil {
-		// Fail safe: unreadable config -> advisory (never withholds); never refuse content.
-		return tenantSettings{StalenessMode: models.StalenessModeAdvisory}
+		return tenantSettings{}
 	}
-	return tenantSettings{StalenessMode: models.NormalizeStalenessMode(t.StalenessMode), DuplicateGuard: t.DuplicateGuard, DuplicateThreshold: s.effectiveDuplicateThreshold(t.DuplicateThreshold)}
+	return tenantSettings{DuplicateGuard: t.DuplicateGuard, DuplicateThreshold: s.effectiveDuplicateThreshold(t.DuplicateThreshold)}
 }
 
 // effectiveDuplicateThreshold resolves the write-guard cutoff: a valid per-tenant
@@ -555,15 +550,6 @@ func (s *MemoryService) effectiveMMRLambda() *float64 {
 		return &l
 	}
 	return s.mmrLambda
-}
-
-// effectiveStalenessPenalty resolves the Search staleness weight: the live global
-// value via the accessor, else 0 (off) when no accessor is wired (CLI/tests).
-func (s *MemoryService) effectiveStalenessPenalty() float64 {
-	if s.globalCfg != nil {
-		return s.globalCfg.StalenessPenalty()
-	}
-	return 0
 }
 
 // effectiveCandidatePool resolves the per-list HybridSearch LIMIT: the live
@@ -706,16 +692,12 @@ func (s *MemoryService) auditCrossTenantRead(ctx context.Context, target uuid.UU
 	})
 }
 
-// resolveResultTenants fetches the distinct owning tenants present in a search
-// result set in ONE lookup, labels each result with its tenant's name/type, and
-// returns a per-tenant staleness-mode map (keyed by tenant id) so staleness can
-// be applied under each result's own tenant mode. Fail-safe: on a lookup miss,
-// labels are simply absent and modes default to off (never refuse content on a
-// glitch).
-func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repository.SearchResult) map[uuid.UUID]string {
-	modeByTenant := make(map[uuid.UUID]string)
+// labelResultTenants fetches the distinct owning tenants present in a search
+// result set in ONE lookup and labels each result with its tenant's name/type.
+// Fail-safe: on a lookup miss, labels are simply absent (never refuse content).
+func (s *MemoryService) labelResultTenants(ctx context.Context, results []repository.SearchResult) {
 	if len(results) == 0 || s.tenants == nil {
-		return modeByTenant
+		return
 	}
 	seen := make(map[uuid.UUID]struct{})
 	ids := make([]uuid.UUID, 0)
@@ -729,12 +711,11 @@ func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repo
 	}
 	tenants, err := s.tenants.GetByIDs(ctx, ids)
 	if err != nil {
-		return modeByTenant
+		return
 	}
 	byID := make(map[uuid.UUID]models.Tenant, len(tenants))
 	for _, t := range tenants {
 		byID[t.ID] = t
-		modeByTenant[t.ID] = models.NormalizeStalenessMode(t.StalenessMode)
 	}
 	for i := range results {
 		if t, ok := byID[results[i].TenantID]; ok {
@@ -742,25 +723,20 @@ func (s *MemoryService) resolveResultTenants(ctx context.Context, results []repo
 			results[i].TenantType = t.Type
 		}
 	}
-	return modeByTenant
 }
 
-// tenantModeAndLabel fetches a document's owning tenant ONCE and derives both the
-// resolved staleness mode (for the staleness view) and the display name/type (for
-// labeling) — replacing the two separate GetByID calls (staleness + label) that a
-// single-document read previously issued for the same row. It preserves the exact
-// fail-safe defaults of the old paths: an unwired tenants repo or a lookup
-// miss/error yields advisory and empty name/type, and an unrecognised
-// staleness value degrades to advisory — never refusing the read on a config glitch.
-func (s *MemoryService) tenantModeAndLabel(ctx context.Context, id uuid.UUID) (stalenessMode, name, typ string) {
+// tenantLabel fetches a document's owning tenant ONCE for its display name/type.
+// Fail-safe: an unwired tenants repo or a lookup miss yields empty name/type,
+// never refusing the read on a config glitch.
+func (s *MemoryService) tenantLabel(ctx context.Context, id uuid.UUID) (name, typ string) {
 	if s.tenants == nil {
-		return models.StalenessModeAdvisory, "", ""
+		return "", ""
 	}
 	t, err := s.tenants.GetByID(ctx, id)
 	if err != nil {
-		return models.StalenessModeAdvisory, "", ""
+		return "", ""
 	}
-	return models.NormalizeStalenessMode(t.StalenessMode), t.Name, t.Type
+	return t.Name, t.Type
 }
 
 // Search input bounds shared by every read surface (MCP search_memory and the
@@ -796,40 +772,25 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	// Only load the threshold map when the penalty is actually on.
-	penalty := s.effectiveStalenessPenalty()
-	var stalenessThresholds map[string]int
-	if penalty > 0 && s.thresholds != nil {
-		stalenessThresholds = s.thresholds.DaysByDocType()
-	}
 	results, err := s.sections.HybridSearch(ctx, repository.SearchParams{
-		TenantIDs:           scope,
-		Embedding:           embedding,
-		Query:               query,
-		Category:            category,
-		Subcategory:         subcategory,
-		DocType:             docType,
-		Limit:               limit,
-		CandidatePool:       s.effectiveCandidatePool(),
-		MMRLambda:           s.effectiveMMRLambda(),
-		StalenessPenalty:    penalty,
-		StalenessThresholds: stalenessThresholds,
-		HiddenDocTypes:      s.policyDocTypes(func(p models.EffectivePolicy) bool { return !p.DefaultSearch }),
+		TenantIDs:      scope,
+		Embedding:      embedding,
+		Query:          query,
+		Category:       category,
+		Subcategory:    subcategory,
+		DocType:        docType,
+		Limit:          limit,
+		CandidatePool:  s.effectiveCandidatePool(),
+		MMRLambda:      s.effectiveMMRLambda(),
+		HiddenDocTypes: s.policyDocTypes(func(p models.EffectivePolicy) bool { return !p.DefaultSearch }),
 	})
 	if err != nil {
 		return nil, err
 	}
-	// Label each result by its owning tenant and resolve per-tenant staleness
-	// modes in one lookup, then apply staleness under each result's own mode.
-	modeByTenant := s.resolveResultTenants(ctx, results)
-	if s.thresholds != nil {
-		// force_read reveals an expired body only for an admin; a non-admin's
-		// force_read is still audited below but leaves the body withheld.
-		results, err = applyStalenessToSearchResults(ctx, s.thresholds, results, modeByTenant, forceRead && s.isAdmin(ctx))
-		if err != nil {
-			return nil, err
-		}
-	}
+	// Label each result by its owning tenant, then overlay the content/event
+	// needs-verification flag as an advisory status.
+	s.labelResultTenants(ctx, results)
+	applyFlagStatus(results)
 	if forceRead {
 		s.logOverride(ctx, repository.OverrideEvent{
 			TenantID:     auth.TenantIDFromContext(ctx),
@@ -838,9 +799,7 @@ func (s *MemoryService) Search(ctx context.Context, query string, category, subc
 			Reason:       reason,
 		})
 	}
-	// Post-staleness snippet step: rewrites non-withheld content in place. Runs
-	// after withholding so blanked (Content=="") results are excluded by
-	// construction — no withheld body can be reconstructed via ts_headline.
+	// Snippet step: rewrites each result's content in place via ts_headline.
 	if snippet {
 		s.applySnippets(ctx, results, query, scope)
 	}
@@ -1002,10 +961,9 @@ func (s *MemoryService) GetDocument(ctx context.Context, category string, subcat
 	if err != nil {
 		return nil, err
 	}
-	// Staleness + labeling use the doc's OWNING tenant, not the caller's home —
-	// one tenant fetch drives both the mode and the display label.
-	mode, name, typ := s.tenantModeAndLabel(ctx, doc.TenantID)
-	view, err := buildDocumentView(ctx, s.thresholds, doc, mode, forceRead && s.isAdmin(ctx))
+	// Labeling uses the doc's OWNING tenant, not the caller's home.
+	name, typ := s.tenantLabel(ctx, doc.TenantID)
+	view, err := buildDocumentView(s.thresholds, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -1045,10 +1003,9 @@ func (s *MemoryService) GetDocumentByID(ctx context.Context, id uuid.UUID, force
 	if err != nil {
 		return nil, err
 	}
-	// Staleness + labeling use the doc's OWNING tenant, not the caller's home —
-	// one tenant fetch drives both the mode and the display label.
-	mode, name, typ := s.tenantModeAndLabel(ctx, doc.TenantID)
-	view, err := buildDocumentView(ctx, s.thresholds, doc, mode, forceRead && s.isAdmin(ctx))
+	// Labeling uses the doc's OWNING tenant, not the caller's home.
+	name, typ := s.tenantLabel(ctx, doc.TenantID)
+	view, err := buildDocumentView(s.thresholds, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -1123,8 +1080,8 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	if err := s.sections.MarkVerified(ctx, tid, sectionID); err != nil {
 		return err
 	}
-	// An asserted verification is auditable: it unlocks an expired section for
-	// everyone, so record who claimed the content is current.
+	// An asserted verification is auditable: it clears the section's
+	// needs-verification flag, so record who claimed the content is current.
 	secID := sectionID
 	s.logOverride(ctx, repository.OverrideEvent{
 		TenantID:     tid,
@@ -1949,7 +1906,7 @@ func (s *MemoryService) ListDocuments(ctx context.Context, category, subcategory
 
 // labelDocumentTenants fills the display-only TenantName/TenantType on each
 // document from one batched tenant lookup, so browse/list shows the tenant name
-// (not a raw UUID) — parity with search's resolveResultTenants. Best-effort:
+// (not a raw UUID) — parity with search's labelResultTenants. Best-effort:
 // a nil tenant repo or lookup error leaves the labels empty.
 func (s *MemoryService) labelDocumentTenants(ctx context.Context, docs []models.Document) {
 	if len(docs) == 0 || s.tenants == nil {
@@ -2005,24 +1962,15 @@ func (s *MemoryService) ListTenants(ctx context.Context) ([]models.Tenant, error
 }
 
 // applyCreationDefaults stamps the operator-chosen toggle defaults onto a new
-// tenant. GORM emits the model's struct-tag defaults ('advisory'/false/false) for
-// zero-valued fields, silently bypassing the DB column default, so a configured
-// service must write the values explicitly. A zero/invalid StalenessMode means
-// the service was built without wiring config (offline CLI / tests): leave the
-// fields untouched so the model/DB default (upgrade-safe 'advisory') applies.
+// tenant. The live global-config accessor wins when wired; otherwise the
+// construction-time TenantDefaults (offline CLI / tests) apply.
 func (s *MemoryService) applyCreationDefaults(t *models.Tenant) {
-	mode := s.TenantDefaults.StalenessMode
 	guard := s.TenantDefaults.DuplicateGuard
 	scan := s.TenantDefaults.CleanupScanEnabled
 	if s.globalCfg != nil {
-		mode = s.globalCfg.StalenessDefault()
 		guard = s.globalCfg.DuplicateGuardDefault()
 		scan = s.globalCfg.CleanupScanDefault()
 	}
-	if _, ok := models.ValidStalenessModes[mode]; !ok {
-		return
-	}
-	t.StalenessMode = mode
 	t.DuplicateGuard = guard
 	t.CleanupScanEnabled = scan
 }
@@ -3032,7 +2980,6 @@ func (s *MemoryService) ListDocumentGrants(ctx context.Context, docID uuid.UUID)
 type UpdateTenantFields struct {
 	Name               *string
 	Type               *string
-	StalenessMode      *string
 	DuplicateGuard     *bool
 	DuplicateThreshold *float64
 	// ClearDuplicateThreshold clears the per-tenant override to NULL (inherit the
@@ -3058,25 +3005,17 @@ func (s *MemoryService) UpdateTenant(ctx context.Context, id uuid.UUID, fields U
 	return tenant, nil
 }
 
-// UpdateMyTenantSettings edits the caller's OWN tenant's toggles (staleness,
-// duplicate guard, cleanup scan); name/email stay admin-only. A field-less call
-// is a status read and is always allowed. Writes require MANAGE rights (manager)
-// via requireSelfService, NOT bare membership: these toggles arm destructive
-// behavior — staleness_mode="hard" arms the retention sweep that archives then
-// hard-deletes documents — so they are not member-level self-service. A personal
-// tenant's owner still passes (owner ⇒ manager), keeping personal self-service
-// intact; a shared tenant's plain member is refused. This matches the by-id
-// sibling UpdateTenantSettings (also manager). Every call is audited to
-// override_log (compromised-key trail).
-func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) (*models.Tenant, error) {
+// UpdateMyTenantSettings edits the caller's OWN tenant's toggles (duplicate
+// guard, cleanup scan, metrics). A field-less call is a status read (always
+// allowed); a write requires MANAGE rights via requireSelfService and is audited.
+func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) (*models.Tenant, error) {
 	tid := auth.TenantIDFromContext(ctx)
 	if tid == uuid.Nil {
 		return nil, fmt.Errorf("%w: missing tenant ID in context", apperr.ErrInvalidInput)
 	}
 	// No fields = status read: return the current row without touching the DB or
-	// audit log (avoids a "noop" override_log entry and an updated_at bump). A
-	// read is always allowed regardless of the self-service policy.
-	if stalenessMode == nil && duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil && metricsEnabled == nil {
+	// audit log (avoids a "noop" override_log entry and an updated_at bump).
+	if duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil && metricsEnabled == nil {
 		return s.tenants.GetByID(ctx, tid)
 	}
 	// Self-service gate: toggle edits require manager (admin_only escalates to
@@ -3091,7 +3030,6 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 		return nil, err
 	}
 	tenant, err = s.applyTenantPatch(ctx, tid, UpdateTenantFields{
-		StalenessMode:           stalenessMode,
 		DuplicateGuard:          duplicateGuard,
 		DuplicateThreshold:      duplicateThreshold,
 		ClearDuplicateThreshold: clearDuplicateThreshold,
@@ -3107,7 +3045,7 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 		Tool:         models.OverrideToolUpdateMyTenantSettings,
 		TargetID:     &target,
 		OverrideType: models.OverrideTypeSettingsChange,
-		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled, metricsEnabled),
+		Reason:       formatSettingsChange(duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled, metricsEnabled),
 	})
 	return tenant, nil
 }
@@ -3119,14 +3057,14 @@ func (s *MemoryService) UpdateMyTenantSettings(ctx context.Context, stalenessMod
 // a WRITE, gated by the tenant's self-service policy at manager level
 // (requireSelfService: open ⇒ manager, admin_only ⇒ admin, system-admin bypass) —
 // managers manage settings, the lock escalates to admins. Writes are audited.
-func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.UUID, stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) (*models.Tenant, error) {
+func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.UUID, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) (*models.Tenant, error) {
 	tenant, err := s.tenants.GetByID(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	// No fields = settings read: gate on manage rights, populate the derived
 	// effective policy, and return without touching the DB or the audit log.
-	if stalenessMode == nil && duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil && metricsEnabled == nil {
+	if duplicateGuard == nil && duplicateThreshold == nil && !clearDuplicateThreshold && cleanupScanEnabled == nil && metricsEnabled == nil {
 		if !s.CanManageTenant(ctx, tenantID) {
 			return nil, fmt.Errorf("%w: not authorized to view this tenant's settings", apperr.ErrInvalidInput)
 		}
@@ -3138,7 +3076,6 @@ func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.
 		return nil, err
 	}
 	tenant, err = s.applyTenantPatch(ctx, tenantID, UpdateTenantFields{
-		StalenessMode:           stalenessMode,
 		DuplicateGuard:          duplicateGuard,
 		DuplicateThreshold:      duplicateThreshold,
 		ClearDuplicateThreshold: clearDuplicateThreshold,
@@ -3154,18 +3091,15 @@ func (s *MemoryService) UpdateTenantSettings(ctx context.Context, tenantID uuid.
 		Tool:         models.OverrideToolUpdateTenantSettings,
 		TargetID:     &target,
 		OverrideType: models.OverrideTypeSettingsChange,
-		Reason:       formatSettingsChange(stalenessMode, duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled, metricsEnabled),
+		Reason:       formatSettingsChange(duplicateGuard, duplicateThreshold, clearDuplicateThreshold, cleanupScanEnabled, metricsEnabled),
 	})
 	tenant.EffectivePolicy = tenant.EffectiveSelfServicePolicy(s.effectiveSelfServicePolicyDefault())
 	return tenant, nil
 }
 
 // formatSettingsChange renders the patch as a compact override_log.reason string.
-func formatSettingsChange(stalenessMode *string, duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) string {
-	parts := make([]string, 0, 5)
-	if stalenessMode != nil {
-		parts = append(parts, "staleness_mode="+*stalenessMode)
-	}
+func formatSettingsChange(duplicateGuard *bool, duplicateThreshold *float64, clearDuplicateThreshold bool, cleanupScanEnabled *bool, metricsEnabled *bool) string {
+	parts := make([]string, 0, 4)
 	if duplicateGuard != nil {
 		parts = append(parts, fmt.Sprintf("duplicate_guard=%t", *duplicateGuard))
 	}
@@ -3209,10 +3143,6 @@ func (s *MemoryService) applyTenantPatch(ctx context.Context, id uuid.UUID, fiel
 	}
 	if fields.Type != nil {
 		tenant.Type = *fields.Type
-	}
-	if fields.StalenessMode != nil {
-		// Coerce legacy/unknown (incl. off) to the advisory floor rather than reject.
-		tenant.StalenessMode = models.NormalizeStalenessMode(*fields.StalenessMode)
 	}
 	if fields.DuplicateGuard != nil {
 		tenant.DuplicateGuard = *fields.DuplicateGuard
@@ -3490,9 +3420,8 @@ func (s *MemoryService) GetRelated(ctx context.Context, documentID uuid.UUID, li
 }
 
 // labelRelatedResults fills each related result's owning-tenant name/type in ONE
-// lookup over the distinct result tenants (mirrors resolveResultTenants without
-// the staleness overlay — no N+1). Fail-safe: on a lookup miss labels are simply
-// absent, never failing the read on a glitch.
+// lookup over the distinct result tenants (mirrors labelResultTenants — no N+1).
+// Fail-safe: on a lookup miss labels are simply absent, never failing the read.
 func (s *MemoryService) labelRelatedResults(ctx context.Context, results []repository.RelatedResult) {
 	if len(results) == 0 || s.tenants == nil {
 		return

@@ -50,11 +50,9 @@ type SearchResult struct {
 	TenantName string    `json:"tenant_name,omitempty"`
 	TenantType string    `json:"tenant_type,omitempty"`
 
-	// Staleness overlay (set by service layer after fetch, not by SQL).
-	Status        string `json:"status,omitempty"`         // needs_verification (served) | expired (withheld)
-	Preview       string `json:"preview,omitempty"`        // heading-based preview of a withheld body
-	StaleDays     int    `json:"age_days,omitempty"`       // age since verified_at in days
-	ThresholdDays int    `json:"threshold_days,omitempty"` // the tier's threshold in days
+	// Status is the content/event needs_verification overlay (set by the service
+	// layer from FlaggedAt after fetch, not by SQL). Advisory — content is served.
+	Status string `json:"status,omitempty"`
 
 	// SnippetCentered is set only when search ran in snippet mode: true if the
 	// window landed on a real lexical match, false for the leading-text fallback
@@ -77,11 +75,6 @@ type SearchParams struct {
 	// MMRLambda gates optional MMR diversity re-ranking; nil (default) leaves
 	// HybridSearch byte-identical to the plain fused, score-sorted path.
 	MMRLambda *float64
-	// StalenessPenalty (weight in [0,1]; 0=off) down-weights candidates verified
-	// past their doc_type threshold, applied post-fusion/pre-MMR. StalenessThresholds
-	// maps doc_type -> day threshold; a missing entry or nil VerifiedAt = no penalty.
-	StalenessPenalty    float64
-	StalenessThresholds map[string]int
 	// HiddenDocTypes are excluded from an unfiltered query (default_search=false),
 	// suppressed when the caller names a Category or DocType filter (design D7).
 	HiddenDocTypes []string
@@ -140,20 +133,6 @@ type scoredRow struct {
 // rrfContrib is a candidate's Reciprocal Rank Fusion contribution from one list.
 func rrfContrib(rank int) float64 { return 1.0 / float64(rrfK+rank) }
 
-// stalenessFactor down-weights a candidate verified past its doc_type threshold:
-// 1.0 within threshold, a linear ramp to a clamped floor of 1-weight at >= 2x the
-// threshold. weight<=0 or thresholdDays<=0 disables it (identity).
-func stalenessFactor(ageDays, thresholdDays int, weight float64) float64 {
-	if weight <= 0 || thresholdDays <= 0 || ageDays <= thresholdDays {
-		return 1.0
-	}
-	over := float64(ageDays-thresholdDays) / float64(thresholdDays)
-	if over > 1 {
-		over = 1
-	}
-	return 1 - weight*over
-}
-
 // rrfRanks reconstructs a list's 1-based native ranks from the raw scores the SQL
 // already returned: rows matching `has`, ordered by `val` desc (stable), keyed by
 // SectionID.
@@ -201,9 +180,7 @@ func fusionTier(r hybridRow, vecRank, lexRank, poolSize int) string {
 // fuseHybridScored fuses the semantic and lexical lists by Reciprocal Rank Fusion,
 // gates vector-only noise, tiers by match structure, sorts desc — UNTRUNCATED.
 // Returns results with embeddings aligned 1:1 (gated rows dropped) for applyMMR.
-// Stale candidates are down-weighted (weight+thresholds) before the sort so both
-// the MMR and MMR-off paths consume correctly-ordered penalized scores.
-func fuseHybridScored(rows []hybridRow, poolSize int, weight float64, thresholds map[string]int) ([]SearchResult, []pgvector.Vector) {
+func fuseHybridScored(rows []hybridRow, poolSize int) ([]SearchResult, []pgvector.Vector) {
 	kept := make([]hybridRow, 0, len(rows))
 	for _, r := range rows {
 		// Gate distant semantic-only neighbours; both-list and lexical-only survive.
@@ -225,13 +202,6 @@ func fuseHybridScored(rows []hybridRow, poolSize int, weight float64, thresholds
 		}
 		if r.HasLex {
 			score += rrfContrib(lr)
-		}
-		// Down-weight stale candidates on the fused score, pre-sort.
-		if weight > 0 && r.VerifiedAt != nil {
-			if td, ok := thresholds[r.DocType]; ok && td > 0 {
-				ageDays := int(time.Since(*r.VerifiedAt).Hours() / 24)
-				score *= stalenessFactor(ageDays, td, weight)
-			}
 		}
 		scored[i] = scoredRow{
 			result: SearchResult{
@@ -276,8 +246,8 @@ func fuseHybridScored(rows []hybridRow, poolSize int, weight float64, thresholds
 
 // fuseHybrid is the plain fuse-then-truncate path (MMR off) — a thin wrapper
 // around fuseHybridScored that keeps its own signature stable for callers.
-func fuseHybrid(rows []hybridRow, limit, poolSize int, weight float64, thresholds map[string]int) []SearchResult {
-	out, _ := fuseHybridScored(rows, poolSize, weight, thresholds)
+func fuseHybrid(rows []hybridRow, limit, poolSize int) []SearchResult {
+	out, _ := fuseHybridScored(rows, poolSize)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -476,9 +446,9 @@ func (r *SectionRepository) HybridSearch(ctx context.Context, p SearchParams) ([
 		return nil, fmt.Errorf("hybrid search: %w", err)
 	}
 	if p.MMRLambda == nil {
-		return fuseHybrid(rows, p.Limit, pool, p.StalenessPenalty, p.StalenessThresholds), nil
+		return fuseHybrid(rows, p.Limit, pool), nil
 	}
-	scored, embs := fuseHybridScored(rows, pool, p.StalenessPenalty, p.StalenessThresholds)
+	scored, embs := fuseHybridScored(rows, pool)
 	return applyMMR(scored, embs, *p.MMRLambda, p.Limit, pool), nil
 }
 
@@ -740,52 +710,41 @@ func (r *SectionRepository) FlagChangedPaths(ctx context.Context, tenantID uuid.
 	return res.RowsAffected, nil
 }
 
-// StalenessCount is one gauge cell: the current count of stale (or expired)
-// sections for a tenant × doc_type, feeding the metrics gauges.
-type StalenessCount struct {
+// GaugeCount is one gauge cell: a per tenant × doc_type count feeding the metrics
+// gauges (flagged sections, archived documents).
+type GaugeCount struct {
 	TenantID uuid.UUID `json:"tenant_id"`
 	DocType  string    `json:"doc_type"`
 	Count    int64     `json:"count"`
 }
 
-// CountStaleByTenant counts, per tenant × doc_type, live sections whose age
-// (NOW − COALESCE(verified_at, created_at)) exceeds the doc_type's verification
-// window. days maps doc_type→verification_age_days; non-positive windows are skipped.
-func (r *SectionRepository) CountStaleByTenant(ctx context.Context, days map[string]int) ([]StalenessCount, error) {
-	return r.countAgedSections(ctx, days, false)
-}
-
-// CountExpiredByTenant counts the same over each doc_type's expiration window, but
-// only for hard-mode tenants — matching read-time withholding (expired is hard-only).
-func (r *SectionRepository) CountExpiredByTenant(ctx context.Context, days map[string]int) ([]StalenessCount, error) {
-	return r.countAgedSections(ctx, days, true)
-}
-
-// countAgedSections runs one grouped COUNT per doc_type window. Stale counts raw
-// corpus health across all tenants (usable on the default off-mode); hardOnly
-// restricts to hard-mode tenants (the expired gauge, matching read-gating).
-func (r *SectionRepository) countAgedSections(ctx context.Context, days map[string]int, hardOnly bool) ([]StalenessCount, error) {
-	out := make([]StalenessCount, 0, len(days))
-	for docType, d := range days {
-		if d <= 0 {
-			continue
-		}
-		q := r.db.WithContext(ctx).
-			Table("sections AS s").
-			Select("doc.tenant_id AS tenant_id, doc.doc_type AS doc_type, COUNT(*) AS count").
-			Joins("JOIN documents doc ON doc.id = s.document_id")
-		if hardOnly {
-			q = q.Joins("JOIN tenants t ON t.id = doc.tenant_id AND t.staleness_mode = ?", models.StalenessModeHard)
-		}
-		var rows []StalenessCount
-		if err := q.
-			Where("doc.doc_type = ? AND doc.archived_at IS NULL", docType).
-			Where("NOW() - COALESCE(s.verified_at, s.created_at) > make_interval(days => ?)", d).
-			Group("doc.tenant_id, doc.doc_type").
-			Scan(&rows).Error; err != nil {
-			return nil, fmt.Errorf("count aged sections (%s): %w", docType, err)
-		}
-		out = append(out, rows...)
+// CountFlaggedByTenant counts, per tenant × doc_type, live sections carrying the
+// content/event needs-verification flag (flagged_at IS NOT NULL).
+func (r *SectionRepository) CountFlaggedByTenant(ctx context.Context) ([]GaugeCount, error) {
+	var rows []GaugeCount
+	if err := r.db.WithContext(ctx).
+		Table("sections AS s").
+		Select("doc.tenant_id AS tenant_id, doc.doc_type AS doc_type, COUNT(*) AS count").
+		Joins("JOIN documents doc ON doc.id = s.document_id").
+		Where("s.flagged_at IS NOT NULL AND doc.archived_at IS NULL").
+		Group("doc.tenant_id, doc.doc_type").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("count flagged sections: %w", err)
 	}
-	return out, nil
+	return rows, nil
+}
+
+// CountArchivedByTenant counts, per tenant × doc_type, archived documents
+// (archived_at IS NOT NULL).
+func (r *SectionRepository) CountArchivedByTenant(ctx context.Context) ([]GaugeCount, error) {
+	var rows []GaugeCount
+	if err := r.db.WithContext(ctx).
+		Table("documents AS doc").
+		Select("doc.tenant_id AS tenant_id, doc.doc_type AS doc_type, COUNT(*) AS count").
+		Where("doc.archived_at IS NOT NULL").
+		Group("doc.tenant_id, doc.doc_type").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("count archived documents: %w", err)
+	}
+	return rows, nil
 }

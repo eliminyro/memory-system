@@ -230,11 +230,11 @@ func TestPersonalAdminBackfillsToOwner(t *testing.T) {
 	}
 
 	// Run the migration (owner backfill + idempotent authz backfill).
-	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()))
+	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()))
 	assertConverted()
 
 	// Re-run is a no-op: still owner on personal, still admin on shared.
-	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()))
+	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()))
 	assertConverted()
 }
 
@@ -264,9 +264,9 @@ func TestResidualSvcSystemAdminCleanup(t *testing.T) {
 		requireNoTuple(t, store, authzseed.SystemAdmin(authz.ServicePrincipalID(ordinary.ID.String()))) // dangling → deleted
 	}
 
-	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()))
+	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()))
 	assertCleaned()
 	// Idempotent.
-	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{StalenessMode: "off"}, database.BaselineGlobalConfigDefaults()))
+	require.NoError(t, database.Migrate(db, "fake", "fake", fakeDim, database.TenantColumnDefaults{}, database.BaselineGlobalConfigDefaults()))
 	assertCleaned()
 }

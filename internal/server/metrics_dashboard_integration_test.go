@@ -17,7 +17,6 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
-	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 // metricsSummaryResp mirrors the JSON of service.DashboardSummary for decoding.
@@ -51,9 +50,7 @@ func newMetricsHandler(t *testing.T) (*apiHandler, context.Context, context.Cont
 		store,
 	)
 	events := repository.NewMetricEventRepository(db)
-	ps := staleness.NewPolicyStore(db)
-	require.NoError(t, ps.Load(context.Background()))
-	h := &apiHandler{memory: svc, metrics: service.NewMetricsService(events, repository.NewSectionRepository(db), ps)}
+	h := &apiHandler{memory: svc, metrics: service.NewMetricsService(events, repository.NewSectionRepository(db))}
 	return h, auth.WithLocalAdmin(context.Background()), userCtx(uuid.New(), "nobody-"+uuid.NewString()), events
 }
 

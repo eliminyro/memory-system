@@ -82,21 +82,20 @@ const (
 
 // DocTypePolicy is one row of doc_type_policies. Scalar rules are nullable: NULL
 // means "inherit from the reference row", kept distinct from a set value (e.g.
-// verification_age_days 0 = never nudge). rules holds non-scalar/experimental rules.
+// expiration_age_days 0 = never expire). rules holds non-scalar/experimental rules.
 type DocTypePolicy struct {
-	DocType             string           `gorm:"size:32;primaryKey" json:"doc_type"`
-	VerificationAgeDays *int             `json:"verification_age_days"`
-	ExpirationAgeDays   *int             `json:"expiration_age_days"`
-	DuplicateGuard      *bool            `json:"duplicate_guard"`
-	CleanupScan         *bool            `json:"cleanup_scan"`
-	LintStaleCheck      *bool            `json:"lint_stale_check"`
-	Embed               *bool            `json:"embed"`
-	DefaultSearch       *bool            `json:"default_search"`
-	Prunable            *bool            `json:"prunable"`
-	WriteMode           *WriteMode       `gorm:"size:16" json:"write_mode"`
-	SlugFormat          *SlugFormat      `gorm:"size:16" json:"slug_format"`
-	Subcategory         *SubcategoryRule `gorm:"size:16" json:"subcategory"`
-	Rules               datatypes.JSON   `gorm:"type:jsonb;not null;default:'{}'" json:"rules"`
+	DocType           string           `gorm:"size:32;primaryKey" json:"doc_type"`
+	ExpirationAgeDays *int             `json:"expiration_age_days"`
+	DuplicateGuard    *bool            `json:"duplicate_guard"`
+	CleanupScan       *bool            `json:"cleanup_scan"`
+	LintStaleCheck    *bool            `json:"lint_stale_check"`
+	Embed             *bool            `json:"embed"`
+	DefaultSearch     *bool            `json:"default_search"`
+	Prunable          *bool            `json:"prunable"`
+	WriteMode         *WriteMode       `gorm:"size:16" json:"write_mode"`
+	SlugFormat        *SlugFormat      `gorm:"size:16" json:"slug_format"`
+	Subcategory       *SubcategoryRule `gorm:"size:16" json:"subcategory"`
+	Rules             datatypes.JSON   `gorm:"type:jsonb;not null;default:'{}'" json:"rules"`
 }
 
 func (DocTypePolicy) TableName() string { return "doc_type_policies" }
@@ -122,30 +121,30 @@ func scptr(s SubcategoryRule) *SubcategoryRule { return &s }
 // non-prunable; journal/handoff are perishable with a fixed expiration_age_days.
 var DefaultDocTypePolicies = []DocTypePolicy{
 	{
-		DocType: DocTypeReference, VerificationAgeDays: iptr(90),
+		DocType:        DocTypeReference,
 		DuplicateGuard: bptr(true), CleanupScan: bptr(true), LintStaleCheck: bptr(true),
 		Embed: bptr(true), DefaultSearch: bptr(true), Prunable: bptr(false),
 		WriteMode: wmptr(WriteModeReplace), SlugFormat: sfptr(SlugFormatAny), Subcategory: scptr(SubcategoryOptional),
 	},
-	{DocType: DocTypeProjectState, VerificationAgeDays: iptr(14)},
-	{DocType: DocTypeAudit, VerificationAgeDays: iptr(30)},
-	{DocType: DocTypeLearning, VerificationAgeDays: iptr(180)},
-	{DocType: DocTypePreference, VerificationAgeDays: iptr(365)},
-	{DocType: DocTypeTool, VerificationAgeDays: iptr(90)},
+	{DocType: DocTypeProjectState},
+	{DocType: DocTypeAudit},
+	{DocType: DocTypeLearning},
+	{DocType: DocTypePreference},
+	{DocType: DocTypeTool},
 	{
-		DocType: DocTypeJournal, VerificationAgeDays: iptr(0),
+		DocType:        DocTypeJournal,
 		DuplicateGuard: bptr(false), CleanupScan: bptr(false), LintStaleCheck: bptr(false), DefaultSearch: bptr(false),
 		Prunable: bptr(true), ExpirationAgeDays: iptr(30),
 		WriteMode: wmptr(WriteModeMergeSections), SlugFormat: sfptr(SlugFormatDate), Subcategory: scptr(SubcategoryForbidden),
 	},
 	{
-		DocType: DocTypeHandoff, VerificationAgeDays: iptr(0),
+		DocType:        DocTypeHandoff,
 		DuplicateGuard: bptr(false), CleanupScan: bptr(false), LintStaleCheck: bptr(false), DefaultSearch: bptr(false),
 		Prunable: bptr(true), ExpirationAgeDays: iptr(90), Subcategory: scptr(SubcategoryRequired),
 		Rules: datatypes.JSON([]byte(`{"chain_previous":{"scope":"subcategory","edge_type":"continues_from"}}`)),
 	},
 	{
-		DocType: DocTypePrompt, VerificationAgeDays: iptr(0),
+		DocType:        DocTypePrompt,
 		DuplicateGuard: bptr(false), CleanupScan: bptr(false), LintStaleCheck: bptr(false),
 		Prunable: bptr(false), Embed: bptr(false), DefaultSearch: bptr(false),
 		WriteMode: wmptr(WriteModeReplace), Subcategory: scptr(SubcategoryRequired),
@@ -163,19 +162,18 @@ type ChainPrevious struct {
 // the in-memory value every mechanism reads. RawRules carries the JSONB verbatim
 // so lint can flag keys the server does not implement.
 type EffectivePolicy struct {
-	VerificationAgeDays int
-	ExpirationAgeDays   int
-	DuplicateGuard      bool
-	CleanupScan         bool
-	LintStaleCheck      bool
-	Embed               bool
-	DefaultSearch       bool
-	Prunable            bool
-	WriteMode           WriteMode
-	SlugFormat          SlugFormat
-	Subcategory         SubcategoryRule
-	ChainPrevious       *ChainPrevious
-	RawRules            map[string]json.RawMessage
+	ExpirationAgeDays int
+	DuplicateGuard    bool
+	CleanupScan       bool
+	LintStaleCheck    bool
+	Embed             bool
+	DefaultSearch     bool
+	Prunable          bool
+	WriteMode         WriteMode
+	SlugFormat        SlugFormat
+	Subcategory       SubcategoryRule
+	ChainPrevious     *ChainPrevious
+	RawRules          map[string]json.RawMessage
 }
 
 // KnownRuleKeys are the rules JSONB keys the server implements; anything else is
@@ -199,7 +197,7 @@ func mustResolveDefaults() map[string]EffectivePolicy {
 // so knowledge is non-prunable here too.
 func DefaultEffectivePolicy() EffectivePolicy {
 	return EffectivePolicy{
-		VerificationAgeDays: 90, DuplicateGuard: true, CleanupScan: true, LintStaleCheck: true,
+		DuplicateGuard: true, CleanupScan: true, LintStaleCheck: true,
 		Embed: true, DefaultSearch: true, Prunable: false,
 		WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional,
 	}
@@ -222,15 +220,8 @@ func ValidateEffective(docType string, eff EffectivePolicy) error {
 	if _, ok := validSubcategoryRules[eff.Subcategory]; !ok {
 		return fmt.Errorf("doc_type %q: invalid subcategory %q", docType, eff.Subcategory)
 	}
-	if eff.VerificationAgeDays < 0 {
-		return fmt.Errorf("doc_type %q: verification_age_days must be >= 0, got %d", docType, eff.VerificationAgeDays)
-	}
 	if eff.ExpirationAgeDays < 0 {
 		return fmt.Errorf("doc_type %q: expiration_age_days must be >= 0, got %d", docType, eff.ExpirationAgeDays)
-	}
-	// 0 disables expiration; when set it must not sit below the verification age.
-	if eff.ExpirationAgeDays != 0 && eff.ExpirationAgeDays < eff.VerificationAgeDays {
-		return fmt.Errorf("doc_type %q: expiration_age_days (%d) must be >= verification_age_days (%d)", docType, eff.ExpirationAgeDays, eff.VerificationAgeDays)
 	}
 	if eff.DefaultSearch && !eff.Embed {
 		return fmt.Errorf("doc_type %q: default_search requires embed (nothing to rank without a vector)", docType)
@@ -274,8 +265,6 @@ func effectiveFromReference(ref DocTypePolicy) (EffectivePolicy, error) {
 		return EffectivePolicy{}, fmt.Errorf("reference row must set %s (nothing to inherit from)", field)
 	}
 	switch {
-	case ref.VerificationAgeDays == nil:
-		return missing("verification_age_days")
 	case ref.DuplicateGuard == nil:
 		return missing("duplicate_guard")
 	case ref.CleanupScan == nil:
@@ -296,26 +285,22 @@ func effectiveFromReference(ref DocTypePolicy) (EffectivePolicy, error) {
 		return missing("subcategory")
 	}
 	return resolveRow(ref, EffectivePolicy{
-		VerificationAgeDays: *ref.VerificationAgeDays,
-		ExpirationAgeDays:   ptrOrZero(ref.ExpirationAgeDays),
-		DuplicateGuard:      *ref.DuplicateGuard,
-		CleanupScan:         *ref.CleanupScan,
-		LintStaleCheck:      *ref.LintStaleCheck,
-		Embed:               *ref.Embed,
-		DefaultSearch:       *ref.DefaultSearch,
-		Prunable:            *ref.Prunable,
-		WriteMode:           *ref.WriteMode,
-		SlugFormat:          *ref.SlugFormat,
-		Subcategory:         *ref.Subcategory,
+		ExpirationAgeDays: ptrOrZero(ref.ExpirationAgeDays),
+		DuplicateGuard:    *ref.DuplicateGuard,
+		CleanupScan:       *ref.CleanupScan,
+		LintStaleCheck:    *ref.LintStaleCheck,
+		Embed:             *ref.Embed,
+		DefaultSearch:     *ref.DefaultSearch,
+		Prunable:          *ref.Prunable,
+		WriteMode:         *ref.WriteMode,
+		SlugFormat:        *ref.SlugFormat,
+		Subcategory:       *ref.Subcategory,
 	})
 }
 
 // resolveRow overlays a row's set scalars on base and parses its rules JSONB.
 func resolveRow(r DocTypePolicy, base EffectivePolicy) (EffectivePolicy, error) {
 	eff := base
-	if r.VerificationAgeDays != nil {
-		eff.VerificationAgeDays = *r.VerificationAgeDays
-	}
 	if r.ExpirationAgeDays != nil {
 		eff.ExpirationAgeDays = *r.ExpirationAgeDays
 	}

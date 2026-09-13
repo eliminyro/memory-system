@@ -106,7 +106,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "mark_verified",
-		Description: "Mark a section as verified against current source. Use AFTER confirming a stale claim is still accurate (or after updating the content). Resets the freshness clock: clears the needs_verification nudge and unlocks an expired section for all callers. Audited.",
+		Description: "Mark a section as verified against current source. Use AFTER confirming a flagged claim is still accurate (or after updating the content). Clears the section's needs_verification flag for all callers. Audited.",
 	}, s.MarkVerified)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -131,7 +131,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "update_my_tenant_settings",
-		Description: "Read or update feature toggles on your own tenant: staleness_mode (advisory|hard), duplicate_guard (bool), cleanup_scan_enabled (bool), metrics_enabled (bool). Any field you omit stays unchanged; omit all for a status read. staleness_mode is a recall-time signal only — advisory = warn in the response, hard = withhold a stale record's content until it is re-verified; neither deletes nor archives. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies), so a plain member of a shared tenant is refused.",
+		Description: "Read or update feature toggles on your own tenant: duplicate_guard (bool), cleanup_scan_enabled (bool), metrics_enabled (bool). Any field you omit stays unchanged; omit all for a status read. Editing requires MANAGE rights (tenant manager; a personal tenant's owner qualifies), so a plain member of a shared tenant is refused.",
 	}, s.UpdateMyTenantSettings)
 }
 
@@ -143,7 +143,7 @@ type SearchMemoryInput struct {
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Filter by subcategory: go, infrastructure, hilo, etc."`
 	DocType     *string `json:"doc_type,omitempty" jsonschema:"Filter by document type: project_state, audit, learning, preference, tool, reference, journal"`
 	Limit       int     `json:"limit,omitempty" jsonschema:"Max results (default 10)"`
-	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Admin-only break-glass: peek an expired section once without resetting its clock (non-admins stay withheld — use mark_verified to unlock). Requires reason. Audited in override_log."`
+	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Audited read override, recorded in override_log. Requires reason. Content is never withheld, so this only records the access."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	TenantID    *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 	Snippet     bool    `json:"snippet,omitempty" jsonschema:"Return a short match-centered snippet of each result's content instead of the full section; use get_document for full text. Default false."`
@@ -153,7 +153,7 @@ type GetDocumentInput struct {
 	Category    string  `json:"category" jsonschema:"Document category"`
 	Subcategory *string `json:"subcategory,omitempty" jsonschema:"Document subcategory"`
 	Slug        string  `json:"slug" jsonschema:"Document slug"`
-	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Admin-only break-glass: peek an expired section once without resetting its clock (non-admins stay withheld — use mark_verified to unlock). Requires reason. Audited in override_log."`
+	ForceRead   bool    `json:"force_read,omitempty" jsonschema:"Audited read override, recorded in override_log. Requires reason. Content is never withheld, so this only records the access."`
 	Reason      string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	Expand      bool    `json:"expand,omitempty" jsonschema:"Resolve this document's outgoing 'includes' edges and return the assembled documents plus a resolution manifest. Off by default."`
 	Scope       string  `json:"scope,omitempty" jsonschema:"Read-time scope for conditional includes: a whitespace-separated set of tokens. An included document whose scope is non-empty resolves when any token matches any of its patterns via a hierarchical '/'-glob ('**' crosses segments, '*' within one; exact wins). Ignored unless expand is set."`
@@ -162,7 +162,7 @@ type GetDocumentInput struct {
 
 type GetDocumentByIDInput struct {
 	DocumentID string  `json:"document_id" jsonschema:"Document UUID"`
-	ForceRead  bool    `json:"force_read,omitempty" jsonschema:"Admin-only break-glass: peek an expired section once without resetting its clock (non-admins stay withheld — use mark_verified to unlock). Requires reason. Audited in override_log."`
+	ForceRead  bool    `json:"force_read,omitempty" jsonschema:"Audited read override, recorded in override_log. Requires reason. Content is never withheld, so this only records the access."`
 	Reason     string  `json:"reason,omitempty" jsonschema:"Required when force_read=true. Brief explanation of why the override is justified."`
 	Expand     bool    `json:"expand,omitempty" jsonschema:"Resolve this document's outgoing 'includes' edges and return the assembled documents plus a resolution manifest. Off by default."`
 	Scope      string  `json:"scope,omitempty" jsonschema:"Read-time scope for conditional includes: a whitespace-separated set of tokens. An included document whose scope is non-empty resolves when any token matches any of its patterns via a hierarchical '/'-glob ('**' crosses segments, '*' within one; exact wins). Ignored unless expand is set."`
@@ -206,7 +206,6 @@ type MergeDocumentsInput struct {
 }
 
 type UpdateMyTenantSettingsInput struct {
-	StalenessMode      *string  `json:"staleness_mode,omitempty" jsonschema:"Enforcement level: advisory | hard"`
 	DuplicateGuard     *bool    `json:"duplicate_guard,omitempty" jsonschema:"When true, store_memory refuses near-duplicate content"`
 	DuplicateThreshold *float64 `json:"duplicate_threshold,omitempty" jsonschema:"Near-duplicate cutoff override, 0<v<=1; omit to inherit the global default"`
 	CleanupScanEnabled *bool    `json:"cleanup_scan_enabled,omitempty" jsonschema:"When true, this tenant is included in the nightly near-duplicate scan"`
@@ -486,7 +485,7 @@ func (s *Server) MarkCleanupDone(ctx context.Context, _ *mcpsdk.CallToolRequest,
 }
 
 func (s *Server) UpdateMyTenantSettings(ctx context.Context, _ *mcpsdk.CallToolRequest, input UpdateMyTenantSettingsInput) (*mcpsdk.CallToolResult, any, error) {
-	tenant, err := s.memory.UpdateMyTenantSettings(ctx, input.StalenessMode, input.DuplicateGuard, input.DuplicateThreshold, false, input.CleanupScanEnabled, input.MetricsEnabled)
+	tenant, err := s.memory.UpdateMyTenantSettings(ctx, input.DuplicateGuard, input.DuplicateThreshold, false, input.CleanupScanEnabled, input.MetricsEnabled)
 	if err != nil {
 		return toolErr("update my tenant settings", err)
 	}

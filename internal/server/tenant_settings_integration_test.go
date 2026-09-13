@@ -35,23 +35,20 @@ func TestTenantSettings_ManagerReadAndWrite(t *testing.T) {
 	var got tenantSettingsResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, tenant.ID, got.ID)
-	require.Equal(t, models.StalenessModeAdvisory, got.StalenessMode)
 	require.Equal(t, models.SelfServicePolicyOpen, got.EffectiveSelfServicePolicy)
 
 	recW := httptest.NewRecorder()
 	f.h.mux().ServeHTTP(recW, ctxJSONReq(http.MethodPatch, base, userCtx(tenant.ID, subj), map[string]any{
-		"staleness_mode": models.StalenessModeAdvisory, "duplicate_guard": true,
+		"duplicate_guard": true,
 	}))
 	require.Equal(t, http.StatusOK, recW.Code, recW.Body.String())
 	var updated tenantSettingsResponse
 	require.NoError(t, json.Unmarshal(recW.Body.Bytes(), &updated))
-	require.Equal(t, models.StalenessModeAdvisory, updated.StalenessMode)
 	require.True(t, updated.DuplicateGuard)
 
 	// Persisted: an admin read-back reflects the change.
-	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, nil, false, nil, nil)
+	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, false, nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, models.StalenessModeAdvisory, persisted.StalenessMode)
 	require.True(t, persisted.DuplicateGuard)
 }
 
@@ -71,7 +68,7 @@ func TestTenantSettings_MetricsEnabledThroughSelfService(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.True(t, got.MetricsEnabled)
 
-	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, nil, false, nil, nil)
+	persisted, err := f.svc.UpdateTenantSettings(f.adminCtx, tenant.ID, nil, nil, false, nil, nil)
 	require.NoError(t, err)
 	require.True(t, persisted.MetricsEnabled)
 
@@ -152,14 +149,14 @@ func TestTenantSettings_AdminOnlyLock(t *testing.T) {
 	// Write refused: the lock escalates the gate to admin.
 	recW := httptest.NewRecorder()
 	f.h.mux().ServeHTTP(recW, ctxJSONReq(http.MethodPatch, base, userCtx(tenant.ID, mgr), map[string]any{
-		"staleness_mode": models.StalenessModeHard,
+		"duplicate_guard": true,
 	}))
 	require.Equal(t, http.StatusBadRequest, recW.Code, recW.Body.String())
 
 	// System admin still allowed.
 	recAdm := httptest.NewRecorder()
 	f.h.mux().ServeHTTP(recAdm, ctxJSONReq(http.MethodPatch, base, adminReqCtx(tenant.ID), map[string]any{
-		"staleness_mode": models.StalenessModeHard,
+		"duplicate_guard": true,
 	}))
 	require.Equal(t, http.StatusOK, recAdm.Code, recAdm.Body.String())
 }

@@ -136,11 +136,9 @@ func armBootstrapToken(hasAdmin bool, logger *slog.Logger) (string, error) {
 func globalConfigSeed(cfg *config.Config) database.GlobalConfigDefaults {
 	return database.GlobalConfigDefaults{
 		MMRLambda:             cfg.MMRLambda,
-		StalenessPenalty:      cfg.StalenessPenalty,
 		CandidatePool:         cfg.CandidatePool,
 		SnippetChars:          cfg.SnippetChars,
 		HistoryRetentionDays:  cfg.HistoryRetentionDays,
-		StalenessDefault:      cfg.TenantDefaults.StalenessMode,
 		DuplicateGuardDefault: cfg.TenantDefaults.DuplicateGuard,
 		CleanupScanDefault:    cfg.TenantDefaults.CleanupScanEnabled,
 		DuplicateThreshold:    0.85, // global default (design)
@@ -173,8 +171,8 @@ func applyLogLevel(lv *slog.LevelVar, name string) {
 
 func main() {
 	// --opts overrides MEMORY_DEFAULT_OPTS. Format:
-	//   --opts staleness=off,duplicate_guard=false,cleanup_scan_enabled=false
-	optsFlag := flag.String("opts", "", "tenant-toggle defaults (key=value,...): staleness, duplicate_guard, cleanup_scan_enabled")
+	//   --opts duplicate_guard=false,cleanup_scan_enabled=false
+	optsFlag := flag.String("opts", "", "tenant-toggle defaults (key=value,...): duplicate_guard, cleanup_scan_enabled")
 	flag.Parse()
 
 	cfg, err := config.Load()
@@ -205,7 +203,6 @@ func main() {
 	}
 
 	if err := database.Migrate(db, cfg.EmbeddingProvider, cfg.EmbeddingModel(), cfg.EmbeddingDimensions, database.TenantColumnDefaults{
-		StalenessMode:      cfg.TenantDefaults.StalenessMode,
 		DuplicateGuard:     cfg.TenantDefaults.DuplicateGuard,
 		CleanupScanEnabled: cfg.TenantDefaults.CleanupScanEnabled,
 	}, globalConfigSeed(cfg)); err != nil {
@@ -239,8 +236,8 @@ func main() {
 	policyStore := staleness.NewPolicyStore(db)
 
 	// Read-only metrics aggregator behind GET /api/admin/metrics: event-log
-	// counters + live stale/expired gauges from the effective policy windows.
-	metricsSvc := service.NewMetricsService(metricEventRepo, sectionRepo, policyStore)
+	// counters + live flagged/archived gauges.
+	metricsSvc := service.NewMetricsService(metricEventRepo, sectionRepo)
 
 	// Config-invalidation listener: LISTEN must be established (both channels
 	// registered) BEFORE the initial loads below, so a change committed during
