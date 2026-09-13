@@ -23,3 +23,17 @@ func TestBuildRetentionCutoffs(t *testing.T) {
 
 	require.Equal(t, map[string]int{"journal": 30, "handoff": 90}, cutoffs)
 }
+
+// TestBuildArchiveCutoffs is the archive mirror: a NON-prunable doc_type with a
+// positive expiration_age_days yields that grace window; prunable or disabled
+// (0) types are omitted, so they never archive.
+func TestBuildArchiveCutoffs(t *testing.T) {
+	cutoffs := repository.BuildArchiveCutoffs(map[string]models.EffectivePolicy{
+		"reference": {Prunable: false, ExpirationAgeDays: 30},
+		"learning":  {Prunable: false, ExpirationAgeDays: 30},
+		"prompt":    {Prunable: false, ExpirationAgeDays: 0}, // non-prunable but disabled
+		"journal":   {Prunable: true, ExpirationAgeDays: 30}, // prunable → omitted
+	})
+
+	require.Equal(t, map[string]int{"reference": 30, "learning": 30}, cutoffs)
+}

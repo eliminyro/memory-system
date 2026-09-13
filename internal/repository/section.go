@@ -748,3 +748,33 @@ func (r *SectionRepository) CountArchivedByTenant(ctx context.Context) ([]GaugeC
 	}
 	return rows, nil
 }
+
+// soonWindowDays is how close to its archive point a flagged section must be to
+// count in the soon gauge (matches the doc view's "expire within 7 days" warning).
+const soonWindowDays = 7
+
+// CountSoonByTenant counts, per tenant × doc_type, live flagged sections whose
+// archive point (flagged_at + grace) falls within the next soonWindowDays. cutoffs
+// maps a non-prunable doc_type to its expiration_age_days grace.
+func (r *SectionRepository) CountSoonByTenant(ctx context.Context, cutoffs map[string]int) ([]GaugeCount, error) {
+	var out []GaugeCount
+	for docType, days := range cutoffs {
+		if days <= 0 {
+			continue
+		}
+		var rows []GaugeCount
+		if err := r.db.WithContext(ctx).
+			Table("sections AS s").
+			Select("doc.tenant_id AS tenant_id, doc.doc_type AS doc_type, COUNT(*) AS count").
+			Joins("JOIN documents doc ON doc.id = s.document_id").
+			Where("doc.doc_type = ? AND doc.archived_at IS NULL AND s.flagged_at IS NOT NULL", docType).
+			Where("s.flagged_at + make_interval(days => ?) > NOW()", days).
+			Where("s.flagged_at + make_interval(days => ?) - make_interval(days => ?) <= NOW()", days, soonWindowDays).
+			Group("doc.tenant_id, doc.doc_type").
+			Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("count soon sections (%s): %w", docType, err)
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}

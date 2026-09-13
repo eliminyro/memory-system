@@ -2043,13 +2043,11 @@ async function renderMetrics(days = 30) {
   const countRows = (m.counts || []).map((c) => [mShortId(c.tenant_id), c.doc_type, c.event_type, c.count]);
   const gauges = new Map();
   const gkey = (g) => g.tenant_id + "|" + g.doc_type;
-  for (const g of (m.flagged_sections || [])) gauges.set(gkey(g), { t: g.tenant_id, dt: g.doc_type, flagged: g.count, archived: 0 });
-  for (const g of (m.archived_documents || [])) {
-    const e = gauges.get(gkey(g)) || { t: g.tenant_id, dt: g.doc_type, flagged: 0, archived: 0 };
-    e.archived = g.count;
-    gauges.set(gkey(g), e);
-  }
-  const gaugeRows = [...gauges.values()].map((g) => [mShortId(g.t), g.dt, g.flagged, g.archived]);
+  const gget = (g) => gauges.get(gkey(g)) || { t: g.tenant_id, dt: g.doc_type, flagged: 0, soon: 0, archived: 0 };
+  for (const g of (m.flagged_sections || [])) { const e = gget(g); e.flagged = g.count; gauges.set(gkey(g), e); }
+  for (const g of (m.soon_sections || [])) { const e = gget(g); e.soon = g.count; gauges.set(gkey(g), e); }
+  for (const g of (m.archived_documents || [])) { const e = gget(g); e.archived = g.count; gauges.set(gkey(g), e); }
+  const gaugeRows = [...gauges.values()].map((g) => [mShortId(g.t), g.dt, g.flagged, g.soon, g.archived]);
   const topRows = (m.top_accessed || []).map((d) => [
     { text: d.title || d.path || String(d.doc_id).slice(0, 8), title: d.path || String(d.doc_id) },
     d.doc_type, mShortId(d.tenant_id), d.count,
@@ -2058,7 +2056,7 @@ async function renderMetrics(days = 30) {
   const panels = el("div", { className: "config-panels" });
   panels.append(
     panel("Event counts", "var(--accent)", "over the window", mTable(["Tenant", "Doc type", "Event", "Count"], countRows, "No events recorded in this window.")),
-    panel("Liveness gauges", "var(--warn)", "live", mTable(["Tenant", "Doc type", "Flagged", "Archived"], gaugeRows, "No flagged sections or archived documents.")),
+    panel("Liveness gauges", "var(--warn)", "live", mTable(["Tenant", "Doc type", "Flagged", "Soon", "Archived"], gaugeRows, "No flagged sections or archived documents.")),
     panel("Top accessed", "var(--cool)", "from the event log", mTable(["Document", "Doc type", "Tenant", "Accesses"], topRows, "No access events in this window.")),
   );
   view.append(panels);

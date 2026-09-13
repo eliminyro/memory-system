@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/eliminyro/memory-system/internal/repository"
+	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 // MetricsService turns the metric_events log and live corpus state into bounded,
@@ -13,16 +14,18 @@ import (
 type MetricsService struct {
 	events   *repository.MetricEventRepository
 	sections *repository.SectionRepository
+	policies *staleness.PolicyStore
 }
 
-func NewMetricsService(events *repository.MetricEventRepository, sections *repository.SectionRepository) *MetricsService {
-	return &MetricsService{events: events, sections: sections}
+func NewMetricsService(events *repository.MetricEventRepository, sections *repository.SectionRepository, policies *staleness.PolicyStore) *MetricsService {
+	return &MetricsService{events: events, sections: sections, policies: policies}
 }
 
 // Prometheus metric names + series types for the exposed series.
 const (
 	MetricEventsTotal       = "memory_events_total"
 	MetricFlaggedSections   = "memory_flagged_sections"
+	MetricSoonSections      = "memory_soon_sections"
 	MetricArchivedDocuments = "memory_archived_documents"
 
 	seriesTypeCounter = "counter"
@@ -48,11 +51,11 @@ func (m *MetricsService) PrometheusSeries(ctx context.Context, window time.Durat
 	if err != nil {
 		return nil, err
 	}
-	flagged, archived, err := m.gauges(ctx)
+	flagged, soon, archived, err := m.gauges(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Series, 0, len(counters)+len(flagged)+len(archived))
+	out := make([]Series, 0, len(counters)+len(flagged)+len(soon)+len(archived))
 	for _, c := range counters {
 		out = append(out, Series{
 			Name: MetricEventsTotal, Type: seriesTypeCounter,
@@ -61,6 +64,7 @@ func (m *MetricsService) PrometheusSeries(ctx context.Context, window time.Durat
 		})
 	}
 	out = append(out, gaugeSeries(MetricFlaggedSections, flagged)...)
+	out = append(out, gaugeSeries(MetricSoonSections, soon)...)
 	out = append(out, gaugeSeries(MetricArchivedDocuments, archived)...)
 	return out, nil
 }
@@ -77,17 +81,24 @@ func gaugeSeries(name string, counts []repository.GaugeCount) []Series {
 	return out
 }
 
-// gauges computes current flagged section and archived document counts
-// (tenant × doc_type): flagged = live sections carrying the needs-verification
-// flag; archived = documents past their grace and archived.
-func (m *MetricsService) gauges(ctx context.Context) (flagged, archived []repository.GaugeCount, err error) {
+// gauges computes the live gauge counts (tenant × doc_type): flagged = sections
+// carrying the needs-verification flag; soon = flagged sections within
+// soonWindowDays of their archive point; archived = documents past grace, archived.
+func (m *MetricsService) gauges(ctx context.Context) (flagged, soon, archived []repository.GaugeCount, err error) {
 	if flagged, err = m.sections.CountFlaggedByTenant(ctx); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	var cutoffs map[string]int
+	if m.policies != nil {
+		cutoffs = repository.BuildArchiveCutoffs(m.policies.All())
+	}
+	if soon, err = m.sections.CountSoonByTenant(ctx, cutoffs); err != nil {
+		return nil, nil, nil, err
 	}
 	if archived, err = m.sections.CountArchivedByTenant(ctx); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return flagged, archived, nil
+	return flagged, soon, archived, nil
 }
 
 // DashboardSummary is the admin dashboard payload: event counts over a window, the
@@ -98,6 +109,7 @@ type DashboardSummary struct {
 	Since         time.Time                   `json:"since"`
 	Counts        []repository.MetricCounter  `json:"counts"`
 	FlaggedGauge  []repository.GaugeCount     `json:"flagged_sections"`
+	SoonGauge     []repository.GaugeCount     `json:"soon_sections"`
 	ArchivedGauge []repository.GaugeCount     `json:"archived_documents"`
 	TopAccessed   []repository.TopAccessedDoc `json:"top_accessed"`
 }
@@ -110,7 +122,7 @@ func (m *MetricsService) DashboardSummary(ctx context.Context, window time.Durat
 	if err != nil {
 		return nil, err
 	}
-	flagged, archived, err := m.gauges(ctx)
+	flagged, soon, archived, err := m.gauges(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +135,7 @@ func (m *MetricsService) DashboardSummary(ctx context.Context, window time.Durat
 		Since:         since,
 		Counts:        counts,
 		FlaggedGauge:  flagged,
+		SoonGauge:     soon,
 		ArchivedGauge: archived,
 		TopAccessed:   top,
 	}, nil

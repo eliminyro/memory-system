@@ -121,9 +121,12 @@ func scptr(s SubcategoryRule) *SubcategoryRule { return &s }
 // non-prunable; journal/handoff are perishable with a fixed expiration_age_days.
 var DefaultDocTypePolicies = []DocTypePolicy{
 	{
+		// ExpirationAgeDays 30: the knowledge grace — a non-prunable doc archives 30d
+		// after every section is flagged-and-unverified (project_state/audit/learning/
+		// preference/tool inherit this).
 		DocType:        DocTypeReference,
 		DuplicateGuard: bptr(true), CleanupScan: bptr(true), LintStaleCheck: bptr(true),
-		Embed: bptr(true), DefaultSearch: bptr(true), Prunable: bptr(false),
+		Embed: bptr(true), DefaultSearch: bptr(true), Prunable: bptr(false), ExpirationAgeDays: iptr(30),
 		WriteMode: wmptr(WriteModeReplace), SlugFormat: sfptr(SlugFormatAny), Subcategory: scptr(SubcategoryOptional),
 	},
 	{DocType: DocTypeProjectState},
@@ -144,9 +147,11 @@ var DefaultDocTypePolicies = []DocTypePolicy{
 		Rules: datatypes.JSON([]byte(`{"chain_previous":{"scope":"subcategory","edge_type":"continues_from"}}`)),
 	},
 	{
+		// ExpirationAgeDays 0 pins prompts out of archive-on-grace (operational prompts
+		// never archive), overriding the reference grace they'd otherwise inherit.
 		DocType:        DocTypePrompt,
 		DuplicateGuard: bptr(false), CleanupScan: bptr(false), LintStaleCheck: bptr(false),
-		Prunable: bptr(false), Embed: bptr(false), DefaultSearch: bptr(false),
+		Prunable: bptr(false), Embed: bptr(false), DefaultSearch: bptr(false), ExpirationAgeDays: iptr(0),
 		WriteMode: wmptr(WriteModeReplace), Subcategory: scptr(SubcategoryRequired),
 	},
 }
@@ -198,7 +203,7 @@ func mustResolveDefaults() map[string]EffectivePolicy {
 func DefaultEffectivePolicy() EffectivePolicy {
 	return EffectivePolicy{
 		DuplicateGuard: true, CleanupScan: true, LintStaleCheck: true,
-		Embed: true, DefaultSearch: true, Prunable: false,
+		Embed: true, DefaultSearch: true, Prunable: false, ExpirationAgeDays: 30,
 		WriteMode: WriteModeReplace, SlugFormat: SlugFormatAny, Subcategory: SubcategoryOptional,
 	}
 }

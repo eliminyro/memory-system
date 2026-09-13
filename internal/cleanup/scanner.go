@@ -27,6 +27,7 @@ type ScanStats struct {
 	HistoryPruned  int
 	MetricsPruned  int // metric_events rows past metrics_retention_days
 	DocsEvicted    int // retention-sweep hard deletes
+	DocsArchived   int // archive-on-grace: non-prunable docs archived, content kept
 }
 
 // GlobalConfig is the live global-config slice the cleanup pipeline reads each
@@ -128,9 +129,11 @@ func (s *Scanner) RunOnce(ctx context.Context) (ScanStats, error) {
 		}
 	}
 
-	// Destructive eviction is a separate deliberate opt-in from near-dup cleanup.
+	// Destructive eviction is a separate deliberate opt-in from near-dup cleanup;
+	// the same toggle gates archive-on-grace (one lifecycle switch).
 	if s.gc.RetentionSweepEnabled() {
 		s.retentionSweep(ctx, allTenants, &stats)
+		s.archiveSweep(ctx, allTenants, &stats)
 	}
 
 	// Prune mutation_history past its live retention window (global, not per-tenant).
@@ -214,6 +217,30 @@ func (s *Scanner) retentionSweep(ctx context.Context, tenants []models.Tenant, s
 	}
 }
 
+// archiveSweep archives non-prunable docs whose sections are all flagged past
+// grace, for every non-bootstrap tenant, using each doc_type's expiration_age_days.
+// The archived gauge surfaces the count, so no per-doc metric event is emitted.
+func (s *Scanner) archiveSweep(ctx context.Context, tenants []models.Tenant, stats *ScanStats) {
+	if s.retention == nil || s.policies == nil {
+		return
+	}
+	cutoffs := repository.BuildArchiveCutoffs(s.policies.All())
+	if len(cutoffs) == 0 {
+		return
+	}
+	for _, tenant := range tenants {
+		if tenant.ID == models.BootstrapTenantID {
+			continue
+		}
+		archived, err := s.retention.ArchiveExpiredStale(ctx, tenant.ID, cutoffs)
+		if err != nil {
+			s.logger.Warn("archive sweep: tenant failed", "tenant_id", tenant.ID, "error", err)
+			stats.Errors++
+		}
+		stats.DocsArchived += len(archived)
+	}
+}
+
 // emitCleanupEvents appends one cleanup metric event per evicted doc, best-effort
 // and only for a metrics-enabled tenant — an append error never affects the sweep.
 func (s *Scanner) emitCleanupEvents(ctx context.Context, tenant models.Tenant, deleted []repository.RetentionDeletion) {
@@ -282,5 +309,6 @@ func (s *Scanner) runAndLog(ctx context.Context) {
 		"history_pruned", stats.HistoryPruned,
 		"metrics_pruned", stats.MetricsPruned,
 		"docs_evicted", stats.DocsEvicted,
+		"docs_archived", stats.DocsArchived,
 	)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/eliminyro/memory-system/internal/models"
 	"github.com/eliminyro/memory-system/internal/repository"
 	"github.com/eliminyro/memory-system/internal/service"
+	"github.com/eliminyro/memory-system/internal/staleness"
 )
 
 func metricsDoc(t *testing.T, db *gorm.DB, tenantID uuid.UUID, slug string, ageDays int) uuid.UUID {
@@ -42,9 +43,12 @@ func TestMetricsService_SeriesAndSummary(t *testing.T) {
 	})
 
 	accessDoc := metricsDoc(t, db, tenantID, "svc-access", 0)
-	// A flagged section counts in the flagged gauge.
+	// A section flagged just now counts in flagged but not soon (grace 30 > 7 days off).
 	flaggedDoc := metricsDoc(t, db, tenantID, "svc-flagged", 0)
 	require.NoError(t, db.Exec(`UPDATE sections SET flagged_at = NOW(), flag_reason = 'changed' WHERE document_id = ?`, flaggedDoc).Error)
+	// A section flagged 24d ago (grace 30) archives in 6 days: counts in flagged + soon.
+	soonDoc := metricsDoc(t, db, tenantID, "svc-soon", 0)
+	require.NoError(t, db.Exec(`UPDATE sections SET flagged_at = NOW() - make_interval(days => 24), flag_reason = 'changed' WHERE document_id = ?`, soonDoc).Error)
 	// An archived document counts in the archived gauge.
 	archivedDoc := metricsDoc(t, db, tenantID, "svc-archived", 0)
 	require.NoError(t, db.Exec(`UPDATE documents SET archived_at = NOW() WHERE id = ?`, archivedDoc).Error)
@@ -54,11 +58,13 @@ func TestMetricsService_SeriesAndSummary(t *testing.T) {
 	require.NoError(t, events.Append(ctx, &models.MetricEvent{TenantID: tenantID, EventType: models.MetricEventAccess, DocType: models.DocTypeLearning, DocID: &accessDoc}))
 	require.NoError(t, events.Append(ctx, &models.MetricEvent{TenantID: tenantID, EventType: models.MetricEventVerify, DocType: models.DocTypeLearning, DocID: &accessDoc}))
 
-	svc := service.NewMetricsService(events, repository.NewSectionRepository(db))
+	// learning inherits the reference 30-day grace (non-prunable), driving the soon window.
+	policies := staleness.NewPolicyStoreFromEffective(models.DefaultEffectivePolicies)
+	svc := service.NewMetricsService(events, repository.NewSectionRepository(db), policies)
 
 	series, err := svc.PrometheusSeries(ctx, 24*time.Hour)
 	require.NoError(t, err)
-	var accessCounter, flaggedGauge, archivedGauge float64
+	var accessCounter, flaggedGauge, soonGauge, archivedGauge float64
 	for _, s := range series {
 		require.NotContains(t, s.Labels, "doc_id", "no per-document label on any series")
 		if s.Labels["tenant"] != tenantID.String() || s.Labels["doc_type"] != models.DocTypeLearning {
@@ -69,12 +75,15 @@ func TestMetricsService_SeriesAndSummary(t *testing.T) {
 			accessCounter = s.Value
 		case s.Name == service.MetricFlaggedSections:
 			flaggedGauge = s.Value
+		case s.Name == service.MetricSoonSections:
+			soonGauge = s.Value
 		case s.Name == service.MetricArchivedDocuments:
 			archivedGauge = s.Value
 		}
 	}
 	require.Equal(t, float64(2), accessCounter)
-	require.Equal(t, float64(1), flaggedGauge, "one flagged section")
+	require.Equal(t, float64(2), flaggedGauge, "svc-flagged + svc-soon both flagged")
+	require.Equal(t, float64(1), soonGauge, "only svc-soon is within 7 days of archiving")
 	require.Equal(t, float64(1), archivedGauge, "one archived document")
 
 	sum, err := svc.DashboardSummary(ctx, 24*time.Hour, 200)
