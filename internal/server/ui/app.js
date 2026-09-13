@@ -973,6 +973,16 @@ async function showDocument(id) {
   const changesPanel = el("div", { className: "tab-panel", hidden: true });
   const body = el("div", { className: "doc-body" });
 
+  // Advisory depends_on nudge: a dependency's content changed; re-verify to clear.
+  if (doc.review_pending) {
+    const rnotice = el("div", { className: "doc-notice" }, icon(ICON_WARN));
+    rnotice.append(el("span", {},
+      document.createTextNode("review — "),
+      el("b", { textContent: doc.review_reason || "a dependency" }),
+      document.createTextNode(" changed")));
+    docPanel.append(rnotice);
+  }
+
   if (needing) {
     const notice = el("div", { className: "doc-notice" }, icon(ICON_WARN));
     notice.append(el("span", {},
@@ -982,6 +992,25 @@ async function showDocument(id) {
     review.addEventListener("click", () => { const w = body.querySelector(".md-withheld"); if (w) w.scrollIntoView({ behavior: "smooth", block: "center" }); });
     notice.append(review);
     docPanel.append(notice);
+  }
+
+  // Typed edges (edges-on-read). Display-only: EdgeView carries path/title but no
+  // endpoint id, and showDocument needs an id — so no navigation, no link picker.
+  if (Array.isArray(doc.edges) && doc.edges.length) {
+    const links = el("div", { className: "doc-links" });
+    links.append(el("div", { className: "sec-head-row" },
+      el("span", { className: "eyebrow", textContent: "links · " + doc.edges.length })));
+    for (const e of doc.edges) {
+      const row = el("div", { className: "grant-row" });
+      row.append(el("span", { className: "pill", textContent: e.edge_type || "edge" }));
+      const subj = el("span", { className: "subj" }, el("b", { textContent: e.path || "" }));
+      if (e.title) subj.append(document.createTextNode(" — " + e.title));
+      row.append(subj);
+      row.append(el("span", { className: "gchain", textContent: e.direction === "incoming" ? "← incoming" : "→ outgoing" }));
+      if (e.archived) row.append(el("span", { className: "pill pill--danger", textContent: "archived" }));
+      links.append(row);
+    }
+    docPanel.append(links);
   }
 
   body.append(el("div", { className: "sec-head-row" }, el("span", { className: "eyebrow", textContent: "sections · " + sections.length })));

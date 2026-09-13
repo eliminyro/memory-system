@@ -50,6 +50,12 @@ type DocumentView struct {
 	// (no content); populated on document reads, omitted when the doc has none.
 	Edges []EdgeView `json:"edges,omitempty"`
 
+	// ReviewPending: a depends_on target's content changed since this doc was last
+	// verified. Advisory only (content still served in full); ReviewReason names
+	// the changed dependency. Cleared on re-verify.
+	ReviewPending bool   `json:"review_pending,omitempty"`
+	ReviewReason  string `json:"review_reason,omitempty"`
+
 	// Populated only on an expand read: the resolved included documents (flat,
 	// ordered, de-duplicated) and a per-edge resolution manifest.
 	Includes        []DocumentView `json:"includes,omitempty"`
@@ -81,6 +87,12 @@ func buildDocumentView(ctx context.Context, store *staleness.PolicyStore, doc *m
 		Scope:       doc.Scope,
 		CreatedAt:   doc.CreatedAt,
 		UpdatedAt:   doc.UpdatedAt,
+	}
+	if doc.ReviewPendingAt != nil {
+		view.ReviewPending = true
+		if doc.ReviewReason != nil {
+			view.ReviewReason = *doc.ReviewReason
+		}
 	}
 	view.Sections = make([]SectionView, 0, len(doc.Sections))
 	for _, sec := range doc.Sections {

@@ -121,3 +121,22 @@ func (r *EdgeRepository) ListByDocument(ctx context.Context, docID uuid.UUID, re
 	}
 	return items, nil
 }
+
+// ListIncomingByType returns the source document IDs of edges of edgeType pointing
+// AT targetID, scoped to sources whose tenant is in readTenants (mirrors
+// ListByDocument's scoping so an out-of-scope dependent is omitted, not leaked).
+func (r *EdgeRepository) ListIncomingByType(ctx context.Context, targetID uuid.UUID, edgeType string, readTenants []uuid.UUID) ([]uuid.UUID, error) {
+	const sql = `
+		SELECT e.source_document_id
+		FROM document_edges e
+		JOIN documents d ON d.id = e.source_document_id
+		WHERE e.target_document_id = ?
+		  AND e.edge_type = ?
+		  AND d.tenant_id IN ?
+	`
+	var ids []uuid.UUID
+	if err := r.db.WithContext(ctx).Raw(sql, targetID, edgeType, readTenants).Scan(&ids).Error; err != nil {
+		return nil, fmt.Errorf("list incoming edges by type: %w", err)
+	}
+	return ids, nil
+}

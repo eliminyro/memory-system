@@ -13,6 +13,9 @@ const (
 	EdgeRelatesTo     = "relates_to"
 	EdgeContinuesFrom = "continues_from"
 	EdgeIncludes      = "includes"
+	// EdgeDependsOn: A depends_on B records that A's correctness rests on B; a
+	// content change to B flags A review-pending (advisory).
+	EdgeDependsOn = "depends_on"
 )
 
 // ValidEdgeTypes lists all accepted edge_type values (mirrors ValidDocTypes).
@@ -22,6 +25,7 @@ var ValidEdgeTypes = map[string]struct{}{
 	EdgeRelatesTo:     {},
 	EdgeContinuesFrom: {},
 	EdgeIncludes:      {},
+	EdgeDependsOn:     {},
 }
 
 // Edge is a directed, typed doc-to-doc relationship. Both endpoints share a

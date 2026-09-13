@@ -81,7 +81,7 @@ func (s *Server) registerTools(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "link_documents",
-		Description: "Create a directed typed edge between two documents. edge_type is one of supersedes, derived_from, relates_to, includes. A supersedes edge auto-archives the target (archive_reason=superseded); an includes edge lets get_document expand=true pull the target's content into the source. Requires editor on the source; supersedes also requires editor on the target, others need only viewer. Idempotent: re-creating an identical edge returns the existing one with no side effect.",
+		Description: "Create a directed typed edge between two documents. edge_type is one of supersedes, derived_from, relates_to, includes, depends_on. A supersedes edge auto-archives the target (archive_reason=superseded); an includes edge lets get_document expand=true pull the target's content into the source; a depends_on edge (source depends_on target) flags the source review-pending when the target's content changes. Requires editor on the source; supersedes also requires editor on the target, others need only viewer. Idempotent: re-creating an identical edge returns the existing one with no side effect.",
 	}, s.LinkDocuments)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -271,7 +271,7 @@ type GetRelatedInput struct {
 type LinkDocumentsInput struct {
 	SourceDocumentID string  `json:"source_document_id" jsonschema:"UUID of the source document (the one making the statement)"`
 	TargetDocumentID string  `json:"target_document_id" jsonschema:"UUID of the target document (the one pointed at; archived on supersedes)"`
-	EdgeType         string  `json:"edge_type" jsonschema:"One of: supersedes, derived_from, relates_to, includes"`
+	EdgeType         string  `json:"edge_type" jsonschema:"One of: supersedes, derived_from, relates_to, includes, depends_on"`
 	TenantID         *string `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
 }
 
