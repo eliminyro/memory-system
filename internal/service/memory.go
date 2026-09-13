@@ -1152,6 +1152,8 @@ func (s *MemoryService) MarkVerified(ctx context.Context, sectionID uuid.UUID, o
 	// Verifying is a liveness signal: keep the doc off the access-cold path, and
 	// record a best-effort verify event for opted-in tenants (detached goroutine).
 	s.recordVerify(ctx, tid, section.DocumentID)
+	// Re-verifying clears any depends_on review-pending flag on this doc.
+	s.clearReviewPending(ctx, section.DocumentID)
 	return nil
 }
 
@@ -1181,6 +1183,41 @@ func (s *MemoryService) recordVerify(ctx context.Context, tenantID, docID uuid.U
 			slog.Default().Warn("metric event append failed", "event_type", models.MetricEventVerify, "error", err)
 		}
 	}()
+}
+
+// flagDependents marks every document that depends_on targetID review-pending,
+// naming targetPath as the reason — a best-effort system side-effect (detached,
+// deadline-bounded, panic-guarded) that never fails or blocks the triggering edit.
+func (s *MemoryService) flagDependents(ctx context.Context, targetID uuid.UUID, targetPath string, ownerTID uuid.UUID) {
+	if s.edges == nil || s.docs == nil {
+		return
+	}
+	detached := context.WithoutCancel(ctx)
+	go func() {
+		defer panicguard.Recover(nil, "depends_on propagation")
+		c, cancel := context.WithTimeout(detached, 5*time.Second)
+		defer cancel()
+		dependents, err := s.edges.ListIncomingByType(c, targetID, models.EdgeDependsOn, []uuid.UUID{ownerTID})
+		if err != nil {
+			slog.Default().Warn("depends_on lookup failed", "error", err)
+			return
+		}
+		if err := s.docs.SetReviewPending(c, dependents, targetPath, time.Now()); err != nil {
+			slog.Default().Warn("review-pending flag failed", "error", err)
+		}
+	}()
+}
+
+// clearReviewPending clears a doc's review-pending flag after a re-verify.
+// Best-effort inline (observable to the next read) and non-fatal: a clear error
+// is logged, never surfaced, so it can't undo an already-successful verify.
+func (s *MemoryService) clearReviewPending(ctx context.Context, docID uuid.UUID) {
+	if s.docs == nil {
+		return
+	}
+	if err := s.docs.ClearReviewPending(ctx, docID); err != nil {
+		slog.Default().Warn("clear review-pending failed", "error", err)
+	}
 }
 
 // StoreResult is the outcome of StoreDocument. Status "similar_exists" means the
@@ -1527,6 +1564,8 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 		embed = s.policyFor(section.Document.DocType).Embed
 	}
 
+	// Real content change (not a no-op) drives depends_on propagation below.
+	contentChanged := content != nil && *content != section.Content
 	if content != nil {
 		if embed {
 			embedding, err := s.embedder.Embed(ctx, *content)
@@ -1594,12 +1633,19 @@ func (s *MemoryService) UpdateSection(ctx context.Context, sectionID uuid.UUID, 
 			Reason:       "section verified on update",
 		})
 		s.recordVerify(ctx, tid, section.DocumentID)
+		// Re-verifying clears any depends_on review-pending flag on this doc.
+		s.clearReviewPending(ctx, section.DocumentID)
 	}
 
 	// The section row carries the edit, so the document would otherwise look
 	// unchanged to anything polling updated_at to decide whether to re-read.
 	if err := s.docs.TouchUpdated(ctx, ownerTID, section.DocumentID); err != nil {
 		return nil, fmt.Errorf("touch document: %w", err)
+	}
+
+	// A content change to this doc flags every document that depends_on it.
+	if contentChanged && section.Document != nil {
+		s.flagDependents(ctx, section.DocumentID, docPath, ownerTID)
 	}
 
 	// Updating is a liveness signal: keep the doc off the access-cold path.

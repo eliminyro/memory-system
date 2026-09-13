@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -430,6 +431,29 @@ func (r *DocumentRepository) TouchAccessed(ctx context.Context, docIDs []uuid.UU
 	`
 	if err := r.db.WithContext(ctx).Exec(sql, docIDs).Error; err != nil {
 		return fmt.Errorf("touch accessed: %w", err)
+	}
+	return nil
+}
+
+// SetReviewPending flags each doc review-pending with the changed dependency's path
+// as the reason. Advisory system side-effect (no tenant predicate): docIDs are
+// already resolved from same-tenant depends_on edges. Empty input is a no-op.
+func (r *DocumentRepository) SetReviewPending(ctx context.Context, docIDs []uuid.UUID, reason string, at time.Time) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+	const sql = `UPDATE documents SET review_pending_at = ?, review_reason = ? WHERE id IN ?`
+	if err := r.db.WithContext(ctx).Exec(sql, at, reason, docIDs).Error; err != nil {
+		return fmt.Errorf("set review pending: %w", err)
+	}
+	return nil
+}
+
+// ClearReviewPending clears one doc's review-pending flag, called after a re-verify.
+func (r *DocumentRepository) ClearReviewPending(ctx context.Context, docID uuid.UUID) error {
+	const sql = `UPDATE documents SET review_pending_at = NULL, review_reason = NULL WHERE id = ?`
+	if err := r.db.WithContext(ctx).Exec(sql, docID).Error; err != nil {
+		return fmt.Errorf("clear review pending: %w", err)
 	}
 	return nil
 }
