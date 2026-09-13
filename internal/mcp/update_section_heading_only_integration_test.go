@@ -91,8 +91,8 @@ func TestMCPUpdateSectionHeadingOnly(t *testing.T) {
 		if out == nil || !out.IsError {
 			t.Fatalf("out = %+v, want an isError tool result", out)
 		}
-		if got := resultText(t, out); !strings.Contains(got, "at least one of content or heading") {
-			t.Fatalf("text = %q, want the 'at least one of content or heading' guard message", got)
+		if got := resultText(t, out); !strings.Contains(got, "at least one of content, heading, or verify_hints") {
+			t.Fatalf("text = %q, want the 'content, heading, or verify_hints' guard message", got)
 		}
 	})
 }
