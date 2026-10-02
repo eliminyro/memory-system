@@ -222,7 +222,7 @@ type StoreMemoryInput struct {
 	Pin         *bool    `json:"pin,omitempty" jsonschema:"Mark the document a pin (never-evict): exempt from access-recency eviction. On re-store, omit to keep the current pin state, or set true/false to change it."`
 	Scope       *string  `json:"scope,omitempty" jsonschema:"Applicability of any document: empty = always applies, or a whitespace-separated list of '/'-delimited glob patterns ('**' crosses segments, '*' within one) gating conditional includes at read time. Omit to keep the current value; empty string clears it."`
 	VerifyHints []string `json:"verify_hints,omitempty" jsonschema:"Optional file/symbol/line references (file:symbol or file:line) for the document's sections; flag_changed marks them needs_verification when a referenced path changes. Applied to every section of the document."`
-	TenantID    *string  `json:"tenant_id,omitempty" jsonschema:"(Admin only) Target a specific tenant. Omit to use your own."`
+	TenantID    *string  `json:"tenant_id,omitempty" jsonschema:"Target a specific tenant: admins any tenant, others a tenant where they are a member or higher. Omit to use your own."`
 }
 
 type UpdateSectionInput struct {

@@ -66,6 +66,8 @@ func (h *apiHandler) mux() *http.ServeMux {
 	// §7/§9): every tenant for a system admin, else the tenants the caller
 	// manages. Not adminOnly — a manager who isn't a system admin needs this.
 	m.HandleFunc("GET /tenants/writable", h.listWritableTenants)
+	// GET /tenants/storable lists where the caller may create memories (member+).
+	m.HandleFunc("GET /tenants/storable", h.listStorableTenants)
 
 	// GET /tenants?type=<t>&q=<filter> lists/searches tenants by display type
 	// (design.md §5), reusing the WritableTenants authz shape: all tenants of
@@ -106,6 +108,17 @@ func (h *apiHandler) mux() *http.ServeMux {
 // tenant#manager.
 func (h *apiHandler) listWritableTenants(w http.ResponseWriter, r *http.Request) {
 	tenants, err := h.memory.WritableTenants(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, jsonList(tenants))
+}
+
+// listStorableTenants returns the tenants the caller may store memories in
+// (member or higher), each paired with the caller's relation.
+func (h *apiHandler) listStorableTenants(w http.ResponseWriter, r *http.Request) {
+	tenants, err := h.memory.StorableTenants(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return

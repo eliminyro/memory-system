@@ -2676,6 +2676,17 @@ type TenantAccess struct {
 // directly-owned personal tenant is labeled RelOwner; other managed tenants
 // RelManager (design.md §4).
 func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, error) {
+	return s.accessibleTenants(ctx, authz.RelManager)
+}
+
+// StorableTenants lists the tenants the caller may store memories in: every
+// tenant for a system admin, else each tenant where the caller holds at least
+// member. Same floor as resolveWriteScope. Labels: owner, manager or member.
+func (s *MemoryService) StorableTenants(ctx context.Context) ([]TenantAccess, error) {
+	return s.accessibleTenants(ctx, authz.RelMember)
+}
+
+func (s *MemoryService) accessibleTenants(ctx context.Context, floor string) ([]TenantAccess, error) {
 	if s.isAdmin(ctx) {
 		tenants, err := s.tenants.List(ctx)
 		if err != nil {
@@ -2727,12 +2738,14 @@ func (s *MemoryService) WritableTenants(ctx context.Context) ([]TenantAccess, er
 			continue
 		}
 		seen[tid] = struct{}{}
-		if !s.authorize(ctx, authz.TypeTenant, tid.String(), authz.RelManager) {
+		if !s.authorize(ctx, authz.TypeTenant, tid.String(), floor) {
 			continue
 		}
 		label := authz.RelManager
 		if _, owned := ownerTenants[tid]; owned {
 			label = authz.RelOwner
+		} else if floor == authz.RelMember && !s.authorize(ctx, authz.TypeTenant, tid.String(), authz.RelManager) {
+			label = authz.RelMember
 		}
 		orderedIDs = append(orderedIDs, tid)
 		labelByID[tid] = label
