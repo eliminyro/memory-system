@@ -1365,10 +1365,10 @@ function memHead() {
   const form = el("div", { className: "addform" });
   form.hidden = true;
 
-  // Tenant picker — a type-to-filter combobox over the writable tenants
-  // (WritableTenants returns {tenant, relation}). Empty defaults to your personal
+  // Tenant picker — a type-to-filter combobox over the storable tenants
+  // (StorableTenants returns {tenant, relation}). Empty defaults to your personal
   // tenant; each suggestion shows the tenant type. Replaces the old <select>.
-  const tOpts = writableTenants.map((t) => ({ id: t.tenant.id, name: t.tenant.name || t.tenant.id, type: t.tenant.type, relation: t.relation }));
+  const tOpts = storableTenants.map((t) => ({ id: t.tenant.id, name: t.tenant.name || t.tenant.id, type: t.tenant.type, relation: t.relation }));
   // Prefer the caller's own personal tenant: relation "owner" for a normal user;
   // a system admin sees every tenant labeled "admin", so fall back to the first
   // personal-type tenant (their own on a single-user instance) before the pool.
@@ -1539,6 +1539,8 @@ async function checkAdmin() {
 // length to gate the Tenants tab / #tenants routes for non-admins (admins get
 // the tab via isAdmin).
 let writableTenants = [];
+// storableTenants caches /tenants/storable: where the caller can create memories (member+).
+let storableTenants = [];
 
 // checkWritable probes GET /tenants/writable — not adminOnly, so every
 // logged-in caller can reach it. Its result (empty for a plain user, non-empty
@@ -1549,6 +1551,11 @@ async function checkWritable() {
     writableTenants = (await apiFetch("/tenants/writable")) || [];
   } catch (err) {
     writableTenants = [];
+  }
+  try {
+    storableTenants = (await apiFetch("/tenants/storable")) || [];
+  } catch (err) {
+    storableTenants = [];
   }
 }
 

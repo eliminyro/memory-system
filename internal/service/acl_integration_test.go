@@ -178,3 +178,40 @@ func TestWritableTenantsIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, none)
 }
+
+// TestStorableTenantsIntegration proves a plain member sees the shared tenant
+// in the memory-create list (labeled member) while WritableTenants stays empty,
+// and that a manager is labeled manager.
+func TestStorableTenantsIntegration(t *testing.T) {
+	db := openServicePG(t)
+	store := authz.NewPostgresStore(db)
+	svc := newAdminTestSvc(db, store)
+	sysAdminCtx := auth.WithLocalAdmin(context.Background())
+
+	shared, err := svc.CreateTenant(sysAdminCtx, "st-shared-"+uuid.NewString(), "")
+	require.NoError(t, err)
+	managed, err := svc.CreateTenant(sysAdminCtx, "st-managed-"+uuid.NewString(), "")
+	require.NoError(t, err)
+	other, err := svc.CreateTenant(sysAdminCtx, "st-other-"+uuid.NewString(), "")
+	require.NoError(t, err)
+
+	subj := "mem-" + uuid.NewString()
+	require.NoError(t, store.Write(context.Background(), authzseed.TenantMember(shared.ID, subj)))
+	require.NoError(t, store.Write(context.Background(), authzseed.TenantManager(managed.ID, subj)))
+	ctx := auth.WithSubject(context.Background(), auth.Subject{Type: auth.SubjectTypeUser, ID: subj})
+
+	got, err := svc.StorableTenants(ctx)
+	require.NoError(t, err)
+	byID := make(map[uuid.UUID]string, len(got))
+	for _, ta := range got {
+		byID[ta.Tenant.ID] = ta.Relation
+	}
+	require.Equal(t, authz.RelMember, byID[shared.ID])
+	require.Equal(t, authz.RelManager, byID[managed.ID])
+	require.NotContains(t, byID, other.ID)
+
+	writable, err := svc.WritableTenants(ctx)
+	require.NoError(t, err)
+	require.Len(t, writable, 1)
+	require.Equal(t, managed.ID, writable[0].Tenant.ID)
+}
