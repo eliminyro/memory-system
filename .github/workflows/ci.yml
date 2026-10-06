@@ -84,7 +84,10 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
+      # Unreachable on purpose: a Postgres test missing its integration tag fails here.
       - name: Unit tests
+        env:
+          TEST_DATABASE_URL: postgres://nobody@127.0.0.1:1/none?sslmode=disable
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Coverage total
