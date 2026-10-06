@@ -1,0 +1,4 @@
+# Paths that are not code: a change touching only these skips the PR checks.
+*.md
+docs/
+openspec/
