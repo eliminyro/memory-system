@@ -13,8 +13,35 @@ permissions:
   contents: read
 
 jobs:
+  # Decides whether the change is docs-only. Any failure leaves skip unset, so
+  # Checks runs; a skipped Checks counts as passed for the required gate.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.skip.outputs.skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Docs-only change?
+        id: skip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin \
+            && id=$(docker create ghcr.io/eliminyro/ci-tool:latest) \
+            && docker cp "$id:/usr/local/bin/ci" "$RUNNER_TEMP/ci" \
+            && "$RUNNER_TEMP/ci" skippable; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
   checks:
     name: Checks
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
