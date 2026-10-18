@@ -218,7 +218,7 @@ jobs:
       # it stays a draft for manual publishing.
       - name: Run goreleaser (binaries + draft GitHub Release)
         if: steps.version.outputs.should_release == 'true' && steps.gate.outputs.proceed == 'true'
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           version: "~> v2"
           args: release --clean ${{ steps.notescheck.outputs.release_notes_arg }}
