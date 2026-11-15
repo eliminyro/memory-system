@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/eliminyro/authlet/pkg/jwt"
@@ -87,28 +88,41 @@ func TestUserContextBridge_NoClaimsIsNoOp(t *testing.T) {
 	}
 }
 
-// A claims set whose tenant_id is absent/unparseable must be a no-op passthrough
-// (fail secure for legacy pre-fix tokens that lack the tenant_id claim).
-func TestUserContextBridge_MissingTenantIDClaimIsNoOp(t *testing.T) {
-	w := &Wiring{}
-
-	var seenTenant uuid.UUID
-	var seenSubjectOK bool
-	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		seenTenant = auth.TenantIDFromContext(r.Context())
-		_, seenSubjectOK = auth.SubjectFromContext(r.Context())
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
-	// sub present but NO tenant_id claim (legacy token shape).
-	ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{Subject: "user-id-1"})
-	req = req.WithContext(ctx)
-	w.UserContextBridge()(inner).ServeHTTP(httptest.NewRecorder(), req)
-
-	if seenTenant != uuid.Nil {
-		t.Fatalf("missing tenant_id claim must not populate tenant id; got %s", seenTenant)
+// A claims set whose tenant_id is absent/unparseable/nil must be rejected with
+// 401 invalid_token (never reach the handler tenant-less), so OAuth clients
+// refresh or re-authorize instead of getting opaque downstream errors.
+func TestUserContextBridge_MissingTenantIDClaimRejects(t *testing.T) {
+	cases := map[string]map[string]any{
+		"absent":      nil,
+		"unparseable": {"tenant_id": "not-a-uuid"},
+		"nil uuid":    {"tenant_id": uuid.Nil.String()},
+		"wrong type":  {"tenant_id": 42},
 	}
-	if seenSubjectOK {
-		t.Fatal("missing tenant_id claim must not populate a subject (fail secure)")
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := &Wiring{prmURL: "https://mem.example/.well-known/oauth-protected-resource/mcp"}
+			called := false
+			inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true })
+
+			req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+			ctx := context.WithValue(req.Context(), rs.ContextKey{}, jwt.Claims{Subject: "user-id-1", Extra: extra})
+			req = req.WithContext(ctx)
+			rec := httptest.NewRecorder()
+			w.UserContextBridge()(inner).ServeHTTP(rec, req)
+
+			if called {
+				t.Fatal("handler must not run for a token without a valid tenant_id claim")
+			}
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			ch := rec.Header().Get("WWW-Authenticate")
+			if !strings.Contains(ch, `error="invalid_token"`) || !strings.Contains(ch, `resource_metadata="`+w.prmURL+`"`) {
+				t.Fatalf("WWW-Authenticate = %q, want invalid_token challenge with resource_metadata", ch)
+			}
+			if !strings.Contains(rec.Body.String(), `"invalid_token"`) {
+				t.Fatalf("body = %q, want invalid_token error", rec.Body.String())
+			}
+		})
 	}
 }
